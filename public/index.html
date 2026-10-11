@@ -26,7 +26,15 @@
       </label>
       <p id="join-error" class="error" role="alert"></p>
       <button class="btn primary" type="submit">加入群組</button>
-      <p class="muted small">已在別台裝置加入？請在那台裝置的「QR Code」掃描登入。</p>
+    </form>
+    <form id="token-form" class="join-card">
+      <h2 class="small-title">已經加入過？用 Token 登入</h2>
+      <p class="muted small">在已登入的裝置打開「API 資訊」，按「複製」取得你的 Token，貼到這裡即可用同一個身分登入；也可以用那台裝置的「QR Code」掃描登入。</p>
+      <label>登入 Token
+        <input name="token" required autocomplete="off" spellcheck="false" placeholder="貼上你的 API Token">
+      </label>
+      <p id="token-error" class="error" role="alert"></p>
+      <button class="btn" type="submit">用 Token 登入</button>
     </form>
   </section>
 

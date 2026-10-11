@@ -101,11 +101,34 @@
       state.token = r.token;
       store.set(TOKEN_KEY, r.token);
       await start();
-    } catch (err) { $('#join-error').textContent = err.message; }
+    } catch (err) {
+      $('#join-error').textContent = err.code === 'NAME_TAKEN'
+        ? `${err.message}。如果是你本人，請用下方「用 Token 登入」。`
+        : err.message;
+      if (err.code === 'NAME_TAKEN') $('#token-form input').focus();
+    }
+  });
+
+  $('#token-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#token-error').textContent = '';
+    const token = new FormData(e.target).get('token').trim();
+    state.token = token;
+    try {
+      const me = await api('/api/me');
+      if (me.memberType !== 'human') throw new Error('這是 AI 助手的 Token，只能透過 API 使用。請貼「你本人」的 Token（API 資訊 → 本人 Token）。');
+      store.set(TOKEN_KEY, token);
+      await start();
+    } catch (err) {
+      state.token = null;
+      $('#token-error').textContent = err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED'
+        ? 'Token 無效或已過期。請確認是從同一個網站（網址相同）複製的。'
+        : err.message;
+    }
   });
 
   function logout(confirmFirst = true) {
-    if (confirmFirst && !confirm('登出後，需用其他裝置的 QR Code 才能再登入此身分。確定登出？')) return;
+    if (confirmFirst && !confirm('登出後，要用「API 資訊」裡的本人 Token（或其他裝置的 QR Code）才能再登入此身分。建議先複製 Token 保存。確定登出？')) return;
     store.del(TOKEN_KEY);
     state.token = null;
     state.me = null;
@@ -702,9 +725,9 @@
       <div class="kv">
         <span>API Base URL</span><code>${esc(base)}</code>
         <span>本人 participantId</span><code>${esc(meId())}</code>
-        <span>本人 Token</span><span class="row"><code id="my-token">••••••••••••</code><button class="btn" type="button" id="tok-show">顯示</button><button class="btn" type="button" id="tok-copy">複製</button></span>
+        <span>本人 Token（登入用）</span><span class="row"><code id="my-token">••••••••••••</code><button class="btn" type="button" id="tok-show">顯示</button><button class="btn" type="button" id="tok-copy">複製</button></span>
       </div>
-      <p class="notice warn">這是「你本人」的 Token，等同登入密碼。要給 AI 用，請到「我的 AI」建立專屬身分，不要把自己的 Token 給 AI。</p>
+      <p class="notice warn">這是「你本人」的 Token，等同登入密碼：在其他瀏覽器或裝置的加入畫面選「用 Token 登入」貼上，就能用同一個身分登入。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。</p>
       <div class="section-title">主要端點</div>
       <ul class="endpoints">
         <li><code>GET /api/me</code> 自身身分</li>
