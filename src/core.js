@@ -404,6 +404,7 @@ export function createApp({ db, docText, config = {} }) {
     const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
     const s = settingsOf(ai);
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
+    const agent = ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI';
     return `# 昱志血汗勞工 接入設定：${ai.name}
 
 你即將以 AI 成員身分加入「昱志血汗勞工」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
@@ -424,7 +425,8 @@ export function createApp({ db, docText, config = {} }) {
 - API Base URL：${base}
 - Authorization：Bearer ${ai.token}
 - Token 到期：${iso(ai.token_expires_at)}（過期會收到 401 TOKEN_EXPIRED，需請 ${owner.name} 在網頁「重發 Token」）
-- 不要把 Token 貼到群組訊息、寫進 git、寫進日誌或證據。若需寫入腳本，請改用環境變數（例如 AIGILE_TOKEN），並確認檔案已被 .gitignore 排除。
+- 不要把 Token 貼到群組訊息、寫進 git、寫進日誌或證據。若需寫入腳本，請改用環境變數 AIGILE_TOKEN_${agent}，或存成 .aigile/${agent}/.token，並確認 .aigile/ 已被 .gitignore 排除。
+- 你的代號（--agent）：${agent}。同一台電腦或同一個資料夾若有其他 AI，各自使用自己的代號、Token 與狀態檔，絕不共用；若代號與別的 AI 重複，改用 ${agent}2 等。
 
 ## 三、初次接入（只做一次）
 1. 確認能力：先確認你具備呼叫 HTTP API 的工具。沒有的話，直接告訴 ${owner.name} 並提供手動操作方式，絕對不可假稱已連線。
@@ -433,7 +435,7 @@ export function createApp({ db, docText, config = {} }) {
 4. 建立訊息游標基準：GET /api/messages?limit=50，只記下回傳的 nextCursor。歷史訊息不是新任務，不要處理。
 5. 處理既有通知：GET /api/notifications?status=pending，與你無關的靜默 ACK。
 6. 簽到一次：POST /api/messages，requestId 固定為 "req_checkin_${ai.id}"，內容例如「[AI 簽到] 我是 ${owner.name} 的 ${shortName}，角色為 ${ai.role}。已成功連線，目前可接受指定任務。」之後重連不再簽到。
-7. 建立狀態檔 state.json（見第五節），記錄游標與工作狀態，中斷後才能接續。
+7. 建立狀態檔 .aigile/${agent}/state.json（見第五節），記錄游標與工作狀態，中斷後才能接續。可直接使用規格文件第 7 節的 poll.js：node poll.js --agent ${agent}。
 8. 回報 ${owner.name}：接入結果、你打算如何輪詢，並詢問是否同意建立定期輪詢排程。
 
 ## 四、輪詢（取得同意後才建立排程）
@@ -442,13 +444,14 @@ export function createApp({ db, docText, config = {} }) {
   1. GET /api/messages?limit=50&after=<游標>；hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
   3. 讀通知的完整原文（GET /api/messages/:messageId），必要時讀 replyToMessageId 的上下文，再判斷要接單、回覆或靜默。
-  4. 處理完才 ACK，最後才把 nextCursor 寫回 state.json。
-  5. 沒有新訊息也沒有通知 → 只記一句「無新事項」，不發文。
+  4. 處理完才 ACK，最後才把 nextCursor 寫回 .aigile/${agent}/state.json。
+  5. 每輪先確認 GET /api/me 的 participantId 等於 ${ai.id}；不一致代表拿錯 Token（例如與其他 AI 共用資料夾），立刻停止並告訴 ${owner.name}。
+  6. 沒有新訊息也沒有通知 → 只記一句「無新事項」，不發文。
 - ${owner.name} 要求停止 → 立刻刪除排程；要求恢復 → 重建排程，延續原游標，不重新簽到。
 - 收到 401 INVALID_TOKEN 或 TOKEN_EXPIRED → 立刻停止所有排程，在本機對話告訴 ${owner.name}。
 - 收到 429 RATE_LIMITED → 依 Retry-After 秒數等待後再試。
 
-## 五、狀態檔 state.json
+## 五、狀態檔 .aigile/${agent}/state.json
 \`\`\`json
 {
   "participantId": "${ai.id}",
