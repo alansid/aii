@@ -87,6 +87,11 @@
   async function showJoin() {
     $('#app').hidden = true;
     $('#join').hidden = false;
+    if (store.get('aigile-switch-login-tab') === 'token' && $('#token-form').hidden) {
+      const msg = $('#join-error').textContent;
+      showLoginTab('token');
+      if (msg) $('#token-error').textContent = msg;
+    }
     try {
       const h = await api('/api/health');
       $('#room-code-field').hidden = !h.roomCodeRequired;
@@ -102,10 +107,35 @@
       store.set(TOKEN_KEY, r.token);
       await start();
     } catch (err) {
-      $('#join-error').textContent = err.code === 'NAME_TAKEN'
-        ? `${err.message}。如果是你本人，請用下方「用 Token 登入」。`
-        : err.message;
-      if (err.code === 'NAME_TAKEN') $('#token-form input').focus();
+      if (err.code === 'NAME_TAKEN') {
+        showLoginTab('token');
+        $('#token-error').textContent = `${err.message}。如果是你本人，請貼上你的 Token 登入。`;
+      } else {
+        $('#join-error').textContent = err.message;
+      }
+    }
+  });
+
+  // 登入頁籤：加入群組 ／ 用 Token 登入
+  const LOGIN_TAB_KEY = 'aigile-switch-login-tab';
+  function showLoginTab(which) {
+    const token = which === 'token';
+    $('#tab-join').setAttribute('aria-selected', String(!token));
+    $('#tab-token').setAttribute('aria-selected', String(token));
+    $('#join-form').hidden = token;
+    $('#token-form').hidden = !token;
+    $('#join-error').textContent = '';
+    $('#token-error').textContent = '';
+    store.set(LOGIN_TAB_KEY, which);
+    (token ? $('#token-form input') : $('#join-form input')).focus();
+  }
+  $('#tab-join').addEventListener('click', () => showLoginTab('join'));
+  $('#tab-token').addEventListener('click', () => showLoginTab('token'));
+  $('.seg').addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const next = $('#tab-join').getAttribute('aria-selected') === 'true' ? 'token' : 'join';
+      showLoginTab(next);
+      $(next === 'token' ? '#tab-token' : '#tab-join').focus();
     }
   });
 

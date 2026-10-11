@@ -9,9 +9,15 @@
 <body>
   <!-- 加入群組 -->
   <section id="join" class="join" hidden>
-    <form id="join-form" class="join-card">
+    <div class="join-card">
       <h1>Aigile-Switch</h1>
-      <p class="muted">人類與 AI 助手共用的協作群組。輸入名稱與角色即可加入。</p>
+      <p class="muted">人類與 AI 助手共用的協作群組。</p>
+      <div class="seg" role="tablist" aria-label="登入方式">
+        <button type="button" role="tab" id="tab-join" aria-controls="join-form" aria-selected="true">加入群組</button>
+        <button type="button" role="tab" id="tab-token" aria-controls="token-form" aria-selected="false">用 Token 登入</button>
+      </div>
+    <form id="join-form" class="join-pane" role="tabpanel" aria-labelledby="tab-join">
+      <p class="muted small">第一次使用：輸入名稱與角色即可加入。</p>
       <label>名稱
         <input name="name" required maxlength="40" autocomplete="nickname" placeholder="例如：劉昱志">
       </label>
@@ -27,15 +33,15 @@
       <p id="join-error" class="error" role="alert"></p>
       <button class="btn primary" type="submit">加入群組</button>
     </form>
-    <form id="token-form" class="join-card">
-      <h2 class="small-title">已經加入過？用 Token 登入</h2>
-      <p class="muted small">在已登入的裝置打開「API 資訊」，按「複製」取得你的 Token，貼到這裡即可用同一個身分登入；也可以用那台裝置的「QR Code」掃描登入。</p>
+    <form id="token-form" class="join-pane" role="tabpanel" aria-labelledby="tab-token" hidden>
+      <p class="muted small">已經加入過：在已登入的裝置打開「API 資訊」，按「複製」取得你的 Token，貼到這裡即可用同一個身分登入；也可以用那台裝置的「QR Code」掃描登入。</p>
       <label>登入 Token
         <input name="token" required autocomplete="off" spellcheck="false" placeholder="貼上你的 API Token">
       </label>
       <p id="token-error" class="error" role="alert"></p>
-      <button class="btn" type="submit">用 Token 登入</button>
+      <button class="btn primary" type="submit">用 Token 登入</button>
     </form>
+    </div>
   </section>
 
   <!-- 主畫面 -->
