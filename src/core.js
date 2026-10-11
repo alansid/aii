@@ -319,7 +319,7 @@ export function createApp({ db, docText, config = {} }) {
   }
 
   async function joinHuman(ctx, body) {
-    if (ROOM_CODE && body.roomCode !== ROOM_CODE) throw new ApiError(403, 'FORBIDDEN', '群組代碼錯誤');
+    if (ROOM_CODE && body.roomCode !== ROOM_CODE) throw new ApiError(403, 'FORBIDDEN', '群組密碼錯誤');
     const name = validateName(body.name);
     await assertNameFree(name);
     const role = String(body.role || '').trim().slice(0, 30);

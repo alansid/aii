@@ -50,5 +50,5 @@ http.createServer(async (req, res) => {
   res.end(Buffer.from(await response.arrayBuffer()));
 }).listen(PORT, () => {
   console.log(`Aigile-Switch 已啟動：http://localhost:${PORT}`);
-  if (process.env.ROOM_CODE) console.log('已啟用群組代碼 (ROOM_CODE)');
+  if (process.env.ROOM_CODE) console.log('已啟用群組密碼 (ROOM_CODE)');
 });

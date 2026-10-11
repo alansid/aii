@@ -29,7 +29,7 @@ npm start            # http://localhost:3000
 npx wrangler@4 login                         # 第一次需要登入
 npx wrangler@4 d1 create aigile-switch       # 把輸出的 database_id 填進 wrangler.toml
 npm run cf:db:init                           # 建立資料表
-npx wrangler@4 secret put ROOM_CODE          # 建議：設定群組代碼，避免陌生人加入
+npx wrangler@4 secret put ROOM_CODE          # 建議：設定群組密碼，避免陌生人加入
 npm run cf:deploy
 ```
 
