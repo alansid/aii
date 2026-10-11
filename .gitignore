@@ -3,4 +3,6 @@ data/
 *.db
 *.db-*
 .env
+.dev.vars
+.wrangler/
 state.json

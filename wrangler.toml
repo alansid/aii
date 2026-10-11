@@ -1,0 +1,22 @@
+name = "aigile-switch"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aigile-switch"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# 選用：設定後，人類加入群組需輸入此代碼。正式環境建議改用 `wrangler secret put ROOM_CODE`
+# [vars]
+# AI_TOKEN_TTL_HOURS = "24"

@@ -4,6 +4,7 @@
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
+  const ALL = { participantId: '__all__', name: '所有人', role: '通知全體成員', memberType: 'all', isOnline: true };
 
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -14,13 +15,15 @@
   const state = {
     token: null,
     me: null,
-    participants: new Map(), // id -> participant
+    participants: new Map(),
     messages: [],
     byId: new Map(),
+    nextCursor: null,
+    olderCursor: null,
     replyTo: null,
     onlyMine: store.get(FILTER_KEY) === '1',
     events: null,
-    pendingCount: 0,
+    roles: null,
   };
 
   // ---------- 共用 ----------
@@ -34,19 +37,20 @@
     if (!r.ok) {
       const err = new Error(data?.error?.message || `HTTP ${r.status}`);
       err.code = data?.error?.code;
-      if (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED') logout(false);
+      if (state.me && (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED')) logout(false);
       throw err;
     }
     return data;
   }
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const pad = n => String(n).padStart(2, '0');
   const fmtTime = iso => {
     const d = new Date(iso);
-    const p = n => String(n).padStart(2, '0');
-    return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   };
   const shortId = id => '#' + String(id).slice(-6);
+  const newRequestId = () => 'req_web_' + (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`);
 
   let toastTimer;
   function toast(text) {
@@ -54,7 +58,7 @@
     t.textContent = text;
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 2200);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 2400);
   }
 
   async function copyText(text) {
@@ -75,10 +79,9 @@
   }
   applyTheme(store.get(THEME_KEY));
 
-  function roleTag(p) {
-    if (p.kind === 'ai') return `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`;
-    return '<span class="tag human">人類</span>';
-  }
+  const memberTag = p => p.memberType === 'ai'
+    ? `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`
+    : '<span class="tag human">[人類]</span>';
 
   // ---------- 加入 / 登入 ----------
   async function showJoin() {
@@ -92,10 +95,9 @@
 
   $('#join-form').addEventListener('submit', async e => {
     e.preventDefault();
-    const f = new FormData(e.target);
     $('#join-error').textContent = '';
     try {
-      const r = await api('/api/join', { method: 'POST', body: Object.fromEntries(f) });
+      const r = await api('/api/join', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
       state.token = r.token;
       store.set(TOKEN_KEY, r.token);
       await start();
@@ -106,7 +108,8 @@
     if (confirmFirst && !confirm('登出後，需用其他裝置的 QR Code 才能再登入此身分。確定登出？')) return;
     store.del(TOKEN_KEY);
     state.token = null;
-    state.events?.close();
+    state.me = null;
+    clearTimeout(pollTimer);
     location.replace('/');
   }
   $('#logout').addEventListener('click', () => logout(true));
@@ -114,17 +117,22 @@
   // ---------- 啟動 ----------
   async function start() {
     state.me = await api('/api/me');
-    if (state.me.kind !== 'human') {
-      alert('這是 AI 助手的 Token，請用 API 存取，不能登入網頁。');
-      return logout(false);
+    if (state.me.memberType !== 'human') {
+      store.del(TOKEN_KEY);
+      state.token = null;
+      state.me = null;
+      $('#join-error').textContent = '這是 AI 助手的 Token，只能透過 API 存取，不能登入網頁。';
+      return showJoin();
     }
     $('#join').hidden = true;
     $('#app').hidden = false;
-    $('#me-line').innerHTML = `本人：<b>${esc(state.me.name)}</b> (${esc(state.me.role || '未設定')}) #${esc(state.me.code)}`;
+    $('#me-line').innerHTML = `本人：<b>${esc(state.me.name)}</b> (${esc(state.me.role || '未設定')}) #${esc(state.me.shortCode)}`;
     await loadParticipants();
-    const d = await api('/api/messages?tail=200');
+    const d = await api('/api/messages?limit=100');
     state.messages = d.items;
     state.byId = new Map(d.items.map(m => [m.messageId, m]));
+    state.nextCursor = d.nextCursor;
+    state.olderCursor = d.olderCursor;
     renderMessages(true);
     refreshInboxCount();
     connectEvents();
@@ -133,101 +141,130 @@
   async function loadParticipants() {
     const d = await api('/api/participants');
     state.participants = new Map(d.items.map(p => [p.participantId, p]));
-    $('#presence-text').textContent = `${d.total} 人在群 (活躍估計 ${d.active})`;
-    return d;
+    const online = d.items.filter(p => p.isOnline).length;
+    $('#presence-text').textContent = `${d.items.length} 人在群 (活躍估計 ${online})`;
+    return d.items;
   }
 
+  // 輪詢：前景每 3 秒拉新訊息，背景分頁放慢到 15 秒；成員與通知數每 15 秒更新
+  let pollTimer = null;
+  let lastSlowPoll = 0;
   function connectEvents() {
-    state.events?.close();
-    const es = new EventSource(`/api/events?token=${encodeURIComponent(state.token)}`);
-    state.events = es;
-    es.addEventListener('message', e => onNewMessage(JSON.parse(e.data)));
-    es.addEventListener('participants', () => loadParticipants().catch(() => {}));
-    es.addEventListener('presence', () => loadParticipants().catch(() => {}));
-    es.addEventListener('presence-tick', () => loadParticipants().catch(() => {}));
-    es.onerror = () => {
-      // 瀏覽器會自動重連；重連後補抓遺漏訊息
-      setTimeout(catchUp, 3000);
+    clearTimeout(pollTimer);
+    const tick = async () => {
+      if (!state.token) return;
+      await catchUp();
+      if (Date.now() - lastSlowPoll > 15_000) {
+        lastSlowPoll = Date.now();
+        loadParticipants().catch(() => {});
+        refreshInboxCount();
+      }
+      pollTimer = setTimeout(tick, document.hidden ? 15_000 : 3_000);
     };
+    pollTimer = setTimeout(tick, 3_000);
   }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) connectEvents(); });
 
+  let catching = false;
   async function catchUp() {
-    if (!state.token) return;
-    const last = state.messages[state.messages.length - 1];
-    const cursor = last ? btoa(JSON.stringify({ s: last.sequence })).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_') : '';
+    if (!state.token || !state.nextCursor || catching) return;
+    catching = true;
     try {
-      const d = await api(`/api/messages?limit=200&after=${encodeURIComponent(cursor)}`);
-      d.items.forEach(onNewMessage);
-    } catch {}
+      for (let i = 0; i < 5; i++) {
+        const d = await api(`/api/messages?limit=100&after=${encodeURIComponent(state.nextCursor)}`);
+        d.items.forEach(onNewMessage);
+        state.nextCursor = d.nextCursor;
+        if (!d.hasMore) break;
+      }
+    } catch {} finally { catching = false; }
   }
 
   // ---------- 訊息 ----------
-  const isToMe = m => m.recipients.some(r => r.participantId === state.me.participantId);
+  const meId = () => state.me.participantId;
+  const isToMe = m => m.recipients.some(r => r.participantId === meId());
   const isReplyToMe = m => {
     const parent = m.replyToMessageId && state.byId.get(m.replyToMessageId);
-    return !!parent && parent.author.participantId === state.me.participantId;
+    return !!parent && parent.author.participantId === meId();
   };
-  const isMine = m => m.author.participantId === state.me.participantId;
-  const myAiIds = () => new Set([...state.participants.values()].filter(p => p.ownerId === state.me.participantId).map(p => p.participantId));
+  const isMine = m => m.author.participantId === meId();
+  // 指定我名下 AI 的訊息（@所有人除外），讓人類知道自己的 AI 被交辦了什麼
+  const toMyAi = m => {
+    if (m.audience === 'all' || isMine(m)) return false;
+    const mine = myAiIds();
+    return !mine.has(m.author.participantId) && m.recipients.some(r => mine.has(r.participantId));
+  };
+  const myAiIds = () => new Set([...state.participants.values()].filter(p => p.ownerParticipantId === meId()).map(p => p.participantId));
 
   function renderText(text) {
     let html = esc(text);
-    const names = [...state.participants.values()].map(p => p.name).sort((a, b) => b.length - a.length);
-    for (const n of names) {
-      const tag = '@' + esc(n);
-      html = html.split(tag).join(`\u0000${tag}\u0001`);
-    }
+    const names = [...state.participants.values()].map(p => p.name).concat(ALL.name).sort((a, b) => b.length - a.length);
+    for (const n of names) html = html.split('@' + esc(n)).join(`\u0000@${esc(n)}\u0001`);
     html = html.replace(/\u0000/g, '<span class="mention">').replace(/\u0001/g, '</span>');
-    html = html.replace(/\bhttps?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
-    return html;
+    return html.replace(/\bhttps?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
   }
 
   function messageHtml(m) {
-    const mine = isMine(m);
     const toMe = isToMe(m);
     const replyMe = isReplyToMe(m);
     const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
-    const cls = ['msg', mine ? 'mine' : '', (toMe || replyMe) ? 'to-me' : ''].join(' ');
-    const author = m.author;
+    const a = m.author;
+    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) ? 'to-me' : ''].join(' ');
+    const recipients = m.audience === 'all'
+      ? '<span class="mention">@所有人</span>'
+      : m.recipients.map(r => `<span class="mention">@${esc(r.name)}</span>`).join(' ');
     return `
-      <article class="${cls}" id="msg-${esc(m.messageId)}" data-id="${esc(m.messageId)}">
+      <article class="${cls}" id="msg-${esc(m.messageId)}">
         <div class="msg-head">
           <div class="msg-meta">
-            <span class="msg-author">${esc(author.name)}</span>
-            <span class="muted small">${esc(author.role || '')} #${esc(author.code)}</span>
-            <span class="muted small">(seq: ${m.sequence})</span>
-            ${author.kind === 'ai' ? `<span class="tag ai">AI | 所屬: ${esc(author.ownerName || '?')}</span>` : ''}
-            ${toMe ? '<span class="tag me">指定給我</span>' : ''}
-            ${replyMe ? '<span class="tag reply">回覆我</span>' : ''}
-            <span class="msg-time">${fmtTime(m.createdAt)}</span>
+            <span class="msg-author">${esc(a.name)}</span>
+            <span class="muted small">${esc(a.role || '')} #${esc(a.shortCode)}</span>
+            <span class="muted small seq">(seq: ${m.sequence})</span>
+            ${memberTag(a)}
+            ${m.audience === 'all' ? '<span class="tag all">全體通知</span>' : ''}
+            ${toMe && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : ''}
+            ${replyMe && !isMine(m) ? '<span class="tag reply">回覆我</span>' : ''}
+            ${toMyAi(m) ? '<span class="tag my-ai">給我的 AI</span>' : ''}
           </div>
-          <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+          <div class="msg-side">
+            <span class="msg-time">${fmtTime(m.createdAt)}</span>
+            <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+          </div>
         </div>
         ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">引用訊息 (${esc(shortId(m.replyToMessageId))})${parent ? `　${esc(parent.author.name)}：${esc(parent.text.slice(0, 80))}` : ''}</button>` : ''}
-        ${m.recipients.length ? `<div class="recipients">指定對象: ${m.recipients.map(r => '@' + esc(r.name)).join(' ')}</div>` : ''}
+        ${recipients ? `<div class="recipients">指定對象: ${recipients}</div>` : ''}
         <div class="msg-text">${renderText(m.text)}</div>
       </article>`;
   }
 
   function visible(m) {
     if (!state.onlyMine) return true;
-    const mineAis = myAiIds();
-    return isMine(m) || isToMe(m) || isReplyToMe(m) || mineAis.has(m.author.participantId)
-      || m.recipients.some(r => mineAis.has(r.participantId));
+    const mine = myAiIds();
+    return isMine(m) || isToMe(m) || isReplyToMe(m) || mine.has(m.author.participantId)
+      || m.recipients.some(r => mine.has(r.participantId));
   }
 
-  function nearBottom() {
-    const el = $('#messages');
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-  }
-  function scrollBottom() { const el = $('#messages'); el.scrollTop = el.scrollHeight; }
+  const nearBottom = () => { const el = $('#messages'); return el.scrollHeight - el.scrollTop - el.clientHeight < 120; };
+  const scrollBottom = () => { const el = $('#messages'); el.scrollTop = el.scrollHeight; };
 
   function renderMessages(toBottom) {
     const list = state.messages.filter(visible);
-    $('#messages').innerHTML = list.length
+    const older = state.olderCursor ? '<button type="button" class="load-older" id="load-older">載入更早歷史訊息</button>' : '';
+    $('#messages').innerHTML = older + (list.length
       ? list.map(messageHtml).join('')
-      : `<div class="empty">${state.onlyMine ? '目前沒有與你或你的 AI 相關的訊息。' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。'}</div>`;
+      : `<div class="empty">${state.onlyMine ? '目前沒有與你或你的 AI 相關的訊息。' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。'}</div>`);
     if (toBottom) scrollBottom();
+  }
+
+  async function loadOlder() {
+    const box = $('#messages');
+    const prevHeight = box.scrollHeight;
+    const d = await api(`/api/messages?limit=100&before=${encodeURIComponent(state.olderCursor)}`);
+    const fresh = d.items.filter(m => !state.byId.has(m.messageId));
+    fresh.forEach(m => state.byId.set(m.messageId, m));
+    state.messages = fresh.concat(state.messages);
+    state.olderCursor = d.olderCursor;
+    renderMessages(false);
+    box.scrollTop = box.scrollHeight - prevHeight;
   }
 
   function onNewMessage(m) {
@@ -247,6 +284,7 @@
   }
 
   $('#messages').addEventListener('click', e => {
+    if (e.target.closest('#load-older')) return loadOlder().catch(err => toast(err.message));
     const r = e.target.closest('[data-reply]');
     if (r) return setReply(state.byId.get(r.dataset.reply));
     const j = e.target.closest('[data-jump]');
@@ -255,11 +293,14 @@
 
   async function jumpTo(id) {
     let el = document.getElementById('msg-' + id);
-    if (!el && state.onlyMine) { state.onlyMine = false; store.set(FILTER_KEY, '0'); renderMessages(false); el = document.getElementById('msg-' + id); }
+    if (!el && state.onlyMine) {
+      state.onlyMine = false; store.set(FILTER_KEY, '0'); renderMessages(false);
+      el = document.getElementById('msg-' + id);
+    }
     if (!el) {
       try {
         const m = await api(`/api/messages/${encodeURIComponent(id)}`);
-        toast(`較早的訊息：${m.author.name}（seq ${m.sequence}）`);
+        toast(`較早的訊息：${m.author.name}（seq ${m.sequence}），請按「載入更早歷史訊息」`);
       } catch { toast('找不到原訊息'); }
       return;
     }
@@ -282,7 +323,7 @@
   const input = $('#input');
   const sendBtn = $('#send');
   const mentionList = $('#mention-list');
-  let mentionState = null; // { start, items, index }
+  let mentionState = null;
 
   function autoGrow() {
     input.style.height = 'auto';
@@ -291,12 +332,10 @@
 
   function updateMention() {
     const pos = input.selectionStart;
-    const before = input.value.slice(0, pos);
-    const m = before.match(/@([^\s@]*)$/);
+    const m = input.value.slice(0, pos).match(/@([^\s@]*)$/);
     if (!m) return closeMention();
     const q = m[1].toLowerCase();
-    const items = [...state.participants.values()]
-      .filter(p => p.participantId !== state.me.participantId)
+    const items = [ALL, ...[...state.participants.values()].filter(p => p.participantId !== meId())]
       .filter(p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q))
       .slice(0, 8);
     if (!items.length) return closeMention();
@@ -306,17 +345,16 @@
   function renderMention() {
     mentionList.innerHTML = mentionState.items.map((p, i) => `
       <li role="option" data-i="${i}" aria-selected="${i === mentionState.index}">
-        <span class="dot ${p.active ? 'on' : ''}"></span><b>${esc(p.name)}</b>
-        <span class="muted small">${esc(p.role || '')}</span>${p.kind === 'ai' ? '<span class="tag ai">AI</span>' : ''}
+        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.name)}</b>
+        <span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}
       </li>`).join('');
     mentionList.hidden = false;
   }
   function closeMention() { mentionState = null; mentionList.hidden = true; }
   function pickMention(i) {
     const p = mentionState.items[i];
-    const v = input.value;
     const insert = '@' + p.name + ' ';
-    input.value = v.slice(0, mentionState.start) + insert + v.slice(mentionState.end);
+    input.value = input.value.slice(0, mentionState.start) + insert + input.value.slice(mentionState.end);
     const caret = mentionState.start + insert.length;
     input.setSelectionRange(caret, caret);
     closeMention();
@@ -350,89 +388,100 @@
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mentionState.index); }
       if (e.key === 'Escape') { e.preventDefault(); return closeMention(); }
     }
-    if (e.key === 'Enter' && !e.shiftKey && isDesktop()) {
-      e.preventDefault();
-      send();
-    }
+    if (e.key === 'Enter' && !e.shiftKey && isDesktop()) { e.preventDefault(); send(); }
   });
   sendBtn.addEventListener('click', send);
 
+  // 正文中的 @名字 → 收件人；@所有人 → audience: all
+  function resolveRecipients(text) {
+    if (text.includes('@' + ALL.name)) return { audience: 'all' };
+    const ids = [];
+    let scan = text;
+    const people = [...state.participants.values()].sort((a, b) => b.name.length - a.name.length);
+    for (const p of people) {
+      const tag = '@' + p.name;
+      if (scan.includes(tag)) {
+        if (p.participantId !== meId()) ids.push(p.participantId);
+        scan = scan.split(tag).join(' ');
+      }
+    }
+    return ids.length ? { recipientIds: ids } : {};
+  }
+
   let sending = false;
+  let pendingRequestId = null; // 失敗重送時沿用同一個 requestId，避免重複發文
   async function send() {
     const text = input.value.trim();
     if (!text || sending) return;
+    if (text.length > 2000) return toast(`訊息上限 2000 字（目前 ${text.length} 字）`);
     sending = true; sendBtn.disabled = true;
-    const requestId = 'req_web_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + Math.random());
+    pendingRequestId = pendingRequestId || newRequestId();
     try {
       const m = await api('/api/messages', {
         method: 'POST',
-        body: { text, requestId, replyToMessageId: state.replyTo?.messageId },
+        body: { text, requestId: pendingRequestId, replyToMessageId: state.replyTo?.messageId, ...resolveRecipients(text) },
       });
+      pendingRequestId = null;
       onNewMessage(m);
       input.value = '';
       setReply(null);
       onInput();
     } catch (err) {
+      if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'INVALID_REQUEST') pendingRequestId = null;
       toast('送出失敗：' + err.message);
     } finally {
       sending = false;
       sendBtn.disabled = !input.value.trim();
     }
   }
+  input.addEventListener('input', () => { pendingRequestId = null; });
 
   // ---------- 對話框 ----------
-  function openModal(title, bodyHtml, { onMount } = {}) {
+  function openModal(title, bodyHtml, { foot = true } = {}) {
     const root = $('#modal-root');
     root.innerHTML = `
       <div class="overlay">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
           <div class="modal-head"><h2 id="modal-title">${title}</h2><button class="icon-btn" data-close aria-label="關閉">×</button></div>
           <div class="modal-body">${bodyHtml}</div>
-          <div class="modal-foot"><button class="btn" data-close type="button">關閉</button></div>
+          ${foot ? '<div class="modal-foot"><button class="btn" data-close type="button">關閉</button></div>' : ''}
         </div>
       </div>`;
     const overlay = root.firstElementChild;
     overlay.addEventListener('click', e => {
       if (e.target === overlay || e.target.closest('[data-close]')) closeModal();
     });
-    const body = overlay.querySelector('.modal-body');
-    onMount?.(body);
-    return body;
+    return overlay.querySelector('.modal-body');
   }
   function closeModal() { $('#modal-root').innerHTML = ''; }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#modal-root').firstElementChild) closeModal(); });
 
-  const openers = {
-    members: openMembers,
-    'my-ai': openMyAi,
-    inbox: openInbox,
-    api: openApi,
-    settings: openSettings,
-    qr: openQr,
-  };
+  const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openers[b.dataset.open]()));
   $('#presence-pill').addEventListener('click', openMembers);
 
   // 成員名單
   async function openMembers() {
-    const d = await loadParticipants();
-    const body = openModal(`已登錄成員名單 (${d.total} 人，近期活躍 ${d.active})`, `
+    const items = await loadParticipants();
+    const online = items.filter(p => p.isOnline).length;
+    const body = openModal(`已登錄成員名單 (${items.length} 人，近期活躍 ${online})`, `
       <p class="notice">說明：狀態燈號為 30 秒內活動估計（AI 輪詢或網頁開啟即算活躍），非雙向即時連線。</p>
       <input id="member-q" type="search" placeholder="搜尋成員姓名、角色或代碼…" aria-label="搜尋成員">
-      <div id="member-list" style="display:grid;gap:10px"></div>`);
+      <div id="member-list" class="stack"></div>`);
     const draw = () => {
       const q = body.querySelector('#member-q').value.trim().toLowerCase();
-      const items = [...state.participants.values()]
-        .filter(p => !q || [p.name, p.role, p.code, p.ownerName || ''].some(v => (v || '').toLowerCase().includes(q)))
-        .sort((a, b) => (b.active - a.active) || (a.kind === b.kind ? 0 : a.kind === 'human' ? -1 : 1));
-      body.querySelector('#member-list').innerHTML = items.map(p => {
-        const self = p.participantId === state.me.participantId;
+      const list = [...state.participants.values()]
+        .filter(p => !q || [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(q)))
+        .sort((a, b) => (b.isOnline - a.isOnline) || (a.memberType === b.memberType ? 0 : a.memberType === 'human' ? -1 : 1));
+      body.querySelector('#member-list').innerHTML = list.map(p => {
+        const self = p.participantId === meId();
         return `
         <div class="card member">
-          <span class="dot ${p.active ? 'on' : ''}"></span>
+          <span class="dot ${p.isOnline ? 'on' : ''}"></span>
           <div class="member-info">
-            <div class="member-name"><b>${esc(p.name)}</b><span class="muted">(${esc(p.role || '—')})</span>${roleTag(p)}${self ? '<span class="tag reply">本人</span>' : ''}</div>
-            <div class="member-sub">#${esc(p.code)} · 狀態：${p.active ? '近期活躍 (30s 內)' : '離線/閒置'}</div>
+            <div class="member-name"><b>${esc(p.name)}</b><span class="muted">(${esc(p.role || '—')})</span>${memberTag(p)}${self ? '<span class="self">本人</span>' : ''}</div>
+            <div class="member-sub">#${esc(p.shortCode)} · 狀態：${p.isOnline ? '近期活躍 (30s內)' : '離線/閒置'}</div>
+            ${p.duties ? `<div class="member-sub">主要職責：${esc(p.duties)}</div>` : ''}
           </div>
           ${self ? '' : `<button class="btn" type="button" data-mention="${esc(p.name)}">@ 提及</button>`}
         </div>`;
@@ -452,84 +501,48 @@
   }
 
   // 我的 AI
+  async function loadRoles() {
+    if (!state.roles) state.roles = await api('/api/roles');
+    return state.roles;
+  }
+
   async function openMyAi() {
     const body = openModal('我的 AI 管理', `
-      <p class="notice">管理你名下的 AI 助手。每位 AI 擁有獨立身分、專屬 Token 與通知收件匣。</p>
+      <p class="notice">管理您旗下的 AI 助手。每位 AI 擁有獨立身分、專屬 Token 與通知收件匣。</p>
       <div class="row spread">
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI 助手</button>
-        <a href="/docs/ai-guide.md" target="_blank" rel="noopener">檢視 AI 接入規格文件 (Markdown)</a>
+        <a href="/api/docs/ai-integration" target="_blank" rel="noopener">檢視 AI 接入規格文件 (Markdown)</a>
       </div>
-      <form id="ai-form" class="card" hidden></form>
-      <div id="ai-list" style="display:grid;gap:12px"></div>`);
-    const form = body.querySelector('#ai-form');
-
-    const showForm = (ai) => {
-      form.hidden = false;
-      form.innerHTML = `
-        <b>${ai ? '編輯 AI 助手' : '新增 AI 助手'}</b>
-        <label>名稱<input name="name" required maxlength="40" value="${esc(ai?.name || `${state.me.name}的助手`)}"></label>
-        <label>角色<input name="role" maxlength="20" list="role-list" value="${esc(ai?.role || '')}" placeholder="例如：使用體驗、程式開發、品質驗收"></label>
-        <label>主要職責<textarea name="duties" rows="3" maxlength="1000" placeholder="例如：設計清楚易用的操作流程、畫面、互動、錯誤狀態與不同螢幕尺寸的體驗。">${esc(ai?.duties || '')}</textarea></label>
-        <p class="error" id="ai-error"></p>
-        <div class="row"><button class="btn primary" type="submit">${ai ? '儲存' : '建立'}</button><button class="btn" type="button" id="ai-cancel">取消</button></div>`;
-      form.dataset.id = ai?.participantId || '';
-      form.querySelector('#ai-cancel').onclick = () => { form.hidden = true; };
-      form.querySelector('input').focus();
-    };
-    body.querySelector('#ai-new').onclick = () => showForm(null);
-    form.addEventListener('submit', async e => {
-      e.preventDefault();
-      const data = Object.fromEntries(new FormData(form));
-      try {
-        if (form.dataset.id) await api(`/api/my-ais/${form.dataset.id}`, { method: 'PATCH', body: data });
-        else await api('/api/my-ais', { method: 'POST', body: data });
-        form.hidden = true;
-        await draw();
-        toast(form.dataset.id ? '已更新' : '已建立，按「複製到我的 AI」把接入資訊貼給你的 AI');
-      } catch (err) { form.querySelector('#ai-error').textContent = err.message; }
-    });
-
+      <div id="ai-list" class="stack"></div>`);
     let items = [];
     async function draw() {
       items = (await api('/api/my-ais')).items;
-      body.querySelector('#ai-list').innerHTML = items.length ? items.map(ai => `
-        <div class="card">
-          <div class="member-name"><b>${esc(ai.name)}</b><span class="muted">(${esc(ai.role || '—')})</span><span class="tag ai">AI | 所屬: ${esc(state.me.name)}</span></div>
-          <div class="row">${ai.status === 'active' ? '<span class="tag ok">有效</span>' : '<span class="tag off">已停用</span>'}
-            <span class="muted small">#${esc(ai.code)} · 版本 v${ai.version} · 更新時間：${fmtTime(ai.updatedAt)} · ${ai.active ? '近期活躍' : '離線/閒置'}</span></div>
-          ${ai.duties ? `<div class="duties"><b>主要職責：</b>${esc(ai.duties)}</div>` : ''}
-          ${ai.status === 'active' ? `
-            <button class="btn primary block" type="button" data-act="copy" data-id="${ai.participantId}">複製到我的 AI</button>
-            <p class="notice">內含此 AI 的存取憑證，請只貼到自己的 AI 對話。</p>
-            <button class="btn block" type="button" data-act="edit" data-id="${ai.participantId}">編輯</button>
-            <button class="btn block" type="button" data-act="reissue" data-id="${ai.participantId}">重發 Token</button>
-            <button class="btn danger block" type="button" data-act="disable" data-id="${ai.participantId}">停用</button>`
-          : `<button class="btn block" type="button" data-act="enable" data-id="${ai.participantId}">重新啟用</button>`}
-        </div>`).join('') : '<p class="muted">還沒有 AI 助手。按「新增 AI 助手」建立第一個。</p>';
+      body.querySelector('#ai-list').innerHTML = items.length ? items.map(aiCardHtml).join('')
+        : '<p class="muted">還沒有 AI 助手。按「新增 AI 助手」選一個角色範例開始。</p>';
     }
+    body.querySelector('#ai-new').onclick = () => openAiForm(null);
     body.addEventListener('click', async e => {
       const b = e.target.closest('[data-act]');
       if (!b) return;
-      const id = b.dataset.id;
-      const ai = items.find(x => x.participantId === id);
+      const ai = items.find(x => x.participantId === b.dataset.id);
       try {
         if (b.dataset.act === 'copy') {
-          const { text } = await api(`/api/my-ais/${id}/onboarding`);
+          if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
+          const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`);
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'edit') {
-          showForm(ai);
-          form.scrollIntoView({ block: 'nearest' });
+          openAiForm(ai);
         } else if (b.dataset.act === 'reissue') {
-          if (!confirm(`重發後，${ai.name} 目前的 Token 會立即失效，需要重新貼給 AI。確定重發？`)) return;
-          await api(`/api/my-ais/${id}/reissue`, { method: 'POST' });
+          if (!confirm(`重發後，${ai.name} 目前的 Token 會立即失效，需要重新「複製到我的 AI」。確定重發？`)) return;
+          await api(`/api/my-ais/${ai.participantId}/reissue`, { method: 'POST' });
           await draw();
-          toast('已重發，請再按「複製到我的 AI」');
+          toast('已重發，效期 24 小時；請再按「複製到我的 AI」');
         } else if (b.dataset.act === 'disable') {
           if (!confirm(`停用 ${ai.name}？它將無法再讀寫群組。`)) return;
-          await api(`/api/my-ais/${id}/disable`, { method: 'POST' });
+          await api(`/api/my-ais/${ai.participantId}/disable`, { method: 'POST' });
           await draw();
         } else if (b.dataset.act === 'enable') {
-          await api(`/api/my-ais/${id}/enable`, { method: 'POST' });
+          await api(`/api/my-ais/${ai.participantId}/enable`, { method: 'POST' });
           await draw();
         }
       } catch (err) { toast(err.message); }
@@ -537,46 +550,140 @@
     await draw();
   }
 
+  function aiCardHtml(ai) {
+    const active = ai.status === 'active';
+    const statusTag = !active ? '<span class="tag off">已停用</span>'
+      : ai.tokenExpired ? '<span class="tag warn">Token 已過期</span>' : '<span class="tag ok">有效</span>';
+    return `
+      <div class="card">
+        <div class="row spread">
+          <div class="member-name"><b>${esc(ai.name)}</b><span class="muted">(${esc(ai.role)})</span>
+            <span class="tag ai">AI | 所屬: ${esc(state.me.name)}</span>${statusTag}</div>
+          <span class="muted small">版本 v${ai.version} · 更新時間：${fmtTime(ai.updatedAt)}</span>
+        </div>
+        <div class="duties"><b>主要職責：</b>${esc(ai.duties)}</div>
+        <details class="settings">
+          <summary>完整角色設定</summary>
+          <dl>
+            <dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
+            <dt>可自主處理的事項</dt><dd>${esc(ai.autonomy)}</dd>
+            <dt>必須確認的事項</dt><dd>${esc(ai.mustConfirm)}</dd>
+            <dt>完成與交接條件</dt><dd>${esc(ai.handoff)}</dd>
+          </dl>
+        </details>
+        <div class="muted small">#${esc(ai.shortCode)} · ${ai.isOnline ? '近期活躍' : '離線/閒置'} · Token 到期：${ai.expiresAt ? fmtTime(ai.expiresAt) : '—'}</div>
+        ${active ? `
+        <div class="row actions">
+          <button class="btn primary" type="button" data-act="copy" data-id="${ai.participantId}">複製到我的 AI</button>
+          <span class="notice">包含此 AI 的存取憑證，請只貼到自己的 AI 對話。</span>
+        </div>
+        <div class="row actions">
+          <button class="btn" type="button" data-act="edit" data-id="${ai.participantId}">編輯</button>
+          <button class="btn" type="button" data-act="reissue" data-id="${ai.participantId}">重發 Token</button>
+          <button class="btn danger" type="button" data-act="disable" data-id="${ai.participantId}">停用</button>
+        </div>` : `
+        <div class="row actions"><button class="btn" type="button" data-act="enable" data-id="${ai.participantId}">重新啟用</button></div>`}
+      </div>`;
+  }
+
+  async function openAiForm(ai) {
+    const { items: roles, fields } = await loadRoles();
+    const editing = !!ai;
+    const body = openModal(editing ? '編輯 AI 助手' : '新增 AI 助手', `
+      <form id="ai-form" class="stack">
+        <label>角色範例選擇（選取後將自動預填六題設定）
+          <select name="roleKey">${roles.map(r => `<option value="${r.key}">${esc(r.option)}</option>`).join('')}</select>
+        </label>
+        <p class="notice" id="role-hint"></p>
+        <label>角色顯示名稱 (1-30 字)<input name="role" required maxlength="30"></label>
+        <div class="section-title">AI 設定六題（皆為必填，不可純空白，每題上限 1000 字）</div>
+        <label>1. AI 名稱（人類名下此 AI 的識別名稱）<input name="name" required maxlength="40"></label>
+        ${fields.map(f => `<label>${esc(f.label)}<textarea name="${f.key}" rows="3" required maxlength="1000"></textarea></label>`).join('')}
+        <p class="error" id="ai-error" role="alert"></p>
+        <div class="row end">
+          <button class="btn" type="button" data-close>取消</button>
+          <button class="btn primary" type="submit">${editing ? '儲存變更' : '建立 AI 助手'}</button>
+        </div>
+      </form>`, { foot: false });
+    const form = body.querySelector('#ai-form');
+    const fill = (src, includeName) => {
+      form.role.value = src.role;
+      if (includeName) form.name.value = src.name;
+      for (const f of fields) form[f.key].value = src[f.key];
+    };
+    const roleHint = key => {
+      const hint = body.querySelector('#role-hint');
+      hint.textContent = editing ? '切換範例會覆蓋下方六題內容（名稱不變）。' : '';
+      hint.hidden = !editing;
+      return roles.find(r => r.key === key);
+    };
+    if (editing) {
+      form.roleKey.value = ai.roleKey || 'custom';
+      fill(ai, true);
+      roleHint(form.roleKey.value);
+    } else {
+      const r = roleHint(roles[0].key);
+      fill({ ...r, name: `${state.me.name}的${r.suffix}` }, true);
+    }
+    let lastAutoName = form.name.value;
+    form.roleKey.addEventListener('change', () => {
+      const r = roleHint(form.roleKey.value);
+      const autoName = `${state.me.name}的${r.suffix}`;
+      // 名稱若還是自動產生的就一起換；使用者改過就保留
+      const keepName = editing || form.name.value !== lastAutoName;
+      fill({ ...r, name: autoName }, !keepName);
+      if (!keepName) lastAutoName = autoName;
+    });
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      for (const [k, v] of Object.entries(data)) data[k] = v.trim();
+      try {
+        if (editing) await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data });
+        else await api('/api/my-ais', { method: 'POST', body: data });
+        await openMyAi();
+        toast(editing ? '已儲存' : '已建立。按「複製到我的 AI」把接入設定貼給你的 AI');
+      } catch (err) { body.querySelector('#ai-error').textContent = err.message; }
+    });
+  }
+
   // 通知收件匣
   async function refreshInboxCount() {
     try {
-      const d = await api('/api/notifications?status=pending&limit=200');
-      state.pendingCount = d.items.length;
+      const d = await api('/api/notifications?status=pending&limit=100');
       const b = $('#inbox-badge');
       b.hidden = !d.items.length;
-      b.textContent = d.hasMore ? '200+' : d.items.length;
+      b.textContent = d.hasMore ? '99+' : d.items.length;
     } catch {}
   }
 
   async function openInbox() {
-    const body = openModal('通知收件匣', '<div id="inbox-list" style="display:grid;gap:10px"></div>');
+    const body = openModal('通知收件匣', '<div id="inbox-list" class="stack"></div>');
+    const ack = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
+    let ids = [];
     async function draw() {
       const d = await api('/api/notifications?status=pending&limit=100');
+      ids = d.items.map(n => n.notificationId);
+      const reasonTag = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
       body.querySelector('#inbox-list').innerHTML = d.items.length ? `
-        <div class="row spread"><span class="muted">${d.items.length} 則待處理</span><button class="btn" type="button" data-ack-all>全部標為已處理</button></div>
+        <div class="row spread"><span class="muted">${d.items.length}${d.hasMore ? '+' : ''} 則待處理</span><button class="btn" type="button" data-ack-all>全部標為已處理</button></div>
         ${d.items.map(n => `
           <div class="card">
-            <div class="row"><b>${esc(n.sender.name)}</b>
-              ${n.reasons.includes('mention') ? '<span class="tag me">指定給我</span>' : ''}
-              ${n.reasons.includes('reply') ? '<span class="tag reply">回覆我</span>' : ''}
+            <div class="row"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reasonTag[r] || '').join('')}
               <span class="msg-time">${fmtTime(n.createdAt)}</span></div>
             <div class="msg-text">${esc(n.preview)}</div>
             <div class="row"><button class="btn" type="button" data-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">查看並標為已處理</button>
             <button class="btn" type="button" data-ack="${esc(n.notificationId)}">標為已處理</button></div>
           </div>`).join('')}`
         : '<p class="muted">沒有待處理的通知。</p>';
-      body.dataset.ids = JSON.stringify(d.items.map(n => n.notificationId));
     }
     body.addEventListener('click', async e => {
-      const t = e.target;
       try {
-        if (t.closest('[data-ack-all]')) {
-          await api('/api/notifications/ack', { method: 'POST', body: { notificationIds: JSON.parse(body.dataset.ids || '[]') } });
-        } else if (t.closest('[data-ack]')) {
-          await api(`/api/notifications/${t.closest('[data-ack]').dataset.ack}/ack`, { method: 'POST' });
-        } else if (t.closest('[data-goto]')) {
-          const g = t.closest('[data-goto]');
-          await api(`/api/notifications/${g.dataset.n}/ack`, { method: 'POST' });
+        if (e.target.closest('[data-ack-all]')) await ack(ids);
+        else if (e.target.closest('[data-ack]')) await ack([e.target.closest('[data-ack]').dataset.ack]);
+        else if (e.target.closest('[data-goto]')) {
+          const g = e.target.closest('[data-goto]');
+          await ack([g.dataset.n]);
           closeModal();
           refreshInboxCount();
           return jumpTo(g.dataset.goto);
@@ -593,22 +700,23 @@
     const base = location.origin;
     const body = openModal('API 資訊', `
       <div class="kv">
-        <span>BASE_URL</span><code>${esc(base)}</code>
-        <span>本人 participantId</span><code>${esc(state.me.participantId)}</code>
+        <span>API Base URL</span><code>${esc(base)}</code>
+        <span>本人 participantId</span><code>${esc(meId())}</code>
         <span>本人 Token</span><span class="row"><code id="my-token">••••••••••••</code><button class="btn" type="button" id="tok-show">顯示</button><button class="btn" type="button" id="tok-copy">複製</button></span>
       </div>
       <p class="notice warn">這是「你本人」的 Token，等同登入密碼。要給 AI 用，請到「我的 AI」建立專屬身分，不要把自己的 Token 給 AI。</p>
-      <b>主要端點</b>
+      <div class="section-title">主要端點</div>
       <ul class="endpoints">
-        <li><code>GET /api/me</code> 自己的身分</li>
-        <li><code>GET /api/participants</code> 成員名單</li>
-        <li><code>GET /api/messages?after=&lt;cursor&gt;&amp;limit=50</code> 讀取新訊息</li>
-        <li><code>POST /api/messages</code> 發訊息（text, requestId, replyToMessageId, recipientIds）</li>
-        <li><code>GET /api/notifications?status=pending</code> 待處理通知</li>
-        <li><code>POST /api/notifications/:id/ack</code> 標記已處理</li>
+        <li><code>GET /api/me</code> 自身身分</li>
+        <li><code>GET /api/participants</code> 有效成員與在線狀態</li>
+        <li><code>GET /api/messages?limit=50&amp;after=&lt;nextCursor&gt;</code> 增量讀取訊息</li>
+        <li><code>GET /api/messages/:messageId</code> 單則訊息</li>
+        <li><code>POST /api/messages</code> 發文（text、requestId、recipientIds、replyToMessageId、audience）</li>
+        <li><code>GET /api/notifications?status=pending&amp;limit=50</code> 待處理通知</li>
+        <li><code>POST /api/notifications/ack</code> 確認通知（notificationIds）</li>
       </ul>
-      <p>完整說明：<a href="/docs/ai-guide.md" target="_blank" rel="noopener">AI 接入規格文件 (Markdown)</a></p>
-      <b>快速測試</b>
+      <p>完整規格：<a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 代理人接入通訊協定指南 (Markdown)</a></p>
+      <div class="section-title">快速測試</div>
       <code class="block">curl -H "Authorization: Bearer &lt;TOKEN&gt;" ${esc(base)}/api/me</code>`);
     body.querySelector('#tok-show').onclick = () => { body.querySelector('#my-token').textContent = state.token; };
     body.querySelector('#tok-copy').onclick = async () => toast((await copyText(state.token)) ? '已複製' : '複製失敗');
@@ -625,8 +733,8 @@
           <option value="dark" ${theme === 'dark' ? 'selected' : ''}>深色</option>
         </select>
       </label>
-      <label class="row" style="font-weight:400"><input type="checkbox" id="set-mine" style="width:auto" ${state.onlyMine ? 'checked' : ''}>只顯示與我或我的 AI 相關的訊息</label>
-      <hr style="border:0;border-top:1px solid var(--border);width:100%">
+      <label class="check"><input type="checkbox" id="set-mine" ${state.onlyMine ? 'checked' : ''}>只顯示與我或我的 AI 相關的訊息</label>
+      <hr>
       <p class="notice">離開群組會停用你和你名下的所有 AI，其他成員將看不到你們。</p>
       <button class="btn danger" type="button" id="set-leave">離開群組</button>`);
     body.querySelector('#set-theme').onchange = e => {
@@ -660,7 +768,7 @@
       <p class="notice">用手機掃描，即可在手機上以「${esc(state.me.name)}」身分登入。此 QR Code 等同密碼，請勿分享。</p>
       <div id="qr" class="qr"></div>
       <button class="btn" type="button" id="qr-copy">複製登入連結</button>
-      <p class="notice">提示：若用 localhost 開啟，手機無法連到；請用電腦的區網 IP 開啟本頁後再產生 QR Code。</p>`);
+      <p class="notice">提示：用 localhost 開啟時手機連不到；請改用電腦的區網 IP 開啟本頁後再產生 QR Code。</p>`);
     body.querySelector('#qr-copy').onclick = async () => toast((await copyText(link)) ? '已複製' : '複製失敗');
     try {
       if (!window.QRCode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js');
@@ -677,6 +785,6 @@
     history.replaceState(null, '', '/');
   }
   state.token = store.get(TOKEN_KEY);
-  if (state.token) start().catch(() => showJoin());
+  if (state.token) start().catch(() => { store.del(TOKEN_KEY); state.token = null; showJoin(); });
   else showJoin();
 })();

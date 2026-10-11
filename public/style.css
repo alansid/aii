@@ -183,8 +183,49 @@ code.block { display: block; padding: 10px; white-space: pre-wrap; }
   background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 999px; max-width: calc(100% - 32px);
 }
 
+.stack { display: grid; gap: 12px; }
+.section-title { font-weight: 700; margin-top: 4px; }
+.row.end { justify-content: flex-end; }
+.row.actions .notice { flex: 1; min-width: 180px; }
+.check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.check input { width: auto; }
+hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0; }
+.tag.all { background: var(--danger); color: #fff; }
+.tag.warn { background: var(--mine-bg); color: var(--text); border-color: var(--mine-border); }
+.self { color: var(--primary); font-size: .9rem; }
+.load-older {
+  align-self: center; font: inherit; font-size: .9rem; color: var(--primary); background: none;
+  border: 1px dashed var(--border); border-radius: 999px; padding: 4px 16px; cursor: pointer;
+}
+.settings summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+.settings dl { margin: 8px 0 0; display: grid; gap: 4px; }
+.settings dt { font-weight: 700; font-size: .9rem; }
+.settings dd { margin: 0 0 6px; white-space: pre-wrap; }
+.modal-body form textarea { resize: vertical; }
+
+@media (min-width: 900px) {
+  .topbar { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 16px; }
+  .topbar .title-row { grid-column: 1; }
+  .topbar #me-line { grid-column: 1; grid-row: 2; }
+  .topbar .tabs { grid-column: 2; grid-row: 1 / span 2; padding-top: 0; }
+}
+
+.msg-side { display: flex; align-items: center; gap: 8px; flex: none; }
+.tag.my-ai { background: var(--ai-bg); color: var(--ai-text); border: 1px dashed var(--ai-text); }
+
 @media (max-width: 600px) {
   h1 { font-size: 1.3rem; }
+  .tabs { flex-wrap: wrap; overflow: visible; }
+  .tabs button { padding: 3px 10px; }
+  .msg-head { flex-wrap: wrap; gap: 4px; }
+  .msg-meta { flex-basis: 100%; }
+  .msg-side { margin-left: auto; }
+  .msg { padding: 8px 12px; }
+  .msg-meta { gap: 2px 6px; }
+  .msg-meta .seq { display: none; }
+  .msg-meta .tag { font-size: .72rem; padding: 0 5px; }
+  .tabs button { font-size: .85rem; padding: 2px 8px; }
+  .reply-btn { padding: 1px 8px; }
   .messages, .topbar, .composer { padding-left: 12px; padding-right: 12px; }
   .overlay { padding: 8px; align-items: end; }
   .modal { max-height: calc(100vh - 16px); }
