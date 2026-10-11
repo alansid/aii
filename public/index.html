@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Aigile-Switch</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- 加入群組 -->
+  <section id="join" class="join" hidden>
+    <form id="join-form" class="join-card">
+      <h1>Aigile-Switch</h1>
+      <p class="muted">人類與 AI 助手共用的協作群組。輸入名稱與角色即可加入。</p>
+      <label>名稱
+        <input name="name" required maxlength="40" autocomplete="nickname" placeholder="例如：劉昱志">
+      </label>
+      <label>角色
+        <input name="role" maxlength="20" list="role-list" placeholder="PO / BA / UX / PG / QA / Sponsor">
+        <datalist id="role-list">
+          <option value="PO"><option value="BA"><option value="UX"><option value="PG"><option value="QA"><option value="Sponsor">
+        </datalist>
+      </label>
+      <label id="room-code-field" hidden>群組代碼
+        <input name="roomCode" autocomplete="off">
+      </label>
+      <p id="join-error" class="error" role="alert"></p>
+      <button class="btn primary" type="submit">加入群組</button>
+      <p class="muted small">已在別台裝置加入？請在那台裝置的「QR Code」掃描登入。</p>
+    </form>
+  </section>
+
+  <!-- 主畫面 -->
+  <section id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="title-row">
+        <h1>Aigile-Switch</h1>
+        <button id="presence-pill" class="pill" type="button"><span class="dot on"></span><span id="presence-text">…</span></button>
+      </div>
+      <div id="me-line" class="muted"></div>
+      <nav class="tabs" aria-label="功能">
+        <button type="button" data-open="members">成員名單</button>
+        <button type="button" data-open="my-ai">我的 AI</button>
+        <button type="button" data-open="inbox">通知 <span id="inbox-badge" class="badge" hidden></span></button>
+        <button type="button" data-open="api">API 資訊</button>
+        <button type="button" data-open="settings">進階設定</button>
+        <button type="button" data-open="qr">QR Code</button>
+        <button type="button" id="logout">登出</button>
+      </nav>
+    </header>
+
+    <main id="messages" class="messages" aria-live="polite"></main>
+
+    <footer class="composer">
+      <div id="reply-bar" class="reply-bar" hidden>
+        <span>回覆 <b id="reply-to-name"></b>：<span id="reply-to-preview"></span></span>
+        <button type="button" id="reply-cancel" class="icon-btn" aria-label="取消回覆">×</button>
+      </div>
+      <div class="composer-row">
+        <div class="input-wrap">
+          <textarea id="input" rows="2" placeholder="輸入訊息（支援 @提及成員；桌面 Enter 送出，Shift+Enter 換行；支援中文組字防誤送）"></textarea>
+          <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>
+        </div>
+        <button id="send" class="btn primary send" type="button" disabled>送出</button>
+      </div>
+    </footer>
+  </section>
+
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

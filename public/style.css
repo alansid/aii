@@ -1,0 +1,192 @@
+:root {
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --surface-2: #f1f4f9;
+  --border: #dde3ec;
+  --text: #111827;
+  --muted: #5b6475;
+  --primary: #2563eb;
+  --primary-text: #ffffff;
+  --danger: #dc2626;
+  --ok: #16a34a;
+  --ok-bg: #dcfce7;
+  --ok-text: #166534;
+  --ai-bg: #f3e8ff;
+  --ai-text: #7e22ce;
+  --ai-border: #e9d5ff;
+  --human-bg: #e0f2fe;
+  --human-text: #0369a1;
+  --human-border: #bae6fd;
+  --mine-bg: #fef3c7;
+  --mine-border: #f59e0b;
+  --tag-me: #f59e0b;
+  --quote-bg: #f1ead2;
+  --mention: #1d4ed8;
+  --radius: 12px;
+  --shadow: 0 10px 30px rgba(15, 23, 42, .18);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1420; --surface: #171e2c; --surface-2: #1f2838; --border: #2c3647;
+    --text: #e8ecf3; --muted: #9aa5b8; --primary: #4f86f7; --primary-text: #0b1020;
+    --danger: #f26b6b; --ok: #4ade80; --ok-bg: #12351f; --ok-text: #86efac;
+    --ai-bg: #2d1f42; --ai-text: #d8b4fe; --ai-border: #4c3470;
+    --human-bg: #10304a; --human-text: #7dd3fc; --human-border: #1e4b6e;
+    --mine-bg: #3a2e10; --mine-border: #d39a1f; --tag-me: #d39a1f; --quote-bg: #2e2a1c; --mention: #93b4ff;
+    --shadow: 0 10px 30px rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1420; --surface: #171e2c; --surface-2: #1f2838; --border: #2c3647;
+  --text: #e8ecf3; --muted: #9aa5b8; --primary: #4f86f7; --primary-text: #0b1020;
+  --danger: #f26b6b; --ok: #4ade80; --ok-bg: #12351f; --ok-text: #86efac;
+  --ai-bg: #2d1f42; --ai-text: #d8b4fe; --ai-border: #4c3470;
+  --human-bg: #10304a; --human-text: #7dd3fc; --human-border: #1e4b6e;
+  --mine-bg: #3a2e10; --mine-border: #d39a1f; --tag-me: #d39a1f; --quote-bg: #2e2a1c; --mention: #93b4ff;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+[hidden] { display: none !important; }
+h1 { margin: 0; font-size: 1.5rem; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.error { color: var(--danger); min-height: 1.2em; margin: 0; }
+input, textarea, select {
+  font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; width: 100%;
+}
+input:focus, textarea:focus, select:focus, button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+label { display: grid; gap: 6px; font-weight: 600; }
+
+.btn {
+  font: inherit; border-radius: 8px; padding: 9px 16px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-text); font-weight: 600; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.btn.block { width: 100%; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.icon-btn { background: none; border: 0; font-size: 1.4rem; line-height: 1; color: var(--muted); cursor: pointer; padding: 4px 8px; }
+
+/* 加入 */
+.join { min-height: 100%; display: grid; place-items: center; padding: 16px; }
+.join-card {
+  width: min(420px, 100%); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 24px; display: grid; gap: 14px;
+}
+.join-card p { margin: 0; }
+
+/* 主畫面 */
+.app { height: 100%; display: flex; flex-direction: column; }
+.topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px 8px; }
+.title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; border: 0; cursor: pointer;
+  background: var(--surface-2); color: var(--primary); border-radius: 999px; padding: 3px 12px; font: inherit;
+}
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #9ca3af; flex: none; }
+.dot.on { background: var(--ok); }
+.tabs { display: flex; gap: 6px; overflow-x: auto; padding-top: 6px; scrollbar-width: none; }
+.tabs button {
+  flex: none; font: inherit; font-size: .92rem; padding: 4px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer;
+}
+.tabs button:hover { color: var(--text); }
+.badge { background: var(--danger); color: #fff; border-radius: 999px; font-size: .75rem; padding: 0 6px; margin-left: 2px; }
+
+.messages { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.empty { margin: auto; text-align: center; color: var(--muted); }
+.msg {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 14px; max-width: 900px; width: 100%; align-self: center;
+}
+.msg.mine { border-left: 4px solid var(--primary); }
+.msg.to-me { background: var(--mine-bg); border: 2px solid var(--mine-border); }
+.msg.flash { animation: flash 1.2s ease; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 4px var(--primary); } 100% { box-shadow: none; } }
+.msg-head { display: flex; align-items: flex-start; gap: 8px; }
+.msg-meta { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.msg-author { font-weight: 700; }
+.msg-time { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+.tag { font-size: .78rem; border-radius: 6px; padding: 1px 7px; border: 1px solid transparent; white-space: nowrap; }
+.tag.ai { background: var(--ai-bg); color: var(--ai-text); border-color: var(--ai-border); }
+.tag.human { background: var(--human-bg); color: var(--human-text); border-color: var(--human-border); }
+.tag.me { background: var(--tag-me); color: #fff; }
+.tag.reply { background: var(--primary); color: var(--primary-text); }
+.tag.ok { background: var(--ok-bg); color: var(--ok-text); }
+.tag.off { background: var(--surface-2); color: var(--muted); }
+.reply-btn { font: inherit; font-size: .85rem; padding: 2px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; }
+.quote {
+  display: block; width: 100%; text-align: left; margin: 8px 0 4px; font: inherit; font-size: .9rem;
+  background: var(--quote-bg); border: 0; border-left: 4px solid var(--primary); border-radius: 4px;
+  padding: 6px 10px; color: var(--muted); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.recipients { color: var(--muted); font-size: .88rem; margin-top: 4px; }
+.msg-text { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mention { color: var(--mention); font-weight: 600; }
+.msg-text a { color: var(--primary); }
+
+.composer { background: var(--surface); border-top: 1px solid var(--border); padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+.reply-bar { display: flex; align-items: center; gap: 8px; font-size: .88rem; color: var(--muted); padding-bottom: 6px; }
+.reply-bar > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-row { display: flex; gap: 10px; align-items: stretch; max-width: 900px; margin: 0 auto; }
+.input-wrap { position: relative; flex: 1; }
+#input { resize: none; min-height: 52px; max-height: 40vh; }
+.send { min-width: 84px; }
+.mention-list {
+  position: absolute; bottom: calc(100% + 6px); left: 0; margin: 0; padding: 4px; list-style: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+  max-height: 240px; overflow-y: auto; min-width: 240px; z-index: 5;
+}
+.mention-list li { padding: 6px 10px; border-radius: 6px; cursor: pointer; display: flex; gap: 6px; align-items: center; }
+.mention-list li[aria-selected="true"], .mention-list li:hover { background: var(--surface-2); }
+
+/* 對話框 */
+.overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: grid; place-items: center; padding: 16px; z-index: 10; }
+.modal {
+  background: var(--surface); border-radius: 16px; width: min(640px, 100%); max-height: calc(100vh - 32px);
+  display: flex; flex-direction: column; box-shadow: var(--shadow);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 6px; }
+.modal-head h2 { margin: 0; font-size: 1.3rem; }
+.modal-body { padding: 6px 20px 12px; overflow-y: auto; display: grid; gap: 12px; }
+.modal-foot { padding: 12px 20px 18px; display: flex; justify-content: flex-end; }
+.card { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 8px; }
+.member { display: flex; align-items: center; gap: 12px; }
+.member-info { flex: 1; min-width: 0; }
+.member-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.member-name b { font-size: 1.05rem; }
+.member-sub { color: var(--muted); font-size: .88rem; }
+.duties { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.row.spread { justify-content: space-between; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: center; }
+.kv code, code.block { overflow-wrap: anywhere; }
+code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .88em; background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+code.block { display: block; padding: 10px; white-space: pre-wrap; }
+.endpoints { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.qr { background: #fff; padding: 12px; border-radius: 8px; justify-self: center; }
+.notice { font-size: .88rem; color: var(--muted); }
+.notice.warn { color: var(--danger); }
+
+.toast {
+  position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 20;
+  background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 999px; max-width: calc(100% - 32px);
+}
+
+@media (max-width: 600px) {
+  h1 { font-size: 1.3rem; }
+  .messages, .topbar, .composer { padding-left: 12px; padding-right: 12px; }
+  .overlay { padding: 8px; align-items: end; }
+  .modal { max-height: calc(100vh - 16px); }
+  .kv { grid-template-columns: 1fr; }
+}
