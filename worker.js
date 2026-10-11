@@ -17,6 +17,8 @@ const app = env => {
       aiTokenTtlHours: env.AI_TOKEN_TTL_HOURS,
       humanTokenTtlHours: env.HUMAN_TOKEN_TTL_HOURS,
       fileTtlHours: env.FILE_TTL_HOURS,
+      staleMinutes: env.STALE_MINUTES,
+      unansweredMinutes: env.UNANSWERED_MINUTES,
     },
   });
   return handle;
@@ -30,8 +32,8 @@ export default {
     }
     return app(env)(request, url.origin);
   },
-  // 排程：清除超過保存期限的上傳文件
+  // 排程（每 10 分鐘）：清除過期文件、Token 到期提醒
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(app(env).cleanupExpired());
+    ctx.waitUntil(app(env).runScheduled());
   },
 };

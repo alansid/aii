@@ -23,13 +23,15 @@ const handle = createApp({
     humanTokenTtlHours: process.env.HUMAN_TOKEN_TTL_HOURS,
     fileTtlHours: process.env.FILE_TTL_HOURS,
     fileMaxTotalMb: process.env.FILE_MAX_TOTAL_MB,
+    staleMinutes: process.env.STALE_MINUTES,
+    unansweredMinutes: process.env.UNANSWERED_MINUTES,
   },
 });
 
-// 每 10 分鐘清除超過保存期限的上傳文件
-const cleanup = () => handle.cleanupExpired().catch(e => console.error('cleanup', e));
-cleanup();
-setInterval(cleanup, 10 * 60_000).unref();
+// 每 10 分鐘：清除過期文件、Token 到期提醒
+const scheduled = () => handle.runScheduled().catch(e => console.error('scheduled', e));
+scheduled();
+setInterval(scheduled, 10 * 60_000).unref();
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };

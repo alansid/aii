@@ -24,6 +24,8 @@
     onlyMine: store.get(FILTER_KEY) === '1',
     events: null,
     roles: null,
+    team: null,
+    unansweredByMsg: new Map(),
   };
 
   // ---------- 共用 ----------
@@ -81,6 +83,7 @@
 
   const memberTag = p => p.memberType === 'ai'
     ? `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`
+    : p.memberType === 'system' ? '<span class="tag sys">[系統]</span>'
     : '<span class="tag human">[人類]</span>';
 
   // ---------- 加入 / 登入 ----------
@@ -188,6 +191,7 @@
     state.olderCursor = d.olderCursor;
     renderMessages(true);
     refreshInboxCount();
+    loadTeam();
     connectEvents();
   }
 
@@ -211,6 +215,7 @@
         lastSlowPoll = Date.now();
         loadParticipants().catch(() => {});
         refreshInboxCount();
+        loadTeam();
       }
       pollTimer = setTimeout(tick, document.hidden ? 15_000 : 3_000);
     };
@@ -277,6 +282,7 @@
             ${toMe && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : ''}
             ${replyMe && !isMine(m) ? '<span class="tag reply">回覆我</span>' : ''}
             ${toMyAi(m) ? '<span class="tag my-ai">給我的 AI</span>' : ''}
+            ${unansweredTag(m)}
           </div>
           <div class="msg-side">
             <span class="msg-time">${fmtTime(m.createdAt)}</span>
@@ -512,6 +518,96 @@
   const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openers[b.dataset.open]()));
   $('#presence-pill').addEventListener('click', openMembers);
+
+  // ---------- 團隊狀態 ----------
+  const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定' };
+  const agoText = iso => {
+    if (!iso) return '從未上線';
+    const min = Math.floor((Date.now() - new Date(iso)) / 60000);
+    if (min < 1) return '剛剛';
+    if (min < 60) return `${min} 分鐘前`;
+    if (min < 1440) return `${Math.floor(min / 60)} 小時前`;
+    return `${Math.floor(min / 1440)} 天前`;
+  };
+  // 連線健康度：green 正常、yellow 可能斷線或 Token 快到期、red Token 已過期、grey 人類離線
+  function health(mb) {
+    if (mb.tokenExpired) return { cls: 'red', text: 'Token 已過期' };
+    if (mb.memberType === 'ai' && mb.stale) return { cls: 'yellow', text: mb.lastSeenAt ? '可能斷線' : '尚未連線' };
+    if (mb.tokenExpiringSoon) return { cls: 'yellow', text: 'Token 快到期' };
+    if (mb.memberType === 'human' && !mb.isOnline) return { cls: 'grey', text: '離線' };
+    return { cls: 'green', text: '正常' };
+  }
+
+  function unansweredTag(m) {
+    const who = state.unansweredByMsg.get(m.messageId);
+    return who?.length ? `<span class="tag unanswered" title="指派超過 ${state.team?.unansweredMinutes || 15} 分鐘仍未讀取">尚未回應：${who.map(esc).join('、')}</span>` : '';
+  }
+
+  async function loadTeam() {
+    try {
+      const t = await api('/api/team-status');
+      state.team = t;
+      const before = JSON.stringify([...state.unansweredByMsg]);
+      const map = new Map();
+      for (const u of t.unanswered) map.set(u.messageId, [...(map.get(u.messageId) || []), u.name]);
+      state.unansweredByMsg = map;
+      if (JSON.stringify([...map]) !== before) {
+        const box = $('#messages');
+        const keep = box.scrollTop;
+        const atBottom = nearBottom();
+        renderMessages(atBottom);
+        if (!atBottom) box.scrollTop = keep;
+      }
+      renderTeamBar();
+    } catch {}
+  }
+
+  function renderTeamBar() {
+    const t = state.team;
+    const bar = $('#team-bar');
+    if (!t) { bar.hidden = true; return; }
+    const chips = t.members.map(mb => {
+      const h = health(mb);
+      const st = mb.status ? STATE_LABEL[mb.status.state] : '';
+      const tip = [mb.name, h.text, `最後上線 ${agoText(mb.lastSeenAt)}`, mb.status ? `${st}：${mb.status.title}` : '', mb.pendingCount ? `待處理通知 ${mb.pendingCount}` : ''].filter(Boolean).join('\n');
+      return `<button type="button" class="chip h-${h.cls}" data-team title="${esc(tip)}">
+        <span class="dot"></span><b>${esc(mb.name)}</b>
+        ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
+        <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
+      </button>`;
+    }).join('');
+    const dec = t.decisions.length ? `<button type="button" class="chip decide" data-team>📝 等你決定 ${t.decisions.length}</button>` : '';
+    bar.innerHTML = dec + chips;
+    bar.hidden = false;
+  }
+  $('#team-bar').addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
+
+  async function openTeam() {
+    await loadTeam();
+    const t = state.team;
+    if (!t) return toast('無法取得團隊狀態');
+    const rows = t.members.map(mb => {
+      const h = health(mb);
+      return `<tr>
+        <td><span class="dot h-${h.cls}"></span> <b>${esc(mb.name)}</b><div class="muted small">${esc(mb.role || '')}${mb.memberType === 'ai' ? ' · AI' : ''}</div></td>
+        <td>${h.text}<div class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</div></td>
+        <td>${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" data-jump-team="${esc(mb.status.messageId)}">${esc(mb.status.title || '（無標題）')}</button>` : '<span class="muted">—</span>'}</td>
+        <td>${mb.pendingCount ? `${mb.pendingCount} 則<div class="muted small">最久 ${agoText(mb.oldestPendingAt)}</div>` : '<span class="muted">0</span>'}</td>
+        <td>${mb.memberType === 'ai' ? `${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' <span class="tag warn">已過期</span>' : mb.tokenExpiringSoon ? ' <span class="tag warn">快到期</span>' : ''}` : '<span class="muted">—</span>'}</td>
+      </tr>`;
+    }).join('');
+    const body = openModal('團隊狀態', `
+      <p class="notice">狀態依每人最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現標示「可能斷線」。</p>
+      <div class="section-title">📝 等你決定（${t.decisions.length}）</div>
+      ${t.decisions.length ? `<ul class="decisions">${t.decisions.map(d => `<li><button type="button" class="link" data-jump-team="${esc(d.messageId)}">${esc(d.title || '（無標題）')}</button> <span class="muted small">— ${esc(d.author.name)} · ${agoText(d.createdAt)}</span></li>`).join('')}</ul>` : '<p class="muted">目前沒有待決定的事項。</p>'}
+      ${t.unanswered.length ? `<div class="section-title">⏰ 尚未回應的指派（${t.unanswered.length}）</div><ul class="decisions">${t.unanswered.map(u => `<li><b>${esc(u.name)}</b> <span class="muted small">已等 ${agoText(u.since).replace('前', '')}</span> <button type="button" class="link" data-jump-team="${esc(u.messageId)}">查看訊息</button></li>`).join('')}</ul>` : ''}
+      <div class="section-title">成員</div>
+      <div class="team-table-wrap"><table class="team-table"><thead><tr><th>成員</th><th>連線</th><th>目前狀態</th><th>待處理</th><th>Token 到期</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    body.addEventListener('click', e => {
+      const j = e.target.closest('[data-jump-team]');
+      if (j) { closeModal(); jumpTo(j.dataset.jumpTeam); }
+    });
+  }
 
   // 成員名單
   async function openMembers() {

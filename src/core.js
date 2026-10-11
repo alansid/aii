@@ -11,6 +11,7 @@ const ACTIVE_WINDOW_MS = 30_000;
 const RATE_LIMIT_PER_MIN = 120;
 const MAX_TEXT = 2000;
 const MAX_SETTING = 1000;
+const SYSTEM_NAME = '平台通知';
 
 // ---------- 工具 ----------
 const B62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -223,7 +224,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const people = await peopleMap(ctx);
     const recipientIds = new Set();
     if (audience) {
-      for (const p of people.values()) if (p.status === 'active') recipientIds.add(p.id);
+      for (const p of people.values()) if (p.status === 'active' && p.kind !== 'system') recipientIds.add(p.id);
     } else {
       for (const id of rawIds) {
         const p = people.get(id);
@@ -324,7 +325,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     name = typeof name === 'string' ? name.trim() : '';
     if (!name || name.length > 40) throw invalid('名稱需為 1～40 字');
     if (/[\s@]/.test(name)) throw invalid('名稱不可包含空白或 @');
-    if (name === '所有人') throw invalid('「所有人」是保留字');
+    if (name === '所有人' || name === SYSTEM_NAME) throw invalid(`「${name}」是保留字`);
     return name;
   }
   async function assertNameFree(name, exceptId = null) {
@@ -543,7 +544,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   route('GET', '/api/participants', async ({ ctx }) => {
     const people = await peopleMap(ctx);
     const now = Date.now();
-    const items = [...people.values()].filter(p => p.status === 'active')
+    const items = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system')
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(p => publicParticipant(p, people, now));
     return { items };
@@ -714,6 +715,114 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   route('GET', '/api/files/:id', ({ me, params }) => downloadFile(me, params.id));
   route('DELETE', '/api/files/:id', ({ me, params }) => deleteFile(me, params.id));
 
+  // ---------- 團隊狀態（平台改善：看得出每個人在做什麼、有沒有連上） ----------
+  const STALE_MS = (Number(config.staleMinutes) || 15) * 60_000;       // AI 超過這段時間沒出現 → 可能斷線
+  const UNANSWERED_MS = (Number(config.unansweredMinutes) || 15) * 60_000; // 指派超過這段時間沒讀取 → 尚未回應
+  const TOKEN_WARN_MS = 2 * 3600_000;                                   // Token 到期前 2 小時提醒
+
+  // 依訊息開頭的標籤推斷狀態，例如 [接單]、[UX 完成・請核准 commit]
+  function inferState(text) {
+    const tag = String(text).trimStart().match(/^\[([^\]\n]{1,40})\]/)?.[1];
+    if (!tag) return null;
+    if (tag.includes('受阻')) return 'blocked';
+    if (tag.includes('需確認')) return 'waiting';
+    if (/接單|進度|開始/.test(tag)) return 'working';
+    if (/完成|回覆|交接|簽到|已 ?push|已發布|已部署/.test(tag)) return 'idle';
+    return null;
+  }
+  const headline = text => String(text).trimStart().split('\n')[0].replace(/^\[[^\]]*\]\s*/, '').slice(0, 80);
+
+  async function teamStatus(ctx) {
+    const people = await peopleMap(ctx);
+    const now = Date.now();
+    const recent = await db.all('SELECT id, seq, author_id, text, reply_to, created_at FROM messages ORDER BY seq DESC LIMIT 500');
+
+    // 每位成員最新一則帶狀態標籤的訊息
+    const stateBy = new Map();
+    for (const m of recent) {
+      if (stateBy.has(m.author_id)) continue;
+      const st = inferState(m.text);
+      if (st) stateBy.set(m.author_id, { state: st, title: headline(m.text), messageId: m.id, at: m.created_at });
+    }
+
+    const pending = await db.all("SELECT * FROM notifications WHERE status = 'pending' ORDER BY created_at");
+    const pendBy = new Map();
+    for (const n of pending) {
+      const x = pendBy.get(n.recipient_id) || { count: 0, oldest: n.created_at };
+      x.count++;
+      pendBy.set(n.recipient_id, x);
+    }
+
+    const members = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system')
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map(p => ({
+        ...identity(p, people),
+        lastSeenAt: iso(p.last_seen_at),
+        isOnline: isOnline(p, now),
+        stale: p.kind === 'ai' && (!p.last_seen_at || now - p.last_seen_at > STALE_MS),
+        status: stateBy.get(p.id) || null,
+        tokenExpiresAt: iso(p.token_expires_at),
+        tokenExpired: p.kind === 'ai' && p.token_expires_at <= now,
+        tokenExpiringSoon: p.kind === 'ai' && p.token_expires_at > now && p.token_expires_at - now <= TOKEN_WARN_MS,
+        pendingCount: pendBy.get(p.id)?.count || 0,
+        oldestPendingAt: pendBy.get(p.id)?.oldest || null,
+      }));
+
+    // 指派（@ 指定）超過時限仍未讀取的對象
+    const cutoff = new Date(now - UNANSWERED_MS).toISOString();
+    const unanswered = pending
+      .filter(n => n.created_at <= cutoff && JSON.parse(n.reasons).includes('mention') && people.get(n.recipient_id)?.status === 'active')
+      .map(n => ({ messageId: n.message_id, participantId: n.recipient_id, name: people.get(n.recipient_id).name, since: n.created_at }));
+
+    // 等人決定：[需確認] 訊息，還沒有任何人類回覆
+    const asks = recent.filter(m => inferState(m.text) === 'waiting');
+    const replies = asks.length ? await db.all('SELECT reply_to, author_id FROM messages WHERE reply_to IN (SELECT value FROM json_each(?))',
+      JSON.stringify(asks.map(m => m.id))) : [];
+    const answered = new Set(replies.filter(r => people.get(r.author_id)?.kind === 'human').map(r => r.reply_to));
+    const decisions = asks.filter(m => !answered.has(m.id)).slice(0, 30).map(m => ({
+      messageId: m.id, sequence: m.seq, title: headline(m.text), createdAt: m.created_at,
+      author: identity(people.get(m.author_id), people),
+    }));
+
+    return { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
+  }
+
+  // 平台自己的發文身分（Token 到期提醒等），不會出現在成員名單
+  async function systemParticipant() {
+    let p = await db.get("SELECT * FROM participants WHERE kind = 'system' LIMIT 1");
+    if (p) return p;
+    const ts = nowIso();
+    await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`, randId('p'), 'system', SYSTEM_NAME, '系統', await newCode(), newToken(), 0, ts, ts);
+    return db.get("SELECT * FROM participants WHERE kind = 'system' LIMIT 1");
+  }
+
+  const taipeiTime = ms => new Date(ms).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  // AI 的 Token 2 小時內到期 → 在群組提醒所屬人類（同一個到期時間只提醒一次）
+  async function tokenReminders() {
+    const now = Date.now();
+    const ais = await db.all("SELECT * FROM participants WHERE kind = 'ai' AND status = 'active' AND token_expires_at > ? AND token_expires_at <= ?",
+      now, now + TOKEN_WARN_MS);
+    if (!ais.length) return 0;
+    const sys = await systemParticipant();
+    let sent = 0;
+    for (const ai of ais) {
+      const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
+      if (!owner || owner.status !== 'active') continue;
+      const mins = Math.max(1, Math.round((ai.token_expires_at - now) / 60_000));
+      const r = await createMessage({}, sys, {
+        text: `[提醒] ${ai.name} 的 Token 將於 ${taipeiTime(ai.token_expires_at)}（約 ${mins} 分鐘後）到期，到期後它會停止輪詢。\n請 ${owner.name} 到「我的 AI」按「重發 Token」，再按「複製到我的 AI」貼給它。`,
+        requestId: `req_tokenwarn_${ai.id}_${ai.token_expires_at}`,
+        recipientIds: [owner.id],
+      });
+      if (!r.duplicate) sent++;
+    }
+    return sent;
+  }
+
+  route('GET', '/api/team-status', ({ ctx }) => teamStatus(ctx));
+
   route('POST', '/api/leave', async ({ me }) => {
     requireHuman(me);
     await db.run("UPDATE participants SET status = 'disabled', updated_at = ? WHERE id = ? OR owner_id = ?", nowIso(), me.id, me.id);
@@ -722,6 +831,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   // 對外：處理 /api/*；base 為對外網址（例如 https://xxx.workers.dev）
   handle.cleanupExpired = cleanupExpired;
+  // 排程工作：清除過期文件、Token 到期提醒
+  handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), tokenReminders: await tokenReminders() });
   return handle;
 
   async function handle(req, base) {

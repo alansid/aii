@@ -232,6 +232,28 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .audit summary { cursor: pointer; color: var(--muted); }
 .audit-table { width: 100%; border-collapse: collapse; margin-top: 8px; display: block; overflow-x: auto; }
 .audit-table th, .audit-table td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; white-space: nowrap; }
+.team-bar { display: flex; gap: 6px; overflow-x: auto; padding: 6px 16px; background: var(--surface); border-bottom: 1px solid var(--border); scrollbar-width: thin; }
+.chip { flex: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: .85rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.chip.decide { background: var(--mine-bg); border-color: var(--mine-border); font-weight: 600; }
+.chip .dot, .dot.h-green, .dot.h-yellow, .dot.h-red, .dot.h-grey { display: inline-block; }
+.h-green .dot, .dot.h-green { background: var(--ok); }
+.h-yellow .dot, .dot.h-yellow { background: #f59e0b; }
+.h-red .dot, .dot.h-red { background: var(--danger); }
+.h-grey .dot, .dot.h-grey { background: #9ca3af; }
+.chip.h-red { border-color: var(--danger); }
+.chip.h-yellow { border-color: #f59e0b; }
+.st { font-size: .75rem; border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+.st-working { background: #fef3c7; color: #92400e; }
+.st-idle { background: var(--ok-bg); color: var(--ok-text); }
+.st-blocked { background: #fee2e2; color: #991b1b; }
+.st-waiting { background: #ffedd5; color: #9a3412; }
+.tag.unanswered { background: #fee2e2; color: #991b1b; }
+.tag.sys { background: var(--surface-2); color: var(--muted); border-color: var(--border); }
+.link { font: inherit; background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; text-align: left; }
+.decisions { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.team-table-wrap { overflow-x: auto; }
+.team-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.team-table th, .team-table td { border-bottom: 1px solid var(--border); padding: 6px; text-align: left; vertical-align: top; }
 .msg-side { display: flex; align-items: center; gap: 8px; flex: none; }
 .tag.my-ai { background: var(--ai-bg); color: var(--ai-text); border: 1px dashed var(--ai-text); }
 
