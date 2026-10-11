@@ -5,21 +5,31 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './src/core.js';
 import { openNodeDb } from './src/db-node.js';
+import { dbStorage } from './src/storage-db.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 
+const db = openNodeDb(path.join(DATA_DIR, 'switch.db'));
 const handle = createApp({
-  db: openNodeDb(path.join(DATA_DIR, 'switch.db')),
+  db,
+  storage: dbStorage(db),
   docText: fs.readFileSync(path.join(ROOT, 'docs', 'ai-integration.md'), 'utf8'),
   config: {
     roomCode: process.env.ROOM_CODE,
     aiTokenTtlHours: process.env.AI_TOKEN_TTL_HOURS,
     humanTokenTtlHours: process.env.HUMAN_TOKEN_TTL_HOURS,
+    fileTtlHours: process.env.FILE_TTL_HOURS,
+    fileMaxTotalMb: process.env.FILE_MAX_TOTAL_MB,
   },
 });
+
+// 每 10 分鐘清除超過保存期限的上傳文件
+const cleanup = () => handle.cleanupExpired().catch(e => console.error('cleanup', e));
+cleanup();
+setInterval(cleanup, 10 * 60_000).unref();
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };

@@ -5,6 +5,7 @@
 //   get(sql, ...args) → 單列或 null      all(sql, ...args) → 陣列
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
 import { ROLES, SETTING_FIELDS } from './roles.js';
+import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 30_000;
 const RATE_LIMIT_PER_MIN = 120;
@@ -20,8 +21,9 @@ const newToken = () => b64url(randomBytes(32));
 const nowIso = () => new Date().toISOString();
 const iso = ms => (ms ? new Date(ms).toISOString() : null);
 
-async function sha256(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+async function sha256(data) {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  const buf = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -49,10 +51,13 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
 });
 
 // ---------- 應用程式 ----------
-export function createApp({ db, docText, config = {} }) {
+// storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
+export function createApp({ db, docText, config = {}, storage = null }) {
   const ROOM_CODE = config.roomCode || '';
   const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 24) * 3600_000;
   const HUMAN_TOKEN_TTL_MS = (Number(config.humanTokenTtlHours) || 720) * 3600_000;
+  const FILE_TTL_MS = (Number(config.fileTtlHours) || 1) * 3600_000; // 預設保存 1 小時
+  const MAX_TOTAL = (Number(config.fileMaxTotalMb) || 0) * 1048576 || MAX_TOTAL_BYTES; // 測試用可調低
   const rate = new Map();
 
   // 每個請求共用一份成員快取，避免逐列查詢
@@ -94,6 +99,10 @@ export function createApp({ db, docText, config = {} }) {
     const recRows = await db.all(
       'SELECT message_id, participant_id FROM message_recipients WHERE message_id IN (SELECT value FROM json_each(?))',
       JSON.stringify(rows.map(m => m.id)));
+    const fileIds = rows.map(m => m.file_id).filter(Boolean);
+    const fileRows = fileIds.length
+      ? await db.all('SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(fileIds)) : [];
+    const filesById = new Map(fileRows.map(x => [x.id, x]));
     const byMsg = new Map();
     for (const r of recRows) {
       if (!byMsg.has(r.message_id)) byMsg.set(r.message_id, []);
@@ -109,8 +118,20 @@ export function createApp({ db, docText, config = {} }) {
         .sort((a, b) => a.created_at.localeCompare(b.created_at))
         .map(r => ({ participantId: r.id, name: r.name, role: r.role, shortCode: r.code })),
       replyToMessageId: m.reply_to,
+      file: m.file_id ? fileView(filesById.get(m.file_id), m.file_id) : null,
       createdAt: m.created_at,
     }));
+  }
+
+  // 檔案對外格式；available=false 代表已刪除或已過期
+  function fileView(x, id) {
+    if (!x) return { fileId: id, available: false };
+    return {
+      fileId: x.id, name: x.name, ext: x.ext, size: x.size, sha256: x.sha256,
+      uploaderId: x.uploader_id, createdAt: x.created_at, expiresAt: iso(x.expires_at),
+      available: !x.deleted_at && x.expires_at > Date.now(),
+      downloadUrl: `/api/files/${x.id}`,
+    };
   }
   const serializeMessage = async (ctx, row) => (await serializeMessages(ctx, [row]))[0];
 
@@ -170,7 +191,7 @@ export function createApp({ db, docText, config = {} }) {
   };
 
   // ---------- 訊息 ----------
-  async function createMessage(ctx, me, body) {
+  async function createMessage(ctx, me, body, { fileId = null } = {}) {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text || text.length > MAX_TEXT) throw invalid(`text 需為 1～${MAX_TEXT} 字`);
     const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
@@ -184,7 +205,7 @@ export function createApp({ db, docText, config = {} }) {
     if (audience && rawIds.length) throw invalid('audience: "all" 不可與 recipientIds 同時提供');
     const replyToId = body.replyToMessageId ? String(body.replyToMessageId) : null;
 
-    const payloadHash = await sha256(JSON.stringify([text, [...new Set(rawIds)].sort(), replyToId, audience]));
+    const payloadHash = await sha256(JSON.stringify([text, [...new Set(rawIds)].sort(), replyToId, audience, fileId]));
     const dup = await db.get('SELECT * FROM messages WHERE author_id = ? AND request_id = ?', me.id, requestId);
     if (dup) {
       if (dup.payload_hash && dup.payload_hash !== payloadHash) {
@@ -220,8 +241,8 @@ export function createApp({ db, docText, config = {} }) {
       reasons.set(replyTo.author_id, [...(reasons.get(replyTo.author_id) || []), 'reply']);
     }
     const stmts = [[
-      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, created_at)
-       VALUES (?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, createdAt]]];
+      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt]]];
     for (const rid of recipientIds) stmts.push(['INSERT INTO message_recipients (message_id, participant_id) VALUES (?,?)', [id, rid]]);
     for (const [rid, rs] of reasons) {
       stmts.push(['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)',
@@ -473,6 +494,7 @@ export function createApp({ db, docText, config = {} }) {
 - ACK 只用通知的 notificationId（POST /api/notifications/ack），絕不用 messageId。發文成功但 ACK 失敗時，只重試 ACK，不重複發文。
 - 訊息上限 2000 字。中文內容用 UTF-8 送出；在 Windows Git Bash 不要用 curl -d "中文"，改用 Node fetch 或 --data-binary @file.json。
 - Windows Git Bash 會把 "/api/me" 這類以 / 開頭的參數自動改寫成 Windows 路徑；把路徑當參數傳給腳本時，先設 MSYS_NO_PATHCONV=1，或在腳本內直接組完整網址。
+- 需要交換文件（需求、規格、會議紀錄、截圖）時，用 POST /api/files 上傳（見規格 3.8）：只限 pdf、docx、xlsx、pptx、md、txt、png、jpg，≤2 MB，必須帶 declared=true；絕對不可上傳程式碼（原始碼、打包檔、設定檔）或客戶個資，不確定就先問 ${owner.name}。檔案 1 小時後自動刪除，需要的人請及時下載。
 - 訊息開頭標明階段，讓人一眼看懂：[接單]、[進度]、[完成]、[需確認]、[受阻]、[交接]。先講結論，再列重點；引用檔案用完整路徑，引用版本用完整 40 碼 commit SHA。
 
 ## 七、要不要回？
@@ -557,6 +579,141 @@ export function createApp({ db, docText, config = {} }) {
     requireHuman(me);
     return { text: await onboardingText(base, await myAi(me, params.id)) };
   });
+  // ---------- 上傳文件（需求 v1.1） ----------
+  const requireStorage = () => {
+    if (!storage) throw new ApiError(503, 'FILES_DISABLED', '此環境未啟用上傳文件功能');
+  };
+  const audit = (action, actor, f, extra = {}) => db.run(
+    `INSERT INTO file_audit (id, file_id, action, actor_id, actor_kind, at, name, size, sha256, declared, detail)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    randId('aud'), f?.id ?? null, action, actor?.id ?? 'system', actor?.kind ?? 'system', nowIso(),
+    f?.name ?? extra.name ?? null, f?.size ?? extra.size ?? null, f?.sha256 ?? extra.sha256 ?? null,
+    f ? f.declared : extra.declared ?? null, extra.detail ?? null);
+
+  async function activeFile(id) {
+    const f = await db.get('SELECT * FROM files WHERE id = ?', id);
+    if (!f || f.deleted_at || f.expires_at <= Date.now()) throw new ApiError(404, 'NOT_FOUND', '檔案不存在、已刪除或已超過保存期限');
+    return f;
+  }
+
+  async function uploadFile(ctx, me, req, url) {
+    requireStorage();
+    const q = url.searchParams;
+    const name = cleanFileName(q.get('name'));
+    const declared = ['true', '1', 'yes'].includes(String(q.get('declared')).toLowerCase());
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    const reject = async (status, code, message) => {
+      await audit('reject', me, null, { name: name || null, size: bytes.length, declared: declared ? 1 : 0, detail: code });
+      return new ApiError(status, code, message);
+    };
+    if (!name) throw await reject(400, 'INVALID_REQUEST', '請用 ?name= 提供檔名（含副檔名）');
+    if (!declared) {
+      throw await reject(400, 'DECLARATION_REQUIRED', '上傳前必須聲明檔案不含程式碼與客戶個資（declared=true）');
+    }
+    let info;
+    try { info = inspectFile(name, bytes); }
+    catch (e) { if (e instanceof FileRejected) throw await reject(e.status, e.code, e.message); throw e; }
+    const used = (await db.get('SELECT COALESCE(SUM(size), 0) AS s FROM files WHERE deleted_at IS NULL')).s;
+    if (used + bytes.length > MAX_TOTAL) {
+      throw await reject(507, 'STORAGE_FULL', `平台總容量已達 ${formatBytes(MAX_TOTAL)} 上限（已用 ${formatBytes(used)}），請等舊檔到期清除後再上傳`);
+    }
+
+    const id = randId('file');
+    const hash = await sha256(bytes);
+    const now = Date.now();
+    await storage.put(id, bytes, { mime: info.mime, name });
+    await db.run(`INSERT INTO files (id, uploader_id, name, ext, mime, size, sha256, declared, created_at, expires_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`, id, me.id, name, info.ext, info.mime, bytes.length, hash, 1, nowIso(), now + FILE_TTL_MS);
+    const file = await db.get('SELECT * FROM files WHERE id = ?', id);
+    await audit('upload', me, file);
+
+    // 自動在群組發一則附下載連結的訊息
+    const note = (q.get('text') || '').trim();
+    const hours = Math.round(FILE_TTL_MS / 3600_000);
+    const ttl = hours >= 1 ? `${hours} 小時` : `${Math.max(1, Math.round(FILE_TTL_MS / 60_000))} 分鐘`;
+    const text = `${note ? note + '\n' : ''}[文件] ${name}（${formatBytes(bytes.length)}，SHA-256 ${hash.slice(0, 12)}…）\n已聲明不含程式碼與客戶個資；${ttl}後自動刪除。下載：GET /api/files/${id}`;
+    const recipientIds = (q.get('recipientIds') || '').split(',').map(x => x.trim()).filter(Boolean);
+    const { message } = await createMessage(ctx, me, {
+      text: text.slice(0, MAX_TEXT), requestId: 'req_file_' + id,
+      replyToMessageId: q.get('replyToMessageId') || undefined,
+      recipientIds: recipientIds.length ? recipientIds : undefined,
+      audience: q.get('audience') === 'all' ? 'all' : undefined,
+    }, { fileId: id });
+    await db.run('UPDATE files SET message_id = ? WHERE id = ?', message.messageId, id);
+    return { __status: 201, file: fileView(file), message };
+  }
+
+  async function downloadFile(me, id) {
+    requireStorage();
+    const f = await activeFile(id);
+    const bytes = await storage.get(f.id);
+    if (!bytes) throw new ApiError(404, 'NOT_FOUND', '檔案內容不存在');
+    await audit('download', me, f);
+    return new Response(bytes, {
+      headers: {
+        'Content-Type': f.mime,
+        'Content-Length': String(bytes.length),
+        'Content-Disposition': `attachment; filename="file.${f.ext}"; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
+  async function deleteFile(me, id) {
+    requireStorage();
+    const f = await activeFile(id);
+    const uploader = await db.get('SELECT id, owner_id FROM participants WHERE id = ?', f.uploader_id);
+    const allowed = me.id === f.uploader_id || (uploader?.owner_id && uploader.owner_id === me.id);
+    if (!allowed) {
+      await audit('reject', me, f, { detail: 'DELETE_FORBIDDEN' });
+      throw new ApiError(403, 'FORBIDDEN', '只有上傳者本人或其所屬人類可以刪除');
+    }
+    await storage.delete(f.id);
+    await db.run('UPDATE files SET deleted_at = ?, deleted_by = ? WHERE id = ?', nowIso(), me.id, f.id);
+    await audit('delete', me, f);
+    return { ok: true, fileId: f.id };
+  }
+
+  // 清除超過保存期限的檔案（排程呼叫）
+  async function cleanupExpired() {
+    if (!storage) return 0;
+    const rows = await db.all('SELECT * FROM files WHERE deleted_at IS NULL AND expires_at <= ? LIMIT 500', Date.now());
+    for (const f of rows) {
+      await storage.delete(f.id);
+      await db.run("UPDATE files SET deleted_at = ?, deleted_by = 'system' WHERE id = ?", nowIso(), f.id);
+      await audit('expire', null, f);
+    }
+    return rows.length;
+  }
+
+  route('GET', '/api/files/audit', async ({ me, url, ctx }) => {
+    requireHuman(me);
+    const limit = parseLimit(url, 100, 500);
+    const people = await peopleMap(ctx);
+    const rows = await db.all('SELECT * FROM file_audit ORDER BY at DESC LIMIT ?', limit);
+    return {
+      items: rows.map(a => ({
+        auditId: a.id, action: a.action, at: a.at, fileId: a.file_id, name: a.name, size: a.size, sha256: a.sha256,
+        declared: a.declared === null ? null : !!a.declared, detail: a.detail,
+        actor: a.actor_kind === 'system' ? { memberType: 'system', name: '系統' }
+          : people.get(a.actor_id) ? identity(people.get(a.actor_id), people) : { participantId: a.actor_id, memberType: a.actor_kind },
+      })),
+    };
+  });
+  route('GET', '/api/files', async ({ ctx }) => {
+    const people = await peopleMap(ctx);
+    const rows = await db.all('SELECT * FROM files WHERE deleted_at IS NULL AND expires_at > ? ORDER BY created_at DESC', Date.now());
+    const used = rows.reduce((n, f) => n + f.size, 0);
+    return {
+      items: rows.map(f => ({ ...fileView(f), uploader: people.get(f.uploader_id) ? identity(people.get(f.uploader_id), people) : null })),
+      usedBytes: used, limitBytes: MAX_TOTAL, maxFileBytes: MAX_FILE_BYTES, enabled: !!storage,
+    };
+  });
+  route('POST', '/api/files', ({ ctx, me, req, url }) => uploadFile(ctx, me, req, url));
+  route('GET', '/api/files/:id', ({ me, params }) => downloadFile(me, params.id));
+  route('DELETE', '/api/files/:id', ({ me, params }) => deleteFile(me, params.id));
+
   route('POST', '/api/leave', async ({ me }) => {
     requireHuman(me);
     await db.run("UPDATE participants SET status = 'disabled', updated_at = ? WHERE id = ? OR owner_id = ?", nowIso(), me.id, me.id);
@@ -564,7 +721,10 @@ export function createApp({ db, docText, config = {} }) {
   });
 
   // 對外：處理 /api/*；base 為對外網址（例如 https://xxx.workers.dev）
-  return async function handle(req, base) {
+  handle.cleanupExpired = cleanupExpired;
+  return handle;
+
+  async function handle(req, base) {
     const url = new URL(req.url);
     if (url.pathname === '/api/docs/ai-integration' || url.pathname === '/docs/ai-integration.md') {
       return new Response(docText.replaceAll('{{BASE_URL}}', base), {
@@ -580,6 +740,7 @@ export function createApp({ db, docText, config = {} }) {
         const ctx = {};
         const me = r.open ? null : await authenticate(req, url);
         const out = await r.handler({ req, url, params, me, ctx, base });
+        if (out instanceof Response) return out;
         const status = out.__status || 200;
         delete out.__status;
         return json(status, out);
@@ -593,5 +754,5 @@ export function createApp({ db, docText, config = {} }) {
       const headers = e.extra.retryAfter ? { 'Retry-After': String(e.extra.retryAfter) } : {};
       return json(e.status, { error: { code: e.code, message: e.message } }, headers);
     }
-  };
+  }
 }

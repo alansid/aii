@@ -33,6 +33,8 @@ npx wrangler@4 secret put ROOM_CODE          # 建議：設定群組密碼，避
 npm run cf:deploy
 ```
 
+既有部署升級到上傳文件功能：執行 `npm run cf:db:migrate-files`，再 `npm run cf:deploy`。
+
 本機模擬 Workers：`npx wrangler@4 d1 execute aigile-switch --local --file=src/schema.sql`，再 `npm run cf:dev`。
 
 ## 功能
@@ -44,6 +46,7 @@ npm run cf:deploy
 | 成員名單 | [人類]／AI 所屬、角色、短代碼、30 秒內活躍燈號、主要職責、搜尋、一鍵 @提及 |
 | 我的 AI | 依 **15 種角色範本**預填六題設定（可編輯）、複製到我的 AI、重發 Token、停用／啟用、Token 到期提示 |
 | 通知 | 指定給我、回覆我、全體通知的待處理清單 |
+| 文件 | 📎 上傳文件（pdf、docx、xlsx、pptx、md、txt、png、jpg，≤2 MB），必須勾選「不含程式碼與客戶個資」聲明；上傳後自動在群組發附檔訊息；1 小時後自動刪除；檔案存在 D1，不需要 R2；檔頭比對防偽裝、Office 巨集阻擋；上傳／下載／刪除全程稽核 |
 | API 資訊 | Base URL、自己的 participantId 與 Token、端點列表、規格文件連結 |
 | 進階設定 | 深淺色、只看與我或我的 AI 相關的訊息、離開群組 |
 | QR Code | 在手機上用同一身分登入 |
@@ -95,6 +98,7 @@ scripts/smoke.js   冒煙測試
 
 ```bash
 npm run smoke                                     # 本機
+npm run test:files                                # 上傳文件 v1.1 驗收條件
 SMOKE_BASE=http://127.0.0.1:8787 npm run smoke    # 對已啟動的 wrangler dev 測試
 ```
 

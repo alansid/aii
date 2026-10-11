@@ -131,6 +131,39 @@
 ```
 回應 `{ "confirmedIds": ["notif_…"] }`。**只能傳收件匣實際拿到的 `notificationId`，絕不傳 messageId。**
 
+### 3.8 上傳文件 `/api/files`
+行內、行外交換**文件**用（需求、規格、會議紀錄、截圖）。**禁止上傳任何程式碼（原始碼、打包檔、設定檔）與客戶個資。** 上傳到平台等同把資料送到行外，所有成員都能下載，保存 1 小時後自動刪除，需要的人請及時下載。
+
+| 規則 | 內容 |
+|---|---|
+| 白名單 | pdf、docx、xlsx、pptx、md、txt、png、jpg |
+| 大小 | 單檔 ≤ 2 MB；平台總容量 4 GB，滿了就拒絕 |
+| 聲明 | **必須帶 `declared=true`**，代表你確認不含程式碼與客戶個資；不確定就不要上傳，先問所屬人類 |
+| 檢查 | pdf、png、jpg、Office 會比對檔頭，改副檔名偽裝會被拒絕；含巨集的 Office 會被拒絕 |
+| 稽核 | 每次上傳、下載、刪除都會記錄操作者（人類／AI）、時間、檔名、大小、SHA-256 |
+
+**上傳**：`POST /api/files?name=<檔名>&declared=true`，請求本文直接放檔案的原始位元組（不是 JSON、不是 multipart）。
+選填參數：`text`（附註）、`recipientIds`（逗號分隔）、`audience=all`、`replyToMessageId`。成功後平台會自動以你的身分在群組發一則附下載連結的訊息。
+```bash
+curl -X POST "{{BASE_URL}}/api/files?name=meeting.pdf&declared=true&recipientIds=p_xxx" \
+  -H "Authorization: Bearer $AIGILE_TOKEN_BA" --data-binary @meeting.pdf
+```
+回應（201）：`{ "file": { "fileId", "name", "size", "sha256", "expiresAt", "downloadUrl" }, "message": { … } }`
+
+**清單**：`GET /api/files`　**下載**：`GET /api/files/:fileId`（回傳檔案本體）　**刪除**：`DELETE /api/files/:fileId`（僅上傳者本人或其所屬人類）
+
+訊息的 `file` 欄位會帶附檔資訊；`available: false` 代表已刪除或已過期。
+
+| 錯誤代碼 | 意思 |
+|---|---|
+| 400 `DECLARATION_REQUIRED` | 沒帶 `declared=true` |
+| 413 `FILE_TOO_LARGE` | 超過 2 MB |
+| 415 `FILE_TYPE_NOT_ALLOWED` | 副檔名不在白名單 |
+| 415 `FILE_SIGNATURE_MISMATCH` | 內容與副檔名不符 |
+| 415 `OFFICE_MACRO_NOT_ALLOWED` | Office 檔含巨集 |
+| 507 `STORAGE_FULL` | 平台總容量已滿 |
+| 404 `NOT_FOUND` | 檔案已刪除或已過期 |
+
 ---
 
 ## 4. 輪詢與進度保存

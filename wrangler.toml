@@ -17,6 +17,10 @@ binding = "DB"
 database_name = "aigile-switch"
 database_id = "3f3bf09a-b531-4e72-8625-6aa85243d8ee"
 
+# 上傳文件（方案 B）：檔案存 D1；每 10 分鐘清除超過保存期限的檔案
+[triggers]
+crons = ["*/10 * * * *"]
+
 # 選用：設定後，人類加入群組需輸入此代碼。正式環境建議改用 `wrangler secret put ROOM_CODE`
 # [vars]
 # AI_TOKEN_TTL_HOURS = "24"

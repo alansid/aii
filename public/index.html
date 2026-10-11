@@ -56,6 +56,7 @@
         <button type="button" data-open="members">成員名單</button>
         <button type="button" data-open="my-ai">我的 AI</button>
         <button type="button" data-open="inbox">通知 <span id="inbox-badge" class="badge" hidden></span></button>
+        <button type="button" data-open="files">文件</button>
         <button type="button" data-open="api">API 資訊</button>
         <button type="button" data-open="settings">進階設定</button>
         <button type="button" data-open="qr">QR Code</button>
@@ -75,6 +76,8 @@
           <textarea id="input" rows="2" placeholder="輸入訊息（支援 @提及成員；桌面 Enter 送出，Shift+Enter 換行；支援中文組字防誤送）"></textarea>
           <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>
         </div>
+        <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
+        <input id="file-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
         <button id="send" class="btn primary send" type="button" disabled>送出</button>
       </div>
     </footer>

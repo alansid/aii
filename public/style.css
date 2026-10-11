@@ -217,6 +217,21 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
   .topbar .tabs { grid-column: 2; grid-row: 1 / span 2; padding-top: 0; }
 }
 
+.attach { font-size: 1.15rem; padding: 6px 12px; }
+.file-card { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.file-card.gone { color: var(--muted); font-size: .9rem; }
+.file-icon { font-size: 1.5rem; flex: none; }
+.file-info { flex: 1; min-width: 0; display: grid; }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-by { margin: -8px 0 0 4px; }
+.declare { align-items: flex-start; font-weight: 600; }
+.declare input { margin-top: 4px; }
+.usage { display: grid; gap: 4px; }
+.usage-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.usage-bar span { display: block; height: 100%; background: var(--primary); }
+.audit summary { cursor: pointer; color: var(--muted); }
+.audit-table { width: 100%; border-collapse: collapse; margin-top: 8px; display: block; overflow-x: auto; }
+.audit-table th, .audit-table td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; white-space: nowrap; }
 .msg-side { display: flex; align-items: center; gap: 8px; flex: none; }
 .tag.my-ai { background: var(--ai-bg); color: var(--ai-text); border: 1px dashed var(--ai-text); }
 

@@ -285,7 +285,7 @@
         </div>
         ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">引用訊息 (${esc(shortId(m.replyToMessageId))})${parent ? `　${esc(parent.author.name)}：${esc(parent.text.slice(0, 80))}` : ''}</button>` : ''}
         ${recipients ? `<div class="recipients">指定對象: ${recipients}</div>` : ''}
-        <div class="msg-text">${renderText(m.text)}</div>
+        ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : `<div class="msg-text">${renderText(m.text)}</div>`}
       </article>`;
   }
 
@@ -509,7 +509,7 @@
   function closeModal() { $('#modal-root').innerHTML = ''; }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#modal-root').firstElementChild) closeModal(); });
 
-  const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, api: openApi, settings: openSettings, qr: openQr };
+  const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openers[b.dataset.open]()));
   $('#presence-pill').addEventListener('click', openMembers);
 
@@ -748,6 +748,150 @@
     await draw();
   }
 
+  // ---------- 上傳文件 ----------
+  const FILE_EXTS = ['pdf', 'docx', 'xlsx', 'pptx', 'md', 'txt', 'png', 'jpg', 'jpeg'];
+  const MAX_FILE = 2 * 1024 * 1024;
+  const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(1)} GB`;
+  const fileIcon = ext => ({ pdf: '📕', docx: '📘', xlsx: '📗', pptx: '📙', png: '🖼️', jpg: '🖼️', jpeg: '🖼️' }[ext] || '📄');
+  // 上傳者本人，或上傳者是我名下的 AI → 可刪除
+  const canDeleteFile = f => f.uploaderId === meId() || myAiIds().has(f.uploaderId);
+
+  // 附檔訊息：只顯示上傳者的附註，自動產生的「[文件] …」由卡片呈現
+  function fileNoteHtml(text) {
+    const i = text.indexOf('[文件] ');
+    const note = i > 0 ? text.slice(0, i).trim() : '';
+    return note ? `<div class="msg-text">${renderText(note)}</div>` : '';
+  }
+
+  function fileCardHtml(f) {
+    if (!f.available) return '<div class="file-card gone">📄 文件已過期或已刪除</div>';
+    return `
+      <div class="file-card" data-file="${esc(f.fileId)}">
+        <span class="file-icon" aria-hidden="true">${fileIcon(f.ext)}</span>
+        <div class="file-info">
+          <b class="file-name">${esc(f.name)}</b>
+          <span class="muted small">${fmtBytes(f.size)} · 到期 ${fmtTime(f.expiresAt)} · SHA-256 ${esc(f.sha256.slice(0, 12))}…</span>
+        </div>
+        <button class="btn" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
+        ${canDeleteFile(f) ? `<button class="btn" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
+      </div>`;
+  }
+
+  async function downloadFile(id, name) {
+    try {
+      const r = await fetch(`/api/files/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e?.error?.message || `HTTP ${r.status}`);
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) { toast('下載失敗：' + err.message); }
+  }
+
+  async function deleteFileById(id) {
+    if (!confirm('確定刪除這個文件？刪除後所有人都無法再下載。')) return false;
+    try {
+      await api(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      toast('已刪除');
+      // 讓訊息中的卡片同步顯示為已刪除
+      for (const m of state.messages) if (m.file?.fileId === id) m.file = { fileId: id, available: false };
+      renderMessages(false);
+      return true;
+    } catch (err) { toast(err.message); return false; }
+  }
+
+  document.addEventListener('click', e => {
+    const d = e.target.closest('[data-download]');
+    if (d) return downloadFile(d.dataset.download, d.dataset.name);
+    const x = e.target.closest('[data-delete-file]');
+    if (x) deleteFileById(x.dataset.deleteFile).then(ok => { if (ok && x.closest('.modal')) openFiles(); });
+  });
+
+  // 選檔 → 聲明 → 上傳
+  $('#attach').addEventListener('click', () => $('#file-input').click());
+  $('#file-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (file) openUpload(file);
+  });
+
+  function openUpload(file) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    let problem = '';
+    if (!FILE_EXTS.includes(ext)) problem = `不允許的檔案類型「.${ext}」，只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg。`;
+    else if (file.size > MAX_FILE) problem = `檔案 ${fmtBytes(file.size)} 超過 2 MB 上限。`;
+    const body = openModal('上傳文件', `
+      <div class="file-card"><span class="file-icon">${fileIcon(ext)}</span>
+        <div class="file-info"><b class="file-name">${esc(file.name)}</b><span class="muted small">${fmtBytes(file.size)}</span></div></div>
+      ${problem ? `<p class="error">${esc(problem)}</p>` : `
+      <p class="notice warn">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。</p>
+      <label>附註（選填，可用 @ 指定對象）<textarea id="up-note" rows="2" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></label>
+      <label class="check declare"><input type="checkbox" id="up-declare">我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</label>
+      <p class="error" id="up-error" role="alert"></p>
+      <div class="row end"><button class="btn" type="button" data-close>取消</button>
+        <button class="btn primary" type="button" id="up-go" disabled>上傳</button></div>`}`, { foot: !!problem });
+    if (problem) return;
+    const go = body.querySelector('#up-go');
+    body.querySelector('#up-declare').addEventListener('change', e => { go.disabled = !e.target.checked; });
+    go.addEventListener('click', async () => {
+      go.disabled = true; go.textContent = '上傳中…';
+      const note = body.querySelector('#up-note').value.trim();
+      const q = new URLSearchParams({ name: file.name, declared: 'true' });
+      if (note) q.set('text', note);
+      const rec = note ? resolveRecipients(note) : {};
+      if (rec.audience) q.set('audience', 'all');
+      if (rec.recipientIds) q.set('recipientIds', rec.recipientIds.join(','));
+      if (state.replyTo) q.set('replyToMessageId', state.replyTo.messageId);
+      try {
+        const r = await fetch(`/api/files?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: file });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+        closeModal();
+        setReply(null);
+        onNewMessage(data.message);
+        toast('已上傳，群組已發出附檔訊息');
+      } catch (err) {
+        body.querySelector('#up-error').textContent = '上傳失敗：' + err.message;
+        go.disabled = false; go.textContent = '上傳';
+      }
+    });
+  }
+
+  // 文件分頁：目前檔案、容量、稽核
+  async function openFiles() {
+    const body = openModal('文件', '<div id="files-list" class="stack"></div>');
+    try {
+      const d = await api('/api/files');
+      const pct = Math.min(100, d.usedBytes / d.limitBytes * 100);
+      body.querySelector('#files-list').innerHTML = `
+        <p class="notice">只能上傳文件類（pdf、docx、xlsx、pptx、md、txt、png、jpg，單檔 ≤ 2 MB），禁止程式碼與客戶個資；上傳 1 小時後自動刪除。</p>
+        <div class="usage"><div class="usage-bar"><span style="width:${pct.toFixed(1)}%"></span></div>
+          <span class="muted small">已用 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}</span></div>
+        ${d.items.length ? d.items.map(f => `${fileCardHtml(f)}<div class="muted small file-by">上傳者：${esc(f.uploader?.name || '?')}${f.uploader?.memberType === 'ai' ? '（AI）' : ''} · ${fmtTime(f.createdAt)}</div>`).join('')
+          : '<p class="muted">目前沒有文件。用輸入框旁的 📎 上傳。</p>'}
+        <details class="audit"><summary>稽核紀錄</summary><div id="audit-list" class="muted small">載入中…</div></details>`;
+      body.querySelector('details.audit').addEventListener('toggle', async e => {
+        if (!e.target.open) return;
+        const box = body.querySelector('#audit-list');
+        try {
+          const a = await api('/api/files/audit?limit=200');
+          const label = { upload: '上傳', download: '下載', delete: '刪除', reject: '拒絕', expire: '到期清除' };
+          box.innerHTML = a.items.length ? `<table class="audit-table"><thead><tr><th>時間</th><th>動作</th><th>操作者</th><th>檔名</th><th>大小</th><th>SHA-256</th><th>聲明</th><th>備註</th></tr></thead><tbody>${
+            a.items.map(x => `<tr><td>${fmtTime(x.at)}</td><td>${label[x.action] || x.action}</td>
+              <td>${esc(x.actor.name || x.actor.participantId || '')}${x.actor.memberType === 'ai' ? '（AI）' : x.actor.memberType === 'human' ? '（人類）' : ''}</td>
+              <td>${esc(x.name || '')}</td><td>${x.size == null ? '' : fmtBytes(x.size)}</td>
+              <td>${x.sha256 ? esc(x.sha256.slice(0, 12)) + '…' : ''}</td><td>${x.declared == null ? '' : x.declared ? '✓' : '✗'}</td>
+              <td>${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table>` : '沒有紀錄。';
+        } catch (err) { box.textContent = err.message; }
+      });
+    } catch (err) {
+      body.querySelector('#files-list').innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    }
+  }
+
   // API 資訊
   function openApi() {
     const base = location.origin;
@@ -767,6 +911,7 @@
         <li><code>POST /api/messages</code> 發文（text、requestId、recipientIds、replyToMessageId、audience）</li>
         <li><code>GET /api/notifications?status=pending&amp;limit=50</code> 待處理通知</li>
         <li><code>POST /api/notifications/ack</code> 確認通知（notificationIds）</li>
+        <li><code>POST /api/files?name=&amp;declared=true</code> 上傳文件（原始位元組）；<code>GET /api/files</code>、<code>GET /api/files/:id</code> 清單與下載</li>
       </ul>
       <p>完整規格：<a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 代理人接入通訊協定指南 (Markdown)</a></p>
       <div class="section-title">快速測試</div>

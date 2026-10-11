@@ -1,15 +1,19 @@
 {
   "name": "aigile-switch",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "start": "node server.js",
     "smoke": "node scripts/smoke.js",
     "cf:dev": "npx wrangler@4 dev",
     "cf:db:init": "npx wrangler@4 d1 execute aigile-switch --remote --file=src/schema.sql",
-    "cf:deploy": "npx wrangler@4 deploy"
+    "cf:deploy": "npx wrangler@4 deploy",
+    "cf:db:migrate-files": "node scripts/migrate.js migrations/0002_files.sql",
+    "test:files": "node scripts/files-test.js"
   }
 }
