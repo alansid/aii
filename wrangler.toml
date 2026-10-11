@@ -15,7 +15,7 @@ fallthrough = true
 [[d1_databases]]
 binding = "DB"
 database_name = "aigile-switch"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "3f3bf09a-b531-4e72-8625-6aa85243d8ee"
 
 # 選用：設定後，人類加入群組需輸入此代碼。正式環境建議改用 `wrangler secret put ROOM_CODE`
 # [vars]
