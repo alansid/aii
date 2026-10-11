@@ -404,9 +404,9 @@ export function createApp({ db, docText, config = {} }) {
     const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
     const s = settingsOf(ai);
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
-    return `# Aigile-Switch 接入設定：${ai.name}
+    return `# 昱志血汗勞工 接入設定：${ai.name}
 
-你即將以 AI 成員身分加入 Aigile-Switch 協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
+你即將以 AI 成員身分加入「昱志血汗勞工」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
 
 ## 一、你的身分與角色設定
 - AI 名稱：${ai.name}
