@@ -81,6 +81,7 @@
   }
   applyTheme(store.get(THEME_KEY));
 
+  const envTag = p => p?.environment ? `<span class="tag env" title="所在環境">📍${esc(p.environment)}</span>` : '';
   const memberTag = p => p.memberType === 'ai'
     ? `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`
     : p.memberType === 'system' ? '<span class="tag sys">[系統]</span>'
@@ -275,7 +276,7 @@
         <div class="msg-head">
           <div class="msg-meta">
             <span class="msg-author">${esc(a.name)}</span>
-            <span class="muted small">${esc(a.role || '')} #${esc(a.shortCode)}</span>
+            <span class="muted small">${esc(a.role || '')} #${esc(a.shortCode)}</span>${envTag(a)}
             <span class="muted small seq">(seq: ${m.sequence})</span>
             ${memberTag(a)}
             ${m.audience === 'all' ? '<span class="tag all">全體通知</span>' : ''}
@@ -571,7 +572,7 @@
       const st = mb.status ? STATE_LABEL[mb.status.state] : '';
       const tip = [mb.name, h.text, `最後上線 ${agoText(mb.lastSeenAt)}`, mb.status ? `${st}：${mb.status.title}` : '', mb.pendingCount ? `待處理通知 ${mb.pendingCount}` : ''].filter(Boolean).join('\n');
       return `<button type="button" class="chip h-${h.cls}" data-team title="${esc(tip)}">
-        <span class="dot"></span><b>${esc(mb.name)}</b>
+        <span class="dot"></span><b>${esc(mb.name)}</b>${mb.environment ? `<span class="env-mini">${esc(mb.environment)}</span>` : ''}
         ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
         <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
       </button>`;
@@ -628,7 +629,7 @@
         <div class="card member">
           <span class="dot ${p.isOnline ? 'on' : ''}"></span>
           <div class="member-info">
-            <div class="member-name"><b>${esc(p.name)}</b><span class="muted">(${esc(p.role || '—')})</span>${memberTag(p)}${self ? '<span class="self">本人</span>' : ''}</div>
+            <div class="member-name"><b>${esc(p.name)}</b><span class="muted">(${esc(p.role || '—')})</span>${memberTag(p)}${envTag(p)}${self ? '<span class="self">本人</span>' : ''}</div>
             <div class="member-sub">#${esc(p.shortCode)} · 狀態：${p.isOnline ? '近期活躍 (30s內)' : '離線/閒置'}</div>
             ${p.duties ? `<div class="member-sub">主要職責：${esc(p.duties)}</div>` : ''}
           </div>
@@ -706,7 +707,7 @@
     return `
       <div class="card">
         <div class="row spread">
-          <div class="member-name"><b>${esc(ai.name)}</b><span class="muted">(${esc(ai.role)})</span>
+          <div class="member-name"><b>${esc(ai.name)}</b><span class="muted">(${esc(ai.role)})</span>${envTag(ai)}
             <span class="tag ai">AI | 所屬: ${esc(state.me.name)}</span>${statusTag}</div>
           <span class="muted small">版本 v${ai.version} · 更新時間：${fmtTime(ai.updatedAt)}</span>
         </div>
@@ -736,7 +737,7 @@
   }
 
   async function openAiForm(ai) {
-    const { items: roles, fields } = await loadRoles();
+    const { items: roles, fields, environments = [] } = await loadRoles();
     const editing = !!ai;
     const body = openModal(editing ? '編輯 AI 助手' : '新增 AI 助手', `
       <form id="ai-form" class="stack">
@@ -745,6 +746,10 @@
         </label>
         <p class="notice" id="role-hint"></p>
         <label>角色顯示名稱 (1-30 字)<input name="role" required maxlength="30"></label>
+        <label>所在環境（選取後會在「必須確認的事項」帶入該環境的限制，可再修改）
+          <input name="environment" maxlength="20" list="env-list" placeholder="行內／行外／投信，或自行輸入">
+          <datalist id="env-list">${environments.map(e => `<option value="${esc(e.key)}">`).join('')}</datalist>
+        </label>
         <div class="section-title">AI 設定六題（皆為必填，不可純空白，每題上限 1000 字）</div>
         <label>1. AI 名稱（人類名下此 AI 的識別名稱）<input name="name" required maxlength="40"></label>
         ${fields.map(f => `<label>${esc(f.label)}<textarea name="${f.key}" rows="3" required maxlength="1000"></textarea></label>`).join('')}
@@ -757,6 +762,7 @@
     const form = body.querySelector('#ai-form');
     const fill = (src, includeName) => {
       form.role.value = src.role;
+      if (src.environment !== undefined) form.environment.value = src.environment;
       if (includeName) form.name.value = src.name;
       for (const f of fields) form[f.key].value = src[f.key];
     };
@@ -783,6 +789,15 @@
       fill({ ...r, name: autoName }, !keepName);
       if (!keepName) lastAutoName = autoName;
     });
+    const applyEnvNote = () => {
+      let text = form.mustConfirm.value;
+      for (const e of environments) text = text.split(e.note).join('');
+      text = text.trim();
+      const note = environments.find(e => e.key === form.environment.value.trim())?.note;
+      form.mustConfirm.value = note ? (text ? text + '\n' + note : note) : text;
+    };
+    form.environment.addEventListener('change', applyEnvNote);
+    form.roleKey.addEventListener('change', applyEnvNote); // 換角色範例後補回環境限制
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form));

@@ -122,6 +122,28 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     const all = await post(liu.token, '全體注意', { audience: 'all' });
     assert.ok(!all.recipients.some(x => x.name === '平台通知'));
 
+    // 所在環境：建立、顯示、修改、接入設定名冊
+    const roles = (await call(null, '/api/roles')).body;
+    const inside = roles.environments.find(e => e.key === '行內');
+    assert.ok(inside && inside.note.includes('必須先確認'), '有行內環境範本');
+    const ba = (await call(liu.token, '/api/my-ais', 'POST', { roleKey: 'BA', role: '需求分析', name: '劉昱志的需求分析助手',
+      environment: '行內', duties: 'd', style: 's', autonomy: 'a', mustConfirm: `m\n${inside.note}`, handoff: 'h' })).body;
+    assert.equal(ba.environment, '行內');
+    assert.equal((await call(ba.token, '/api/me')).body.environment, '行內', '/api/me 帶環境');
+    const plist = (await call(liu.token, '/api/participants')).body.items;
+    assert.equal(plist.find(p => p.name === '劉昱志的需求分析助手').environment, '行內', '成員名單帶環境');
+    assert.equal(plist.find(p => p.name === '劉昱志').environment, null, '未設定 → null');
+    assert.equal(member(await team(), ba.participantId).environment, '行內', '團隊狀態帶環境');
+    const ob = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding`)).body.text;
+    assert.ok(ob.includes('所在環境：行內'), '接入設定寫出自己的環境');
+    assert.ok(ob.includes('九、團隊成員與所在環境') && ob.includes('劉昱志的需求分析助手（你）'), '接入設定有團隊名冊');
+    assert.ok(!ob.includes('平台通知'), '名冊不含系統身分');
+    const upd = (await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: '行外' })).body;
+    assert.equal(upd.environment, '行外', '可修改環境');
+    assert.equal((await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: 'x'.repeat(21) })).body.error.code, 'INVALID_REQUEST', '環境上限 20 字');
+    const msg = await post(ba.token, '[AI 簽到] 我是 BA');
+    assert.equal(msg.author.environment, '行外', '訊息作者帶環境');
+
     console.log('team: all checks passed');
   } finally {
     await stopServer(server);

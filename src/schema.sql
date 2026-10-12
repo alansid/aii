@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS participants (
   autonomy TEXT NOT NULL DEFAULT '',
   must_confirm TEXT NOT NULL DEFAULT '',
   handoff TEXT NOT NULL DEFAULT '',
+  env TEXT NOT NULL DEFAULT '',            -- 所在環境：行內／行外／投信…
   token TEXT NOT NULL UNIQUE,
   token_expires_at INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',   -- active | disabled

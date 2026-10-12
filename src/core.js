@@ -4,7 +4,7 @@
 // db 介面（皆回傳 Promise）：
 //   get(sql, ...args) → 單列或 null      all(sql, ...args) → 陣列
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
-import { ROLES, SETTING_FIELDS } from './roles.js';
+import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 30_000;
@@ -72,7 +72,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < ACTIVE_WINDOW_MS;
 
   function identity(p, people) {
-    const out = { participantId: p.id, name: p.name, role: p.role, shortCode: p.code, memberType: p.kind };
+    const out = { participantId: p.id, name: p.name, role: p.role, shortCode: p.code, memberType: p.kind, environment: p.env || null };
     if (p.kind === 'ai') {
       out.ownerParticipantId = p.owner_id;
       out.ownerName = people.get(p.owner_id)?.name ?? null;
@@ -91,7 +91,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   const settingsOf = p => ({
     roleKey: p.role_key, duties: p.duties, style: p.style, autonomy: p.autonomy,
-    mustConfirm: p.must_confirm, handoff: p.handoff,
+    mustConfirm: p.must_confirm, handoff: p.handoff, environment: p.env || '',
   });
 
   async function serializeMessages(ctx, rows) {
@@ -373,7 +373,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     if (!role || role.length > 30) throw invalid('角色顯示名稱需為 1～30 字');
     const roleKey = body.roleKey !== undefined ? String(body.roleKey) : current?.roleKey ?? 'custom';
     if (!ROLES.some(r => r.key === roleKey)) throw invalid('roleKey 不存在');
-    const out = { role, roleKey };
+    const environment = body.environment !== undefined ? String(body.environment ?? '').trim() : current?.environment ?? '';
+    if (environment.length > 20) throw invalid('所在環境上限 20 字');
+    const out = { role, roleKey, environment };
     for (const f of SETTING_FIELDS) {
       const label = f.label.replace(/^\d\.\s*/, '').replace(/（.*$/, '');
       const v = body[f.key] !== undefined ? String(body[f.key]).trim() : current?.[f.key] ?? '';
@@ -391,9 +393,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const ts = nowIso();
     const id = randId('p');
     await db.run(`INSERT INTO participants (id, kind, name, role, role_key, code, owner_id, duties, style, autonomy, must_confirm, handoff,
-      token, token_expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      env, token, token_expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, 'ai', name, s.role, s.roleKey, await newCode(), me.id, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff,
-      newToken(), Date.now() + AI_TOKEN_TTL_MS, ts, ts);
+      s.environment, newToken(), Date.now() + AI_TOKEN_TTL_MS, ts, ts);
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', id), await peopleMap(ctx));
   }
 
@@ -403,8 +405,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     await assertNameFree(name, ai.id);
     const s = readSettings(body, { role: ai.role, ...settingsOf(ai) });
     await db.run(`UPDATE participants SET name = ?, role = ?, role_key = ?, duties = ?, style = ?, autonomy = ?, must_confirm = ?,
-      handoff = ?, version = version + 1, updated_at = ? WHERE id = ?`,
-      name, s.role, s.roleKey, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff, nowIso(), ai.id);
+      handoff = ?, env = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+      name, s.role, s.roleKey, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff, s.environment, nowIso(), ai.id);
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', ai.id), await peopleMap(ctx));
   }
 
@@ -426,6 +428,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
     const s = settingsOf(ai);
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
+    const members = await db.all("SELECT * FROM participants WHERE status = 'active' AND kind != 'system' ORDER BY created_at");
+    const byId = new Map(members.map(p => [p.id, p]));
+    const roster = members.map(p => `- ${p.name}${p.id === ai.id ? '（你）' : ''}：${p.kind === 'ai' ? 'AI' : '人類'}，角色 ${p.role || '未設定'}，所在環境 ${p.env || '未設定'}${p.kind === 'ai' ? '，所屬 ' + (byId.get(p.owner_id)?.name || '?') : ''}（participantId ${p.id}）`).join('\n');
     const agent = ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI';
     return `# 昱志血汗勞工 接入設定：${ai.name}
 
@@ -436,6 +441,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 - 角色：${ai.role}
 - 所屬人類：${owner.name}（participantId: ${owner.id}）——你代表他工作，也只依他的授權行事
 - 你的 participantId：${ai.id}
+- 所在環境：${ai.env || '未設定（請向 ' + owner.name + ' 確認）'}
 
 1. 主要職責：${s.duties}
 2. 溝通風格：${s.style}
@@ -513,6 +519,11 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 - 不自行宣稱完成；未完成、限制與未驗證的部分要直接寫出來。
 - 規則優先順序：${owner.name} 的明確指示與環境限制 ＞ 本設定第八節與群組規格 ＞ 角色設定。
 
+## 九、團隊成員與所在環境（產生設定當下）
+${roster}
+- 分工時請看對方的所在環境：不要請行內或投信成員把程式碼、檔案或內部資料傳出來；需要他們環境裡的資訊時，請他們用文字摘要回報。
+- 名冊會變動，最新狀況請以 GET /api/participants（environment 欄位）為準。
+
 請先回覆 ${owner.name}：你是否具備 HTTP 與排程能力，然後從「初次接入」第 1 步開始。`;
   }
 
@@ -532,7 +543,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   };
 
   route('GET', '/api/health', () => ({ ok: true, roomCodeRequired: !!ROOM_CODE }), { open: true });
-  route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS }), { open: true });
+  route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS, environments: ENVIRONMENTS }), { open: true });
   route('POST', '/api/join', async ({ req, ctx }) => ({ __status: 201, ...(await joinHuman(ctx, await readJson(req))) }), { open: true });
 
   route('GET', '/api/me', ({ me, ctx }) => peopleMap(ctx).then(people => ({

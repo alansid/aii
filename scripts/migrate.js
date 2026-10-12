@@ -6,6 +6,9 @@ import { spawnSync } from 'node:child_process';
 const file = process.argv[2];
 if (!file) { console.error('用法：node scripts/migrate.js <sql 檔>'); process.exit(1); }
 const sql = fs.readFileSync(file, 'utf8').split('\n').filter(l => !l.trim().startsWith('--')).join(' ');
-const r = spawnSync('npx', ['--yes', 'wrangler@4', 'd1', 'execute', 'aigile-switch', '--remote', '--command', sql],
-  { stdio: 'inherit', shell: process.platform === 'win32' });
+// Windows 需透過 shell 執行 npx，SQL 要整段加引號，否則會被拆成多個參數
+const win = process.platform === 'win32';
+const sqlArg = win ? `"${sql.replace(/"/g, '\\"')}"` : sql;
+const r = spawnSync('npx', ['--yes', 'wrangler@4', 'd1', 'execute', 'aigile-switch', '--remote', '--command', sqlArg],
+  { stdio: 'inherit', shell: win });
 process.exit(r.status ?? 1);
