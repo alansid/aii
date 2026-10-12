@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3997;
 const BASE = `http://localhost:${PORT}`;
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-team-'));
-const ENV = { STALE_MINUTES: '0.03', UNANSWERED_MINUTES: '0.02', AI_TOKEN_TTL_HOURS: '1' }; // 約 1.8 秒、1.2 秒；Token 1 小時（< 2 小時會被提醒）
+const ENV = { STALE_MINUTES: '0.03', UNANSWERED_MINUTES: '0.02', AI_TOKEN_TTL_HOURS: '1', TEAM_CACHE_MS: '0' }; // 約 1.8 秒、1.2 秒；Token 1 小時（< 2 小時會被提醒）
 
 function startServer() {
   const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
@@ -148,6 +148,25 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(!(await dec()).some(d => d.messageId === ask2.messageId), 'PO 的 [決策紀錄] → 移出');
     assert.equal(member(await team(), realPo.participantId).status.state, 'idle', '[決策紀錄] → 空閒');
     assert.ok((await dec()).some(d => d.messageId === ask3.messageId && d.replyCount === 0), '未處理的仍在');
+
+    // brief=1：與我無關的訊息只回前 80 字
+    const long = '長'.repeat(200);
+    const cur = (await call(pg.token, '/api/messages?limit=1')).body.nextCursor;
+    const toPo = await post(liu.token, long, { recipientIds: [realPo.participantId] });
+    const pgOwn = await post(pg.token, '[進度] 我自己的訊息');
+    const replyPg = await post(liu.token, long, { replyToMessageId: pgOwn.messageId });
+    const toAll = await post(liu.token, long, { audience: 'all' });
+    const view = async (tok) => (await call(tok, `/api/messages?limit=50&brief=1&after=${cur}`)).body.items;
+    const pgView = await view(pg.token);
+    const by = (items, id) => items.find(m => m.messageId === id);
+    assert.equal(by(pgView, toPo.messageId).truncated, true, '與我無關 → 截斷');
+    assert.equal(by(pgView, toPo.messageId).text.length, 81, '80 字＋…');
+    assert.equal(by(pgView, toPo.messageId).textLength, 200);
+    assert.equal(by(pgView, replyPg.messageId).text, long, '回覆我的訊息 → 完整');
+    assert.equal(by(pgView, toAll.messageId).text, long, '@所有人 → 完整');
+    assert.equal(by(await view(realPo.token), toPo.messageId).text, long, '指定我的 → 完整');
+    assert.equal((await call(pg.token, `/api/messages?limit=50&after=${cur}`)).body.items.find(m => m.messageId === toPo.messageId).text, long, '不帶 brief → 完整');
+    assert.equal((await call(pg.token, `/api/messages/${toPo.messageId}`)).body.text, long, '單則查詢 → 完整');
 
     // 所在環境：建立、顯示、修改、接入設定名冊
     const roles = (await call(null, '/api/roles')).body;

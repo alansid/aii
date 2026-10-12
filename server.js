@@ -25,6 +25,7 @@ const handle = createApp({
     fileMaxTotalMb: process.env.FILE_MAX_TOTAL_MB,
     staleMinutes: process.env.STALE_MINUTES,
     unansweredMinutes: process.env.UNANSWERED_MINUTES,
+    teamCacheMs: process.env.TEAM_CACHE_MS,
   },
 });
 

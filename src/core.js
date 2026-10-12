@@ -12,6 +12,8 @@ const RATE_LIMIT_PER_MIN = 120;
 const MAX_TEXT = 2000;
 const MAX_SETTING = 1000;
 const SYSTEM_NAME = '平台通知';
+const BRIEF_CHARS = 80;
+const TEAM_CACHE_MS_DEFAULT = 60_000; // 團隊狀態快取時間 // brief=1 時，與我無關的訊息只回這麼多字
 
 // ---------- 工具 ----------
 const B62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -61,13 +63,19 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const MAX_TOTAL = (Number(config.fileMaxTotalMb) || 0) * 1048576 || MAX_TOTAL_BYTES; // 測試用可調低
   const rate = new Map();
 
-  // 每個請求共用一份成員快取，避免逐列查詢
+  // 成員快取：同一請求共用，跨請求最多沿用 10 秒；成員資料有寫入時清除
+  let peopleCache = { at: 0, map: null };
+  const invalidatePeople = () => { peopleCache = { at: 0, map: null }; teamCache = { at: 0, data: null }; };
   async function peopleMap(ctx) {
     if (!ctx.people) {
-      ctx.people = new Map((await db.all('SELECT * FROM participants')).map(p => [p.id, p]));
+      if (!peopleCache.map || Date.now() - peopleCache.at > 10_000) {
+        peopleCache = { at: Date.now(), map: new Map((await db.all('SELECT * FROM participants')).map(p => [p.id, p])) };
+      }
+      ctx.people = peopleCache.map;
     }
     return ctx.people;
   }
+  let teamCache = { at: 0, data: null };
 
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < ACTIVE_WINDOW_MS;
 
@@ -180,10 +188,12 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       throw new ApiError(429, 'RATE_LIMITED', '請求頻率超過限制', { retryAfter: Math.ceil((r.windowStart + 60_000 - now) / 1000) });
     }
     if (p.kind === 'human') p.token_expires_at = now + HUMAN_TOKEN_TTL_MS; // 人類使用中自動展延
-    // 在線狀態每 10 秒最多寫一次，減少寫入
-    if (now - p.last_seen_at > 10_000 || p.kind === 'human') {
+    // 在線狀態每 20 秒最多寫一次，減少 D1 寫入（人類的登入效期也一起展延）
+    if (now - p.last_seen_at > 20_000) {
       await db.run('UPDATE participants SET last_seen_at = ?, token_expires_at = ? WHERE id = ?', now, p.token_expires_at, p.id);
       p.last_seen_at = now;
+      const cached = peopleCache.map?.get(p.id);
+      if (cached) { cached.last_seen_at = now; cached.token_expires_at = p.token_expires_at; }
     }
     return p;
   }
@@ -268,7 +278,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     return n;
   }
 
-  async function listMessages(ctx, url) {
+  async function listMessages(ctx, url, me) {
     const limit = parseLimit(url);
     const after = url.searchParams.get('after');
     const before = url.searchParams.get('before');
@@ -290,7 +300,21 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       if (hasMore) olderCursor = encodeCursor(rows[0].seq);
       nextCursor = encodeCursor(maxSeq);
     }
-    return { items: await serializeMessages(ctx, rows), nextCursor, olderCursor, hasMore };
+    let items = await serializeMessages(ctx, rows);
+    // brief=1：與我有關的（我發的、指定我、@所有人、回覆我的訊息）回完整內容，其他只回前 80 字
+    if (['1', 'true'].includes(url.searchParams.get('brief')) && me) {
+      const parentIds = rows.map(m => m.reply_to).filter(Boolean);
+      const mine = new Set(parentIds.length
+        ? (await db.all('SELECT id FROM messages WHERE author_id = ? AND id IN (SELECT value FROM json_each(?))', me.id, JSON.stringify(parentIds))).map(r => r.id)
+        : []);
+      items = items.map(m => {
+        const related = m.author.participantId === me.id || m.audience === 'all'
+          || m.recipients.some(r => r.participantId === me.id) || (m.replyToMessageId && mine.has(m.replyToMessageId));
+        if (related || m.text.length <= BRIEF_CHARS) return m;
+        return { ...m, text: m.text.slice(0, BRIEF_CHARS) + '…', truncated: true, textLength: m.text.length };
+      });
+    }
+    return { items, nextCursor, olderCursor, hasMore };
   }
 
   async function listNotifications(ctx, me, url) {
@@ -348,6 +372,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const id = randId('p');
     const token = newToken();
     const ts = nowIso();
+    invalidatePeople();
     await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at)
       VALUES (?,?,?,?,?,?,?,?,?,?)`, id, 'human', name, role, await newCode(), token, Date.now() + HUMAN_TOKEN_TTL_MS, ts, ts, Date.now());
     const p = await db.get('SELECT * FROM participants WHERE id = ?', id);
@@ -392,6 +417,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const s = readSettings(body);
     const ts = nowIso();
     const id = randId('p');
+    invalidatePeople();
     await db.run(`INSERT INTO participants (id, kind, name, role, role_key, code, owner_id, duties, style, autonomy, must_confirm, handoff,
       env, token, token_expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, 'ai', name, s.role, s.roleKey, await newCode(), me.id, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff,
@@ -404,6 +430,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const name = body.name !== undefined ? validateName(body.name) : ai.name;
     await assertNameFree(name, ai.id);
     const s = readSettings(body, { role: ai.role, ...settingsOf(ai) });
+    invalidatePeople();
     await db.run(`UPDATE participants SET name = ?, role = ?, role_key = ?, duties = ?, style = ?, autonomy = ?, must_confirm = ?,
       handoff = ?, env = ?, version = version + 1, updated_at = ? WHERE id = ?`,
       name, s.role, s.roleKey, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff, s.environment, nowIso(), ai.id);
@@ -412,12 +439,14 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   async function setAiStatus(ctx, me, id, status) {
     const ai = await myAi(me, id);
+    invalidatePeople();
     await db.run('UPDATE participants SET status = ?, updated_at = ? WHERE id = ?', status, nowIso(), ai.id);
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', ai.id), await peopleMap(ctx));
   }
 
   async function reissueToken(ctx, me, id) {
     const ai = await myAi(me, id);
+    invalidatePeople();
     await db.run('UPDATE participants SET token = ?, token_expires_at = ?, updated_at = ? WHERE id = ?',
       newToken(), Date.now() + AI_TOKEN_TTL_MS, nowIso(), ai.id);
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', ai.id), await peopleMap(ctx));
@@ -460,7 +489,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 1. 確認能力：先確認你具備呼叫 HTTP API 的工具。沒有的話，直接告訴 ${owner.name} 並提供手動操作方式，絕對不可假稱已連線。
 2. 讀規格：GET ${base}/api/docs/ai-integration，完整讀完再繼續。
 3. 核對身分：GET /api/me，確認 participantId、名稱與所屬人類正確。
-4. 建立訊息游標基準：GET /api/messages?limit=50，只記下回傳的 nextCursor。歷史訊息不是新任務，不要處理。
+4. 建立訊息游標基準：GET /api/messages?limit=1，只記下回傳的 nextCursor（不需要讀歷史內容，省用量）。歷史訊息不是新任務，不要處理。
 5. 處理既有通知：GET /api/notifications?status=pending，與你無關的靜默 ACK。
 6. 簽到一次：POST /api/messages，requestId 固定為 "req_checkin_${ai.id}"，內容例如「[AI 簽到] 我是 ${owner.name} 的 ${shortName}，角色為 ${ai.role}。已成功連線，目前可接受指定任務。」之後重連不再簽到。
 7. 建立狀態檔 .aigile/${agent}/state.json（見第五節），記錄游標與工作狀態，中斷後才能接續。可直接使用規格文件第 7 節的 poll.js：node poll.js --agent ${agent}。
@@ -469,7 +498,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 ## 四、輪詢（取得同意後才建立排程）
 - 簽到不等於啟動排程。只有在 ${owner.name} 明確同意、而且你具備排程能力時，才建立定期輪詢（建議每 1 分鐘），並確認排程實際建立成功。沒有排程能力時，改由 ${owner.name} 手動叫你跑單輪。
 - 每一輪：
-  1. GET /api/messages?limit=50&after=<游標>；hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
+  1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
   3. 讀通知的完整原文（GET /api/messages/:messageId），必要時讀 replyToMessageId 的上下文，再判斷要接單、回覆或靜默。
   4. 處理完才 ACK，最後才把 nextCursor 寫回 .aigile/${agent}/state.json。
@@ -499,7 +528,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 - requestId 固定格式：req_<階段>_<來源messageId>，階段用 ack（接單）、progress（進度）、result（結果）。重試時沿用同一個 requestId 與相同內容；伺服器會去重，不同內容用同一 requestId 會得到 409。
 - 回覆一律帶 replyToMessageId。要通知誰就放進 recipientIds（participantId 可從 GET /api/participants 查）；正文裡的 @名字只是文字，不會通知。要通知全體用 audience: "all"（不可與 recipientIds 同時用）。
 - ACK 只用通知的 notificationId（POST /api/notifications/ack），絕不用 messageId。發文成功但 ACK 失敗時，只重試 ACK，不重複發文。
-- 訊息上限 2000 字。中文內容用 UTF-8 送出；在 Windows Git Bash 不要用 curl -d "中文"，改用 Node fetch 或 --data-binary @file.json。
+- 訊息上限 2000 字，但請盡量控制在 600 字內、一件事一則：每則訊息所有 AI 都會讀到，越長越耗用量。規格文件讀一次就存在本機，不要每輪重讀。
+- 中文內容用 UTF-8 送出；在 Windows Git Bash 不要用 curl -d "中文"，改用 Node fetch 或 --data-binary @file.json。
 - Windows Git Bash 會把 "/api/me" 這類以 / 開頭的參數自動改寫成 Windows 路徑；把路徑當參數傳給腳本時，先設 MSYS_NO_PATHCONV=1，或在腳本內直接組完整網址。
 - 需要交換文件（需求、規格、會議紀錄、截圖）時，用 POST /api/files 上傳（見規格 3.8）：只限 pdf、docx、xlsx、pptx、md、txt、png、jpg，≤2 MB，必須帶 declared=true；絕對不可上傳程式碼（原始碼、打包檔、設定檔）或客戶個資，不確定就先問 ${owner.name}。檔案 1 小時後自動刪除，需要的人請及時下載。
 - 訊息開頭標明階段，讓人一眼看懂：[接單]、[進度]、[完成]、[需確認]、[受阻]、[交接]。先講結論，再列重點；引用檔案用完整路徑，引用版本用完整 40 碼 commit SHA。
@@ -561,7 +591,7 @@ ${roster}
     return { items };
   });
 
-  route('GET', '/api/messages', ({ ctx, url }) => listMessages(ctx, url));
+  route('GET', '/api/messages', ({ ctx, url, me }) => listMessages(ctx, url, me));
   route('GET', '/api/messages/:id', async ({ ctx, params }) => {
     const m = await db.get('SELECT * FROM messages WHERE id = ?', params.id);
     if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
@@ -729,7 +759,8 @@ ${roster}
   // ---------- 團隊狀態（平台改善：看得出每個人在做什麼、有沒有連上） ----------
   const STALE_MS = (Number(config.staleMinutes) || 15) * 60_000;       // AI 超過這段時間沒出現 → 可能斷線
   const UNANSWERED_MS = (Number(config.unansweredMinutes) || 15) * 60_000; // 指派超過這段時間沒讀取 → 尚未回應
-  const TOKEN_WARN_MS = 2 * 3600_000;                                   // Token 到期前 2 小時提醒
+  const TOKEN_WARN_MS = 2 * 3600_000;
+  const TEAM_CACHE_MS = config.teamCacheMs !== undefined ? Number(config.teamCacheMs) : TEAM_CACHE_MS_DEFAULT;                                   // Token 到期前 2 小時提醒
 
   // 依訊息開頭的標籤推斷狀態，例如 [接單]、[UX 完成・請核准 commit]
   function inferState(text) {
@@ -744,9 +775,10 @@ ${roster}
   const headline = text => String(text).trimStart().split('\n')[0].replace(/^\[[^\]]*\]\s*/, '').slice(0, 80);
 
   async function teamStatus(ctx) {
+    if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return teamCache.data;
     const people = await peopleMap(ctx);
     const now = Date.now();
-    const recent = await db.all('SELECT id, seq, author_id, text, reply_to, created_at FROM messages ORDER BY seq DESC LIMIT 500');
+    const recent = await db.all('SELECT id, seq, author_id, text, reply_to, created_at FROM messages ORDER BY seq DESC LIMIT 200');
 
     // 每位成員最新一則帶狀態標籤的訊息
     const stateBy = new Map();
@@ -806,7 +838,9 @@ ${roster}
       author: identity(people.get(m.author_id), people), replyCount: replyCount.get(m.id) || 0,
     }));
 
-    return { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
+    const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
+    teamCache = { at: Date.now(), data };
+    return data;
   }
 
   // 平台自己的發文身分（Token 到期提醒等），不會出現在成員名單
@@ -850,12 +884,14 @@ ${roster}
     if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
     if (inferState(m.text) !== 'waiting') throw invalid('這則不是 [需確認] 訊息');
     await db.run('INSERT OR IGNORE INTO decision_resolutions (message_id, resolved_by, resolved_at) VALUES (?,?,?)', m.id, me.id, nowIso());
+    teamCache = { at: 0, data: null };
     const r = await db.get('SELECT * FROM decision_resolutions WHERE message_id = ?', m.id);
     return { messageId: m.id, resolvedBy: r.resolved_by, resolvedAt: r.resolved_at };
   });
 
   route('POST', '/api/leave', async ({ me }) => {
     requireHuman(me);
+    invalidatePeople();
     await db.run("UPDATE participants SET status = 'disabled', updated_at = ? WHERE id = ? OR owner_id = ?", nowIso(), me.id, me.id);
     return { ok: true };
   });

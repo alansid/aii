@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS file_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_participants_owner ON participants (owner_id);
+-- 查詢效能索引（降低 D1 讀取量）
+CREATE INDEX IF NOT EXISTS idx_notif_status_created ON notifications (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages (reply_to);
+
 -- 「等你決定」清單：人類按「已處理」的紀錄
 CREATE TABLE IF NOT EXISTS decision_resolutions (
   message_id TEXT PRIMARY KEY,

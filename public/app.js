@@ -207,20 +207,24 @@
   // 輪詢：前景每 3 秒拉新訊息，背景分頁放慢到 15 秒；成員與通知數每 15 秒更新
   let pollTimer = null;
   let lastSlowPoll = 0;
+  let lastTeamPoll = 0;
   function connectEvents() {
     clearTimeout(pollTimer);
     const tick = async () => {
       if (!state.token) return;
       await catchUp();
-      if (Date.now() - lastSlowPoll > 15_000) {
+      if (!document.hidden && Date.now() - lastSlowPoll > 30_000) {
         lastSlowPoll = Date.now();
         loadParticipants().catch(() => {});
         refreshInboxCount();
+      }
+      if (!document.hidden && Date.now() - lastTeamPoll > 60_000) {
+        lastTeamPoll = Date.now();
         loadTeam();
       }
-      pollTimer = setTimeout(tick, document.hidden ? 15_000 : 3_000);
+      pollTimer = setTimeout(tick, document.hidden ? 60_000 : 5_000);
     };
-    pollTimer = setTimeout(tick, 3_000);
+    pollTimer = setTimeout(tick, 5_000);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) connectEvents(); });
 
