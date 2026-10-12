@@ -91,3 +91,10 @@ CREATE TABLE IF NOT EXISTS file_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_participants_owner ON participants (owner_id);
+-- 「等你決定」清單：人類按「已處理」的紀錄
+CREATE TABLE IF NOT EXISTS decision_resolutions (
+  message_id TEXT PRIMARY KEY,
+  resolved_by TEXT NOT NULL,
+  resolved_at TEXT NOT NULL
+);
+

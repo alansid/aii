@@ -738,7 +738,7 @@ ${roster}
     if (tag.includes('受阻')) return 'blocked';
     if (tag.includes('需確認')) return 'waiting';
     if (/接單|進度|開始/.test(tag)) return 'working';
-    if (/完成|回覆|交接|簽到|已 ?push|已發布|已部署/.test(tag)) return 'idle';
+    if (/完成|回覆|交接|簽到|決策紀錄|已 ?push|已發布|已部署/.test(tag)) return 'idle';
     return null;
   }
   const headline = text => String(text).trimStart().split('\n')[0].replace(/^\[[^\]]*\]\s*/, '').slice(0, 80);
@@ -785,14 +785,25 @@ ${roster}
       .filter(n => n.created_at <= cutoff && JSON.parse(n.reasons).includes('mention') && people.get(n.recipient_id)?.status === 'active')
       .map(n => ({ messageId: n.message_id, participantId: n.recipient_id, name: people.get(n.recipient_id).name, since: n.created_at }));
 
-    // 等人決定：[需確認] 訊息，還沒有任何人類回覆
+    // 等人決定：[需確認] 訊息，直到 (1) 人類直接回覆、(2) 人類按「已處理」、(3) PO 角色的 AI 以 [決策紀錄] 回覆
     const asks = recent.filter(m => inferState(m.text) === 'waiting');
-    const replies = asks.length ? await db.all('SELECT reply_to, author_id FROM messages WHERE reply_to IN (SELECT value FROM json_each(?))',
-      JSON.stringify(asks.map(m => m.id))) : [];
-    const answered = new Set(replies.filter(r => people.get(r.author_id)?.kind === 'human').map(r => r.reply_to));
-    const decisions = asks.filter(m => !answered.has(m.id)).slice(0, 30).map(m => ({
+    const askIds = JSON.stringify(asks.map(m => m.id));
+    const replies = asks.length ? await db.all('SELECT reply_to, author_id, text FROM messages WHERE reply_to IN (SELECT value FROM json_each(?))', askIds) : [];
+    const resolved = new Set(asks.length
+      ? (await db.all('SELECT message_id FROM decision_resolutions WHERE message_id IN (SELECT value FROM json_each(?))', askIds)).map(r => r.message_id) : []);
+    const closes = r => {
+      const a = people.get(r.author_id);
+      if (a?.kind === 'human') return true;
+      return a?.kind === 'ai' && a.role_key === 'PO' && /^\s*\[決策紀錄/.test(r.text);
+    };
+    const replyCount = new Map();
+    for (const r of replies) {
+      replyCount.set(r.reply_to, (replyCount.get(r.reply_to) || 0) + 1);
+      if (closes(r)) resolved.add(r.reply_to);
+    }
+    const decisions = asks.filter(m => !resolved.has(m.id)).slice(0, 30).map(m => ({
       messageId: m.id, sequence: m.seq, title: headline(m.text), createdAt: m.created_at,
-      author: identity(people.get(m.author_id), people),
+      author: identity(people.get(m.author_id), people), replyCount: replyCount.get(m.id) || 0,
     }));
 
     return { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
@@ -833,6 +844,15 @@ ${roster}
   }
 
   route('GET', '/api/team-status', ({ ctx }) => teamStatus(ctx));
+  route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
+    requireHuman(me);
+    const m = await db.get('SELECT id, text FROM messages WHERE id = ?', params.id);
+    if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
+    if (inferState(m.text) !== 'waiting') throw invalid('這則不是 [需確認] 訊息');
+    await db.run('INSERT OR IGNORE INTO decision_resolutions (message_id, resolved_by, resolved_at) VALUES (?,?,?)', m.id, me.id, nowIso());
+    const r = await db.get('SELECT * FROM decision_resolutions WHERE message_id = ?', m.id);
+    return { messageId: m.id, resolvedBy: r.resolved_by, resolvedAt: r.resolved_at };
+  });
 
   route('POST', '/api/leave', async ({ me }) => {
     requireHuman(me);

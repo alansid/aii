@@ -122,6 +122,33 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     const all = await post(liu.token, '全體注意', { audience: 'all' });
     assert.ok(!all.recipients.some(x => x.name === '平台通知'));
 
+    // 「等你決定」清除規則（方案 B）
+    const poR = ROLES.find(x => x.key === 'PO');
+    const realPo = (await call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PO', role: poR.role, name: '劉昱志的PO', duties: poR.duties,
+      style: poR.style, autonomy: poR.autonomy, mustConfirm: poR.mustConfirm, handoff: poR.handoff })).body;
+    const ask1 = await post(realPo.token, '[需確認] 提案一');
+    const ask2 = await post(realPo.token, '[需確認] 提案二');
+    const ask3 = await post(realPo.token, '[需確認] 提案三');
+    const dec = () => team().then(x => x.decisions);
+    // 已處理：人類可以，AI 403
+    assert.equal((await call(pg.token, `/api/decisions/${ask1.messageId}/resolve`, 'POST')).status, 403, 'AI 按已處理 → 403');
+    assert.ok((await dec()).some(d => d.messageId === ask1.messageId));
+    const res = await call(liu.token, `/api/decisions/${ask1.messageId}/resolve`, 'POST');
+    assert.equal(res.status, 200); assert.equal(res.body.resolvedBy, liu.participant.participantId, '記錄誰處理');
+    assert.ok(!(await dec()).some(d => d.messageId === ask1.messageId), '人類按已處理 → 移出');
+    assert.equal((await call(liu.token, `/api/decisions/${assign.messageId}/resolve`, 'POST')).body.error.code, 'INVALID_REQUEST', '非 [需確認] 不能處理');
+    // [決策紀錄]：只有 PO 角色的 AI 回覆才移出
+    await post(pg.token, '[決策紀錄] 劉昱志已同意', { replyToMessageId: ask2.messageId });
+    let d2 = (await dec()).find(d => d.messageId === ask2.messageId);
+    assert.ok(d2, '其他 AI 的 [決策紀錄] 不移出');
+    assert.equal(d2.replyCount, 1, '後續回覆 1 則');
+    await post(realPo.token, '補充說明', { replyToMessageId: ask2.messageId });
+    assert.equal((await dec()).find(d => d.messageId === ask2.messageId).replyCount, 2, '後續回覆 2 則');
+    await post(realPo.token, '[決策紀錄] 劉昱志已核准方案 B', { replyToMessageId: ask2.messageId });
+    assert.ok(!(await dec()).some(d => d.messageId === ask2.messageId), 'PO 的 [決策紀錄] → 移出');
+    assert.equal(member(await team(), realPo.participantId).status.state, 'idle', '[決策紀錄] → 空閒');
+    assert.ok((await dec()).some(d => d.messageId === ask3.messageId && d.replyCount === 0), '未處理的仍在');
+
     // 所在環境：建立、顯示、修改、接入設定名冊
     const roles = (await call(null, '/api/roles')).body;
     const inside = roles.environments.find(e => e.key === '行內');

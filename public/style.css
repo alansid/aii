@@ -252,6 +252,7 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .env-mini { font-size: .72rem; color: #3730a3; background: #e0e7ff; border-radius: 6px; padding: 0 5px; }
 .tag.sys { background: var(--surface-2); color: var(--muted); border-color: var(--border); }
 .link { font: inherit; background: none; border: 0; padding: 0; color: var(--primary); cursor: pointer; text-align: left; }
+.btn.mini { font-size: .78rem; padding: 1px 8px; margin-left: 4px; }
 .decisions { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .team-table-wrap { overflow-x: auto; }
 .team-table { width: 100%; border-collapse: collapse; font-size: .9rem; }

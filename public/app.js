@@ -600,13 +600,22 @@
     const body = openModal('團隊狀態', `
       <p class="notice">狀態依每人最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現標示「可能斷線」。</p>
       <div class="section-title">📝 等你決定（${t.decisions.length}）</div>
-      ${t.decisions.length ? `<ul class="decisions">${t.decisions.map(d => `<li><button type="button" class="link" data-jump-team="${esc(d.messageId)}">${esc(d.title || '（無標題）')}</button> <span class="muted small">— ${esc(d.author.name)} · ${agoText(d.createdAt)}</span></li>`).join('')}</ul>` : '<p class="muted">目前沒有待決定的事項。</p>'}
+      ${t.decisions.length ? `<ul class="decisions">${t.decisions.map(d => `<li><button type="button" class="link" data-jump-team="${esc(d.messageId)}">${esc(d.title || '（無標題）')}</button> <span class="muted small">— ${esc(d.author.name)} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span> <button type="button" class="btn mini" data-resolve="${esc(d.messageId)}" title="已經決定了，從清單移出">已處理</button></li>`).join('')}</ul>` : '<p class="muted">目前沒有待決定的事項。</p>'}
       ${t.unanswered.length ? `<div class="section-title">⏰ 尚未回應的指派（${t.unanswered.length}）</div><ul class="decisions">${t.unanswered.map(u => `<li><b>${esc(u.name)}</b> <span class="muted small">已等 ${agoText(u.since).replace('前', '')}</span> <button type="button" class="link" data-jump-team="${esc(u.messageId)}">查看訊息</button></li>`).join('')}</ul>` : ''}
       <div class="section-title">成員</div>
       <div class="team-table-wrap"><table class="team-table"><thead><tr><th>成員</th><th>連線</th><th>目前狀態</th><th>待處理</th><th>Token 到期</th></tr></thead><tbody>${rows}</tbody></table></div>`);
-    body.addEventListener('click', e => {
+    body.addEventListener('click', async e => {
       const j = e.target.closest('[data-jump-team]');
-      if (j) { closeModal(); jumpTo(j.dataset.jumpTeam); }
+      if (j) { closeModal(); jumpTo(j.dataset.jumpTeam); return; }
+      const r = e.target.closest('[data-resolve]');
+      if (r) {
+        r.disabled = true;
+        try {
+          await api(`/api/decisions/${encodeURIComponent(r.dataset.resolve)}/resolve`, { method: 'POST' });
+          toast('已從「等你決定」移出');
+          openTeam();
+        } catch (err) { r.disabled = false; toast(err.message); }
+      }
     });
   }
 
