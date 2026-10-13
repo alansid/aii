@@ -500,3 +500,24 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 :root[data-theme="dark"] .decide-row, :root[data-theme="dark"] .team-bar .chip.decide { background: var(--mine-bg); color: var(--text); border-color: var(--mine-border); }
 .msg > * { min-width: 0; }
 #input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* UX 驗收修正 */
+.tag.all { background: #1f2937; color: #fff; }
+.msg-time, .composer-hint { color: var(--muted); }
+.load-older { width: auto; }
+.msg.mine { background: #f7f9ff; border-color: #dbe5fb; }
+.lead-indigo { background: #e0e7ff; color: #3730a3; }
+.lead-purple { background: #f3e8ff; color: #7e22ce; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .token-alert { background: #3a3013; color: #f3dc9a; border-bottom-color: #5c4a14; }
+  :root:not([data-theme="light"]) .alert-btn { background: var(--surface); color: #f3dc9a; border-color: #5c4a14; }
+  :root:not([data-theme="light"]) .alert-close { color: #f3dc9a; }
+  :root:not([data-theme="light"]) .msg.mine { background: var(--surface); border-color: var(--human-border); }
+  :root:not([data-theme="light"]) .tag.all { background: #e5e7eb; color: #111827; }
+}
+:root[data-theme="dark"] .token-alert { background: #3a3013; color: #f3dc9a; border-bottom-color: #5c4a14; }
+:root[data-theme="dark"] .alert-btn { background: var(--surface); color: #f3dc9a; border-color: #5c4a14; }
+:root[data-theme="dark"] .alert-close { color: #f3dc9a; }
+:root[data-theme="dark"] .msg.mine { background: var(--surface); border-color: var(--human-border); }
+:root[data-theme="dark"] .tag.all { background: #e5e7eb; color: #111827; }
+.side-team { flex: 1 1 auto; min-height: 80px; overflow-y: auto; }

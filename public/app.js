@@ -333,7 +333,7 @@
   // 訊息開頭的 [接單]、[完成]… 改成彩色小標籤
   function leadPill(tag) {
     const kind = /受阻/.test(tag) ? 'red' : /需確認|需協助/.test(tag) ? 'orange' : /決策紀錄/.test(tag) ? 'grey'
-      : /完成|已部署|已 ?push/.test(tag) ? 'green' : /接單|進度|交接/.test(tag) ? 'blue' : 'light';
+      : /完成|已部署|已 ?push/.test(tag) ? 'green' : /接單/.test(tag) ? 'indigo' : /進度/.test(tag) ? 'blue' : /交接/.test(tag) ? 'purple' : 'light';
     return `<span class="lead lead-${kind}">${esc(tag)}</span>`;
   }
 
