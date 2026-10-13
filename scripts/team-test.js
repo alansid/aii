@@ -98,23 +98,21 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     await sleep(2000);
     assert.equal(member(await team(), pg.participantId).stale, true, '超過時限 → 可能斷線');
 
-    // Token 到期提醒：Token 1 小時 < 2 小時 → 排程提醒所屬人類；重啟不重複
+    // Token 快到期：團隊狀態標示，但排程不再發群組提醒訊息（改由網頁只給所屬人類看）
     t = await team();
     assert.equal(member(t, pg.participantId).tokenExpiringSoon, true, 'Token 快到期');
     await stopServer(server);
     ({ server, ready } = startServer());
     await ready; await sleep(400); // 啟動時執行一次排程
     const msgs = (await call(liu.token, '/api/messages?limit=100')).body.items;
-    const warns = msgs.filter(m => m.author.memberType === 'system');
-    assert.equal(warns.length, 2, '兩個 AI 各一則提醒');
-    assert.ok(warns.every(m => m.author.name === '平台通知' && m.recipients[0].name === '劉昱志' && m.text.includes('重發 Token')));
-    const inbox = (await call(liu.token, '/api/notifications')).body.items;
-    assert.ok(inbox.some(x => x.sender.name === '平台通知'), '所屬人類收到通知');
-    await stopServer(server);
-    ({ server, ready } = startServer());
-    await ready; await sleep(400);
-    const again = (await call(liu.token, '/api/messages?limit=100')).body.items.filter(m => m.author.memberType === 'system');
-    assert.equal(again.length, 2, '同一個到期時間不重複提醒');
+    assert.equal(msgs.filter(m => m.author.memberType === 'system').length, 0, '不發群組提醒');
+    // 重發：舊 Token 立即失效、新效期約 7 天（測試環境以 AI_TOKEN_TTL_HOURS 設定為準）
+    const oldTok = pg.token;
+    const re = (await call(liu.token, `/api/my-ais/${pg.participantId}/reissue`, 'POST')).body;
+    assert.notEqual(re.token, oldTok);
+    assert.equal((await call(oldTok, '/api/me')).status, 401, '舊 Token 失效');
+    assert.equal((await call(re.token, '/api/me')).status, 200, '新 Token 可用');
+    pg.token = re.token;
 
     // 系統身分不出現在成員名單與團隊狀態，也不收 @所有人
     assert.ok(!(await call(liu.token, '/api/participants')).body.items.some(p => p.name === '平台通知'));

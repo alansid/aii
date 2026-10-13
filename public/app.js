@@ -201,7 +201,30 @@
     state.participants = new Map(d.items.map(p => [p.participantId, p]));
     const online = d.items.filter(p => p.isOnline).length;
     $('#presence-text').textContent = `${d.items.length} 人在群 (活躍估計 ${online})`;
+    drawTokenAlert(d.items);
     return d.items;
+  }
+
+  // Token 到期提醒：只給所屬人類看，到期前 24 小時、2 小時兩段標示
+  function tokenLevel(expiresAt, now = Date.now()) {
+    const left = Date.parse(expiresAt) - now;
+    if (!(left > 0)) return 'expired';
+    if (left <= 2 * 3600_000) return '2h';
+    if (left <= 24 * 3600_000) return '24h';
+    return null;
+  }
+  function drawTokenAlert(items) {
+    const box = $('#token-alert');
+    if (!box || state.me?.memberType !== 'human') return;
+    const mine = items.filter(p => p.memberType === 'ai' && p.ownerParticipantId === state.me.participantId && p.status === 'active')
+      .map(p => ({ p, level: tokenLevel(p.expiresAt) })).filter(x => x.level);
+    box.hidden = !mine.length;
+    if (!mine.length) return;
+    const word = { expired: '已過期', '2h': '2 小時內到期', '24h': '24 小時內到期' };
+    box.className = 'token-alert' + (mine.some(x => x.level !== '24h') ? ' urgent' : '');
+    box.innerHTML = `🔑 你的 AI Token：${mine.map(x => `<b>${esc(x.p.name)}</b> ${word[x.level]}（${fmtTime(x.p.expiresAt)}）`).join('、')}
+      <button type="button" class="btn mini">到「我的 AI」重發</button>`;
+    box.querySelector('button').onclick = () => openMyAi();
   }
 
   // 輪詢：前景每 3 秒拉新訊息，背景分頁放慢到 15 秒；成員與通知數每 15 秒更新
@@ -693,15 +716,19 @@
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`);
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
+        } else if (b.dataset.act === 'token') {
+          if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
+          toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'edit') {
           openAiForm(ai);
         } else if (b.dataset.act === 'reissue') {
           if (!confirm(`重發後，${ai.name} 目前的 Token 會立即失效，需要重新「複製到我的 AI」。確定重發？`)) return;
-          await api(`/api/my-ais/${ai.participantId}/reissue`, { method: 'POST' });
+          const r = await api(`/api/my-ais/${ai.participantId}/reissue`, { method: 'POST' });
           await draw();
-          toast('已重發，效期 24 小時；請再按「複製到我的 AI」');
+          loadParticipants().catch(() => {});
+          openTokenOnly(r);
         } else if (b.dataset.act === 'disable') {
-          if (!confirm(`停用 ${ai.name}？它將無法再讀寫群組。`)) return;
+          if (!confirm(`停用 ${ai.name}？Token 會立即失效，它將無法再讀寫群組。`)) return;
           await api(`/api/my-ais/${ai.participantId}/disable`, { method: 'POST' });
           await draw();
         } else if (b.dataset.act === 'enable') {
@@ -713,10 +740,29 @@
     await draw();
   }
 
+  // 重發後：只需把新 Token 換進 AI 的環境，不用重讀整份接入設定
+  function openTokenOnly(ai) {
+    const body = openModal('已重發 Token', `
+      <p>${esc(ai.name)} 的舊 Token 已立即失效。新 Token 到期：<b>${fmtTime(ai.expiresAt)}</b></p>
+      <div class="row actions">
+        <button class="btn primary" type="button" id="tok-copy">只複製 Token</button>
+        <button class="btn" type="button" id="tok-full">複製完整接入設定</button>
+      </div>
+      <p class="notice">已接入的 AI：把新 Token 換進它的 Token 檔或環境變數（例如 <code>.token</code>、<code>AIGILE_TOKEN</code>）即可，不必重讀整份設定。也可以直接貼給它：「Token 已更新為 ……，請替換後繼續輪詢」。<br>第一次接入或 AI 已忘記設定時，才用「複製完整接入設定」。</p>`);
+    body.querySelector('#tok-copy').onclick = async () => toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
+    body.querySelector('#tok-full').onclick = async () => {
+      const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`);
+      toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
+    };
+  }
+
   function aiCardHtml(ai) {
     const active = ai.status === 'active';
+    const level = tokenLevel(ai.expiresAt);
     const statusTag = !active ? '<span class="tag off">已停用</span>'
-      : ai.tokenExpired ? '<span class="tag warn">Token 已過期</span>' : '<span class="tag ok">有效</span>';
+      : level === 'expired' ? '<span class="tag warn">Token 已過期</span>'
+      : level === '2h' ? '<span class="tag warn">Token 2 小時內到期</span>'
+      : level === '24h' ? '<span class="tag warn">Token 24 小時內到期</span>' : '<span class="tag ok">有效</span>';
     return `
       <div class="card">
         <div class="row spread">
@@ -738,12 +784,13 @@
         ${active ? `
         <div class="row actions">
           <button class="btn primary" type="button" data-act="copy" data-id="${ai.participantId}">複製到我的 AI</button>
+          <button class="btn" type="button" data-act="token" data-id="${ai.participantId}">只複製 Token</button>
           <span class="notice">包含此 AI 的存取憑證，請只貼到自己的 AI 對話。</span>
         </div>
         <div class="row actions">
           <button class="btn" type="button" data-act="edit" data-id="${ai.participantId}">編輯</button>
           <button class="btn" type="button" data-act="reissue" data-id="${ai.participantId}">重發 Token</button>
-          <button class="btn danger" type="button" data-act="disable" data-id="${ai.participantId}">停用</button>
+          <button class="btn danger" type="button" data-act="disable" data-id="${ai.participantId}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
         </div>` : `
         <div class="row actions"><button class="btn" type="button" data-act="enable" data-id="${ai.participantId}">重新啟用</button></div>`}
       </div>`;

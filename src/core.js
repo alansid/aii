@@ -57,7 +57,7 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
 export function createApp({ db, docText, config = {}, storage = null }) {
   const ROOM_CODE = config.roomCode || '';
-  const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 24) * 3600_000;
+  const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 168) * 3600_000; // 預設 7 天
   const HUMAN_TOKEN_TTL_MS = (Number(config.humanTokenTtlHours) || 720) * 3600_000;
   const FILE_TTL_MS = (Number(config.fileTtlHours) || 1) * 3600_000; // 預設保存 1 小時
   const MAX_TOTAL = (Number(config.fileMaxTotalMb) || 0) * 1048576 || MAX_TOTAL_BYTES; // 測試用可調低
@@ -843,39 +843,7 @@ ${roster}
     return data;
   }
 
-  // 平台自己的發文身分（Token 到期提醒等），不會出現在成員名單
-  async function systemParticipant() {
-    let p = await db.get("SELECT * FROM participants WHERE kind = 'system' LIMIT 1");
-    if (p) return p;
-    const ts = nowIso();
-    await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`, randId('p'), 'system', SYSTEM_NAME, '系統', await newCode(), newToken(), 0, ts, ts);
-    return db.get("SELECT * FROM participants WHERE kind = 'system' LIMIT 1");
-  }
-
-  const taipeiTime = ms => new Date(ms).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-  // AI 的 Token 2 小時內到期 → 在群組提醒所屬人類（同一個到期時間只提醒一次）
-  async function tokenReminders() {
-    const now = Date.now();
-    const ais = await db.all("SELECT * FROM participants WHERE kind = 'ai' AND status = 'active' AND token_expires_at > ? AND token_expires_at <= ?",
-      now, now + TOKEN_WARN_MS);
-    if (!ais.length) return 0;
-    const sys = await systemParticipant();
-    let sent = 0;
-    for (const ai of ais) {
-      const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
-      if (!owner || owner.status !== 'active') continue;
-      const mins = Math.max(1, Math.round((ai.token_expires_at - now) / 60_000));
-      const r = await createMessage({}, sys, {
-        text: `[提醒] ${ai.name} 的 Token 將於 ${taipeiTime(ai.token_expires_at)}（約 ${mins} 分鐘後）到期，到期後它會停止輪詢。\n請 ${owner.name} 到「我的 AI」按「重發 Token」，再按「複製到我的 AI」貼給它。`,
-        requestId: `req_tokenwarn_${ai.id}_${ai.token_expires_at}`,
-        recipientIds: [owner.id],
-      });
-      if (!r.duplicate) sent++;
-    }
-    return sent;
-  }
+  // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
   route('GET', '/api/team-status', ({ ctx }) => teamStatus(ctx));
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
@@ -898,8 +866,8 @@ ${roster}
 
   // 對外：處理 /api/*；base 為對外網址（例如 https://xxx.workers.dev）
   handle.cleanupExpired = cleanupExpired;
-  // 排程工作：清除過期文件、Token 到期提醒
-  handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), tokenReminders: await tokenReminders() });
+  // 排程工作：清除過期文件
+  handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired() });
   return handle;
 
   async function handle(req, base) {

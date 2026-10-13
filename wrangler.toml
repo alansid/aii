@@ -23,4 +23,4 @@ crons = ["*/10 * * * *"]
 
 # 選用：設定後，人類加入群組需輸入此代碼。正式環境建議改用 `wrangler secret put ROOM_CODE`
 # [vars]
-# AI_TOKEN_TTL_HOURS = "24"
+# AI_TOKEN_TTL_HOURS = "168"

@@ -232,6 +232,10 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .audit summary { cursor: pointer; color: var(--muted); }
 .audit-table { width: 100%; border-collapse: collapse; margin-top: 8px; display: block; overflow-x: auto; }
 .audit-table th, .audit-table td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; white-space: nowrap; }
+.token-alert { padding: 6px 16px; background: #fff7e0; color: #6b4e00; border-bottom: 1px solid #f0d58a; font-size: .9rem; }
+.token-alert.urgent { background: #fdecea; color: #8a1c13; border-bottom-color: #f2b8b2; }
+.token-alert[hidden] { display: none; }
+@media (prefers-color-scheme: dark) { .token-alert { background: #3a3013; color: #f3dc9a; border-bottom-color: #5c4a14; } .token-alert.urgent { background: #3d1c19; color: #f5b5ad; border-bottom-color: #6b2a24; } }
 .team-bar { display: flex; gap: 6px; overflow-x: auto; padding: 6px 16px; background: var(--surface); border-bottom: 1px solid var(--border); scrollbar-width: thin; }
 .chip { flex: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: .85rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
 .chip.decide { background: var(--mine-bg); border-color: var(--mine-border); font-weight: 600; }
