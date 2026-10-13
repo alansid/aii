@@ -22,6 +22,9 @@
     olderCursor: null,
     replyTo: null,
     onlyMine: store.get(FILTER_KEY) === '1',
+    filter: { scope: store.get(FILTER_KEY) === '1' ? 'related' : 'all', member: '', tag: '' },
+    expanded: new Set(),  // 已展開全文的長訊息
+    collapsed: new Set(), // 已收合回覆的訊息
     events: null,
     roles: null,
     team: null,
@@ -81,6 +84,13 @@
   }
   applyTheme(store.get(THEME_KEY));
 
+  // 文字頭像：AI 用角色代碼（PO、PG…），自訂角色取角色名前兩字；人類取名字第一個字
+  function avatarText(p) {
+    if (p.memberType === 'ai') return p.roleKey && p.roleKey !== 'custom' ? p.roleKey : [...(p.role || 'AI')].slice(0, 2).join('');
+    if (p.memberType === 'system') return '系';
+    return [...(p.name || '人')][0];
+  }
+  const avatar = p => `<span class="avatar ${p.memberType === 'ai' ? 'ai' : 'human'}" aria-hidden="true">${esc(avatarText(p))}</span>`;
   const envTag = p => p?.environment ? `<span class="tag env" title="所在環境">📍${esc(p.environment)}</span>` : '';
   const memberTag = p => p.memberType === 'ai'
     ? `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`
@@ -202,6 +212,7 @@
     const online = d.items.filter(p => p.isOnline).length;
     $('#presence-text').textContent = `${d.items.length} 人在群 (活躍估計 ${online})`;
     drawTokenAlert(d.items);
+    syncFilterBar();
     return d.items;
   }
 
@@ -301,6 +312,7 @@
     return `
       <article class="${cls}" id="msg-${esc(m.messageId)}">
         <div class="msg-head">
+          ${avatar(a)}
           <div class="msg-meta">
             <span class="msg-author">${esc(a.name)}</span>
             <span class="muted small">${esc(a.role || '')} #${esc(a.shortCode)}</span>${envTag(a)}
@@ -319,26 +331,83 @@
         </div>
         ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">引用訊息 (${esc(shortId(m.replyToMessageId))})${parent ? `　${esc(parent.author.name)}：${esc(parent.text.slice(0, 80))}` : ''}</button>` : ''}
         ${recipients ? `<div class="recipients">指定對象: ${recipients}</div>` : ''}
-        ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : `<div class="msg-text">${renderText(m.text)}</div>`}
+        ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : textHtml(m)}
+        ${threadToggle(m)}
       </article>`;
   }
 
-  function visible(m) {
-    if (!state.onlyMine) return true;
+  // 長訊息預設折疊（超過 6 行或 400 字）
+  const isLong = t => t.split('\n').length > 6 || t.length > 400;
+  function textHtml(m) {
+    if (!isLong(m.text)) return `<div class="msg-text">${renderText(m.text)}</div>`;
+    const open = state.expanded.has(m.messageId);
+    return `<div class="msg-text${open ? '' : ' clamp'}">${renderText(m.text)}</div>
+      <button type="button" class="link more" data-more="${esc(m.messageId)}">${open ? '收合' : '展開全文'}</button>`;
+  }
+  // 回覆串：已載入的直接回覆數，可收合
+  const repliesOf = id => state.messages.filter(x => x.replyToMessageId === id);
+  function threadToggle(m) {
+    const n = repliesOf(m.messageId).length;
+    if (!n) return '';
+    const closed = state.collapsed.has(m.messageId);
+    return `<button type="button" class="link thread" data-thread="${esc(m.messageId)}">${closed ? '▸' : '▾'} ${n} 則回覆${closed ? '（已收合）' : ''}</button>`;
+  }
+  // 祖先訊息被收合時，整串回覆都不顯示
+  function hiddenByThread(m) {
+    let p = m.replyToMessageId, guard = 0;
+    while (p && guard++ < 50) {
+      if (state.collapsed.has(p)) return true;
+      p = state.byId.get(p)?.replyToMessageId;
+    }
+    return false;
+  }
+  const tagOf = t => String(t).trimStart().match(/^\[([^\]\n]{1,40})\]/)?.[1] || '';
+  function related(m) {
     const mine = myAiIds();
     return isMine(m) || isToMe(m) || isReplyToMe(m) || mine.has(m.author.participantId)
       || m.recipients.some(r => mine.has(r.participantId));
   }
+  function visible(m) {
+    const f = state.filter;
+    if (f.scope === 'mine' && !(!isMine(m) && (isToMe(m) || isReplyToMe(m)))) return false;
+    if (f.scope === 'related' && !related(m)) return false;
+    if (f.member && m.author.participantId !== f.member) return false;
+    if (f.tag && !tagOf(m.text).includes(f.tag)) return false;
+    return !hiddenByThread(m);
+  }
+  const filtering = () => state.filter.scope !== 'all' || state.filter.member || state.filter.tag;
+  function syncFilterBar() {
+    const f = state.filter;
+    $('#f-scope').value = f.scope;
+    $('#f-tag').value = f.tag;
+    const sel = $('#f-member');
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled').sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
+    sel.value = f.member;
+    $('#f-clear').hidden = !filtering();
+  }
+  function setFilter(patch) {
+    Object.assign(state.filter, patch);
+    state.onlyMine = state.filter.scope === 'related';
+    store.set(FILTER_KEY, state.onlyMine ? '1' : '0');
+    syncFilterBar();
+    renderMessages(true);
+  }
+  $('#f-scope').onchange = e => setFilter({ scope: e.target.value });
+  $('#f-member').onchange = e => setFilter({ member: e.target.value });
+  $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
+  $('#f-clear').onclick = () => setFilter({ scope: 'all', member: '', tag: '' });
 
   const nearBottom = () => { const el = $('#messages'); return el.scrollHeight - el.scrollTop - el.clientHeight < 120; };
   const scrollBottom = () => { const el = $('#messages'); el.scrollTop = el.scrollHeight; };
 
   function renderMessages(toBottom) {
     const list = state.messages.filter(visible);
+    $('#f-count').textContent = filtering() ? `符合 ${list.length} 則` : '';
     const older = state.olderCursor ? '<button type="button" class="load-older" id="load-older">載入更早歷史訊息</button>' : '';
     $('#messages').innerHTML = older + (list.length
       ? list.map(messageHtml).join('')
-      : `<div class="empty">${state.onlyMine ? '目前沒有與你或你的 AI 相關的訊息。' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。'}</div>`);
+      : `<div class="empty">${filtering() ? '沒有符合篩選條件的訊息。' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。'}</div>`);
     if (toBottom) scrollBottom();
   }
 
@@ -359,6 +428,11 @@
     const stick = nearBottom() || isMine(m);
     state.messages.push(m);
     state.byId.set(m.messageId, m);
+    if (m.replyToMessageId && state.byId.has(m.replyToMessageId)) {
+      renderMessages(stick);
+      if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
+      return;
+    }
     if (!visible(m)) return;
     const box = $('#messages');
     box.querySelector('.empty')?.remove();
@@ -375,13 +449,32 @@
     const r = e.target.closest('[data-reply]');
     if (r) return setReply(state.byId.get(r.dataset.reply));
     const j = e.target.closest('[data-jump]');
-    if (j) jumpTo(j.dataset.jump);
+    if (j) return jumpTo(j.dataset.jump);
+    const more = e.target.closest('[data-more]');
+    if (more) {
+      const id = more.dataset.more;
+      if (state.expanded.has(id)) state.expanded.delete(id); else state.expanded.add(id);
+      const el = document.getElementById('msg-' + id);
+      if (el) el.outerHTML = messageHtml(state.byId.get(id));
+      return;
+    }
+    const th = e.target.closest('[data-thread]');
+    if (th) {
+      const id = th.dataset.thread;
+      if (state.collapsed.has(id)) state.collapsed.delete(id); else state.collapsed.add(id);
+      const box = $('#messages'), top = box.scrollTop;
+      renderMessages(false);
+      box.scrollTop = top;
+    }
   });
 
   async function jumpTo(id) {
     let el = document.getElementById('msg-' + id);
-    if (!el && state.onlyMine) {
-      state.onlyMine = false; store.set(FILTER_KEY, '0'); renderMessages(false);
+    if (!el && state.byId.has(id) && (filtering() || state.collapsed.size)) {
+      state.collapsed.clear();
+      Object.assign(state.filter, { scope: 'all', member: '', tag: '' });
+      state.onlyMine = false; store.set(FILTER_KEY, '0');
+      syncFilterBar(); renderMessages(false);
       el = document.getElementById('msg-' + id);
     }
     if (!el) {
@@ -764,35 +857,40 @@
       : level === '2h' ? '<span class="tag warn">Token 2 小時內到期</span>'
       : level === '24h' ? '<span class="tag warn">Token 24 小時內到期</span>' : '<span class="tag ok">有效</span>';
     return `
-      <div class="card">
-        <div class="row spread">
-          <div class="member-name"><b>${esc(ai.name)}</b><span class="muted">(${esc(ai.role)})</span>${envTag(ai)}
-            <span class="tag ai">AI | 所屬: ${esc(state.me.name)}</span>${statusTag}</div>
-          <span class="muted small">版本 v${ai.version} · 更新時間：${fmtTime(ai.updatedAt)}</span>
+      <div class="card ai-card">
+        <div class="ai-card-head">
+          ${avatar(ai)}
+          <div class="member-info">
+            <div class="member-name"><b>${esc(ai.name)}</b>${statusTag}</div>
+            <div class="member-sub">${esc(ai.role)} #${esc(ai.shortCode)} ${envTag(ai)}
+              <span class="ai-online"><span class="dot ${ai.isOnline ? 'on' : ''}"></span>${ai.isOnline ? '在線' : '離線／閒置'}</span></div>
+            <div class="member-sub">Token 到期：${ai.expiresAt ? fmtTime(ai.expiresAt) : '—'}</div>
+          </div>
         </div>
-        <div class="duties"><b>主要職責：</b>${esc(ai.duties)}</div>
+        ${active ? `
+        <div class="row actions">
+          <button class="btn primary" type="button" data-act="token" data-id="${ai.participantId}">只複製 Token</button>
+          <button class="btn" type="button" data-act="reissue" data-id="${ai.participantId}">重發</button>
+        </div>` : `
+        <div class="row actions"><button class="btn" type="button" data-act="enable" data-id="${ai.participantId}">重新啟用</button></div>`}
         <details class="settings">
-          <summary>完整角色設定</summary>
+          <summary>詳細／進階</summary>
+          <div class="duties"><b>主要職責：</b>${esc(ai.duties)}</div>
           <dl>
             <dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
             <dt>可自主處理的事項</dt><dd>${esc(ai.autonomy)}</dd>
             <dt>必須確認的事項</dt><dd>${esc(ai.mustConfirm)}</dd>
             <dt>完成與交接條件</dt><dd>${esc(ai.handoff)}</dd>
           </dl>
+          ${active ? `
+          <div class="row actions">
+            <button class="btn" type="button" data-act="copy" data-id="${ai.participantId}">複製完整接入設定</button>
+            <button class="btn" type="button" data-act="edit" data-id="${ai.participantId}">編輯</button>
+            <button class="btn danger" type="button" data-act="disable" data-id="${ai.participantId}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
+          </div>
+          <p class="notice">接入設定與 Token 都是此 AI 的存取憑證，請只貼到自己的 AI 對話。</p>` : ''}
+          <p class="muted small">版本 v${ai.version} · 更新時間：${fmtTime(ai.updatedAt)}</p>
         </details>
-        <div class="muted small">#${esc(ai.shortCode)} · ${ai.isOnline ? '近期活躍' : '離線/閒置'} · Token 到期：${ai.expiresAt ? fmtTime(ai.expiresAt) : '—'}</div>
-        ${active ? `
-        <div class="row actions">
-          <button class="btn primary" type="button" data-act="copy" data-id="${ai.participantId}">複製到我的 AI</button>
-          <button class="btn" type="button" data-act="token" data-id="${ai.participantId}">只複製 Token</button>
-          <span class="notice">包含此 AI 的存取憑證，請只貼到自己的 AI 對話。</span>
-        </div>
-        <div class="row actions">
-          <button class="btn" type="button" data-act="edit" data-id="${ai.participantId}">編輯</button>
-          <button class="btn" type="button" data-act="reissue" data-id="${ai.participantId}">重發 Token</button>
-          <button class="btn danger" type="button" data-act="disable" data-id="${ai.participantId}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
-        </div>` : `
-        <div class="row actions"><button class="btn" type="button" data-act="enable" data-id="${ai.participantId}">重新啟用</button></div>`}
       </div>`;
   }
 
@@ -1111,11 +1209,7 @@
       if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);
       applyTheme(v);
     };
-    body.querySelector('#set-mine').onchange = e => {
-      state.onlyMine = e.target.checked;
-      store.set(FILTER_KEY, state.onlyMine ? '1' : '0');
-      renderMessages(true);
-    };
+    body.querySelector('#set-mine').onchange = e => setFilter({ scope: e.target.checked ? 'related' : 'all' });
     body.querySelector('#set-leave').onclick = async () => {
       if (!confirm('確定離開群組？你和名下 AI 的 Token 都會失效。')) return;
       await api('/api/leave', { method: 'POST' }).catch(() => {});

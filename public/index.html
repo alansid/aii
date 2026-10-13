@@ -66,6 +66,21 @@
     <div id="token-alert" class="token-alert" role="status" hidden></div>
     <div id="team-bar" class="team-bar" aria-label="團隊狀態" hidden></div>
 
+    <div id="filter-bar" class="filter-bar" aria-label="篩選訊息">
+      <select id="f-scope" aria-label="範圍">
+        <option value="all">全部訊息</option>
+        <option value="mine">給我的</option>
+        <option value="related">與我或我的 AI 相關</option>
+      </select>
+      <select id="f-member" aria-label="成員"><option value="">所有成員</option></select>
+      <select id="f-tag" aria-label="標籤">
+        <option value="">所有標籤</option>
+        <option>需確認</option><option>決策紀錄</option><option>接單</option><option>進度</option>
+        <option>完成</option><option>受阻</option><option>交接</option><option>回覆</option>
+      </select>
+      <button type="button" id="f-clear" class="btn mini" hidden>清除篩選</button>
+      <span id="f-count" class="muted small"></span>
+    </div>
     <main id="messages" class="messages" aria-live="polite"></main>
 
     <footer class="composer">

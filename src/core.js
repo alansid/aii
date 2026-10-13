@@ -80,7 +80,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < ACTIVE_WINDOW_MS;
 
   function identity(p, people) {
-    const out = { participantId: p.id, name: p.name, role: p.role, shortCode: p.code, memberType: p.kind, environment: p.env || null };
+    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, shortCode: p.code, memberType: p.kind, environment: p.env || null };
     if (p.kind === 'ai') {
       out.ownerParticipantId = p.owner_id;
       out.ownerName = people.get(p.owner_id)?.name ?? null;
