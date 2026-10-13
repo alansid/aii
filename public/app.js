@@ -171,8 +171,8 @@
     }
   });
 
-  function logout(confirmFirst = true) {
-    if (confirmFirst && !confirm('登出後，要用「API 資訊」裡的本人 Token（或其他裝置的 QR Code）才能再登入此身分。建議先複製 Token 保存。確定登出？')) return;
+  async function logout(confirmFirst = true) {
+    if (confirmFirst && !await confirmDialog({ title: '登出？', confirmText: '登出', message: '登出後，要用「API 資訊」裡的本人 Token（或其他裝置的 QR Code）才能再登入此身分。建議先複製 Token 保存。' })) return;
     store.del(TOKEN_KEY);
     state.token = null;
     state.me = null;
@@ -648,24 +648,81 @@
   input.addEventListener('input', () => { pendingRequestId = null; });
 
   // ---------- 對話框 ----------
-  function openModal(title, bodyHtml, { foot = true } = {}) {
-    const root = $('#modal-root');
-    root.innerHTML = `
+  // 共用外框：桌面置中、手機從底部滑出。size：''（560）、'wide'（760）、'form'（640）、'narrow'（440）
+  // actions：標頭 × 左邊的動作鈕；foot：底部按鈕（只有要做決定的彈窗才給）
+  let modalReturnFocus = null;
+  function modalFrame({ title, sub = '', size = '', actions = '', foot = '', body = '' }) {
+    return `
       <div class="overlay">
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-          <div class="modal-head"><h2 id="modal-title">${title}</h2><button class="icon-btn" data-close aria-label="關閉">×</button></div>
-          <div class="modal-body">${bodyHtml}</div>
-          ${foot ? '<div class="modal-foot"><button class="btn" data-close type="button">關閉</button></div>' : ''}
+        <div class="modal ${size}" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+          <div class="modal-head">
+            <div class="modal-titles"><h2 id="modal-title">${title}</h2>${sub ? `<p class="modal-sub">${sub}</p>` : ''}</div>
+            ${actions ? `<div class="modal-actions">${actions}</div>` : ''}
+            <button class="icon-btn modal-x" type="button" data-close aria-label="關閉">×</button>
+          </div>
+          <div class="modal-body">${body}</div>
+          ${foot ? `<div class="modal-foot">${foot}</div>` : ''}
         </div>
       </div>`;
+  }
+  function openModal(title, bodyHtml, opts = {}) {
+    const root = $('#modal-root');
+    if (!root.firstElementChild) modalReturnFocus = document.activeElement;
+    root.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
     const overlay = root.firstElementChild;
     overlay.addEventListener('click', e => {
       if (e.target === overlay || e.target.closest('[data-close]')) closeModal();
     });
-    return overlay.querySelector('.modal-body');
+    const modal = overlay.querySelector('.modal');
+    (modal.querySelector('.modal-body input:not([type=checkbox]), .modal-body select, .modal-body textarea') || modal.querySelector('.modal-x')).focus();
+    const body = overlay.querySelector('.modal-body');
+    body.modal = modal; // 給呼叫端取用標頭與底部按鈕
+    return body;
   }
-  function closeModal() { $('#modal-root').innerHTML = ''; }
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#modal-root').firstElementChild) closeModal(); });
+  function closeModal() {
+    $('#modal-root').innerHTML = '';
+    if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
+    modalReturnFocus = null;
+  }
+  // 確認彈窗：疊在目前彈窗上；回傳 true／false
+  function confirmDialog({ title, message, confirmText = '確認', danger = false }) {
+    return new Promise(resolve => {
+      const prev = document.activeElement;
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({
+        title, size: 'narrow',
+        body: `<div class="confirm-msg${danger ? ' danger' : ''}">${message}</div>`,
+        foot: `<button class="btn" type="button" data-close>取消</button>
+               <button class="btn ${danger ? 'danger' : 'primary'}" type="button" data-ok>${esc(confirmText)}</button>`,
+      });
+      document.body.append(host);
+      const overlay = host.firstElementChild;
+      const done = ok => { host.remove(); if (prev?.isConnected) prev.focus(); resolve(ok); };
+      overlay.addEventListener('click', e => {
+        if (e.target.closest('[data-ok]')) return done(true);
+        if (e.target === overlay || e.target.closest('[data-close]')) done(false);
+      });
+      overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+      overlay.querySelector('[data-ok]').focus();
+    });
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.querySelector('.confirm-root') && $('#modal-root').firstElementChild) closeModal();
+  });
+  // 彈窗內 Tab 不跑出去
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const modal = document.querySelector('.confirm-root .modal') || $('#modal-root .modal');
+    if (!modal) return;
+    const f = [...modal.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      .filter(el => !el.disabled && el.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    else if (!modal.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  });
 
   const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
@@ -763,21 +820,32 @@
     if (!t) return toast('無法取得團隊狀態');
     const rows = t.members.map(mb => {
       const h = health(mb);
-      return `<tr>
-        <td><span class="dot h-${h.cls}"></span> <b>${esc(mb.name)}</b><div class="muted small">${esc(mb.role || '')}${mb.memberType === 'ai' ? ' · AI' : ''}</div></td>
-        <td>${h.text}<div class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</div></td>
-        <td>${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" data-jump-team="${esc(mb.status.messageId)}">${esc(mb.status.title || '（無標題）')}</button>` : '<span class="muted">—</span>'}</td>
-        <td>${mb.pendingCount ? `${mb.pendingCount} 則<div class="muted small">最久 ${agoText(mb.oldestPendingAt)}</div>` : '<span class="muted">0</span>'}</td>
-        <td>${mb.memberType === 'ai' ? `${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' <span class="tag warn">已過期</span>' : mb.tokenExpiringSoon ? ' <span class="tag warn">快到期</span>' : ''}` : '<span class="muted">—</span>'}</td>
-      </tr>`;
+      const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
+      return `<div class="tm-row">
+        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small">${esc(mb.role || '')}${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
+        <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
+        <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" data-jump-team="${esc(mb.status.messageId)}">${esc(mb.status.title || '（無標題）')}</button>` : '<span class="muted">—</span>'}</div>
+        <div class="tm-pend muted small">${mb.pendingCount ? `待處理 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '待處理 0'}</div>
+        <div class="tm-token small ${tokenCls}">${mb.memberType === 'ai' ? `Token ${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' 已過期' : mb.tokenExpiringSoon ? ' 快到期' : ''}` : ''}</div>
+      </div>`;
     }).join('');
     const body = openModal('團隊狀態', `
-      <p class="notice">狀態依每人最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現標示「可能斷線」。</p>
-      <div class="section-title">📝 等你決定（${t.decisions.length}）</div>
-      ${t.decisions.length ? `<ul class="decisions">${t.decisions.map(d => `<li><button type="button" class="link" data-jump-team="${esc(d.messageId)}">${esc(d.title || '（無標題）')}</button> <span class="muted small">— ${esc(d.author.name)} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span> <button type="button" class="btn mini" data-resolve="${esc(d.messageId)}" title="已經決定了，從清單移出">已處理</button></li>`).join('')}</ul>` : '<p class="muted">目前沒有待決定的事項。</p>'}
-      ${t.unanswered.length ? `<div class="section-title">⏰ 尚未回應的指派（${t.unanswered.length}）</div><ul class="decisions">${t.unanswered.map(u => `<li><b>${esc(u.name)}</b> <span class="muted small">已等 ${agoText(u.since).replace('前', '')}</span> <button type="button" class="link" data-jump-team="${esc(u.messageId)}">查看訊息</button></li>`).join('')}</ul>` : ''}
-      <div class="section-title">成員</div>
-      <div class="team-table-wrap"><table class="team-table"><thead><tr><th>成員</th><th>連線</th><th>目前狀態</th><th>待處理</th><th>Token 到期</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+      <details class="help"><summary>狀態怎麼判斷？</summary>
+        <p>依每人最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」；指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」。</p>
+      </details>
+      <div class="group-title">等你決定 · ${t.decisions.length}</div>
+      ${t.decisions.length ? t.decisions.map(d => `
+        <div class="note-card yellow">
+          <div class="note-main"><button type="button" class="link strong" data-jump-team="${esc(d.messageId)}">${esc(d.title || '（無標題）')}</button>
+            <span class="muted small">${esc(d.author.name)} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
+          <button type="button" class="btn small" data-resolve="${esc(d.messageId)}" title="已經決定了，從清單移出">已處理</button>
+        </div>`).join('') : '<p class="muted small">目前沒有待決定的事項。</p>'}
+      ${t.unanswered.length ? `<div class="group-title">尚未回應的指派 · ${t.unanswered.length}</div>
+        ${t.unanswered.map(u => `<div class="note-card red">
+          <div class="note-main"><span><b>${esc(u.name)}</b> <span class="red-text">· 已等 ${agoText(u.since).replace('前', '')}</span></span></div>
+          <button type="button" class="link small" data-jump-team="${esc(u.messageId)}">查看訊息</button></div>`).join('')}` : ''}
+      <div class="group-title">成員</div>
+      <div class="tm-list">${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
     body.addEventListener('click', async e => {
       const j = e.target.closest('[data-jump-team]');
       if (j) { closeModal(); jumpTo(j.dataset.jumpTeam); return; }
@@ -793,32 +861,39 @@
     });
   }
 
-  // 成員名單
+  // 成員名單：分「近期活躍」「離線／閒置」兩組
+  const avatarDot = p => `<span class="avatar-wrap">${avatar(p)}<span class="presence-dot ${p.isOnline ? 'on' : ''}" aria-label="${p.isOnline ? '近期活躍' : '離線或閒置'}"></span></span>`;
   async function openMembers() {
     const items = await loadParticipants();
     const online = items.filter(p => p.isOnline).length;
-    const body = openModal(`已登錄成員名單 (${items.length} 人，近期活躍 ${online})`, `
-      <p class="notice">說明：狀態燈號為 30 秒內活動估計（AI 輪詢或網頁開啟即算活躍），非雙向即時連線。</p>
-      <input id="member-q" type="search" placeholder="搜尋成員姓名、角色或代碼…" aria-label="搜尋成員">
-      <div id="member-list" class="stack"></div>`);
+    const body = openModal('成員名單', `
+      <input id="member-q" type="search" placeholder="搜尋姓名、角色或代碼" aria-label="搜尋成員">
+      <div id="member-list"></div>`, { sub: `${items.length} 人 · 近期活躍 ${online} · 燈號是 30 秒內的活動估計，不是即時連線。` });
+    const row = p => {
+      const self = p.participantId === meId();
+      const line2 = p.memberType === 'ai'
+        ? [`#${p.shortCode}`, 'AI', p.ownerName ? `所屬 ${p.ownerName}` : '', p.environment].filter(Boolean).join(' · ')
+        : [`#${p.shortCode}`, '人類', p.environment].filter(Boolean).join(' · ');
+      return `<div class="mem-row">
+        ${avatarDot(p)}
+        <div class="mem-main">
+          <div class="mem-name"><b>${esc(p.name)}</b><span class="muted small">${esc(p.role || '')}</span></div>
+          <div class="muted small">${esc(line2)}</div>
+          ${p.duties ? `<div class="mem-duty muted small">${esc(p.duties)}</div>` : ''}
+        </div>
+        ${self ? '<span class="self">本人</span>' : `<button class="btn small" type="button" data-mention="${esc(p.name)}">@ 提及</button>`}
+      </div>`;
+    };
     const draw = () => {
       const q = body.querySelector('#member-q').value.trim().toLowerCase();
       const list = [...state.participants.values()]
         .filter(p => !q || [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(q)))
-        .sort((a, b) => (b.isOnline - a.isOnline) || (a.memberType === b.memberType ? 0 : a.memberType === 'human' ? -1 : 1));
-      body.querySelector('#member-list').innerHTML = list.map(p => {
-        const self = p.participantId === meId();
-        return `
-        <div class="card member">
-          <span class="dot ${p.isOnline ? 'on' : ''}"></span>
-          <div class="member-info">
-            <div class="member-name"><b>${esc(p.name)}</b><span class="muted">(${esc(p.role || '—')})</span>${memberTag(p)}${envTag(p)}${self ? '<span class="self">本人</span>' : ''}</div>
-            <div class="member-sub">#${esc(p.shortCode)} · 狀態：${p.isOnline ? '近期活躍 (30s內)' : '離線/閒置'}</div>
-            ${p.duties ? `<div class="member-sub">主要職責：${esc(p.duties)}</div>` : ''}
-          </div>
-          ${self ? '' : `<button class="btn" type="button" data-mention="${esc(p.name)}">@ 提及</button>`}
-        </div>`;
-      }).join('') || '<p class="muted">找不到符合的成員。</p>';
+        .sort((a, b) => (a.participantId === meId() ? -1 : b.participantId === meId() ? 1 : 0) || (a.memberType === b.memberType ? 0 : a.memberType === 'human' ? -1 : 1));
+      const on = list.filter(p => p.isOnline), off = list.filter(p => !p.isOnline);
+      body.querySelector('#member-list').innerHTML = list.length
+        ? (on.length ? `<div class="group-title">近期活躍 · ${on.length}</div>${on.map(row).join('')}` : '')
+          + (off.length ? `<div class="group-title">離線／閒置 · ${off.length}</div>${off.map(row).join('')}` : '')
+        : '<p class="muted">找不到符合的成員。</p>';
     };
     body.querySelector('#member-q').addEventListener('input', draw);
     body.addEventListener('click', e => {
@@ -840,17 +915,17 @@
   }
 
   async function openMyAi() {
-    const body = openModal('我的 AI 管理', `
-      <p class="notice">管理您旗下的 AI 助手。每位 AI 擁有獨立身分、專屬 Token 與通知收件匣。</p>
+    const body = openModal('我的 AI', `
       <div class="row spread">
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI 助手</button>
-        <a href="/api/docs/ai-integration" target="_blank" rel="noopener">檢視 AI 接入規格文件 (Markdown)</a>
+        <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a>
       </div>
-      <div id="ai-list" class="stack"></div>`);
+      <div id="ai-list" class="stack"></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });
     let items = [];
+    const open = new Set();
     async function draw() {
       items = (await api('/api/my-ais')).items;
-      body.querySelector('#ai-list').innerHTML = items.length ? items.map(aiCardHtml).join('')
+      body.querySelector('#ai-list').innerHTML = items.length ? items.map(ai => aiCardHtml(ai, open.has(ai.participantId))).join('')
         : '<p class="muted">還沒有 AI 助手。按「新增 AI 助手」選一個角色範例開始。</p>';
     }
     body.querySelector('#ai-new').onclick = () => openAiForm(null);
@@ -859,7 +934,10 @@
       if (!b) return;
       const ai = items.find(x => x.participantId === b.dataset.id);
       try {
-        if (b.dataset.act === 'copy') {
+        if (b.dataset.act === 'more') {
+          if (open.has(ai.participantId)) open.delete(ai.participantId); else open.add(ai.participantId);
+          b.closest('.ai-card').outerHTML = aiCardHtml(ai, open.has(ai.participantId));
+        } else if (b.dataset.act === 'copy') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`);
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
@@ -869,13 +947,14 @@
         } else if (b.dataset.act === 'edit') {
           openAiForm(ai);
         } else if (b.dataset.act === 'reissue') {
-          if (!confirm(`重發後，${ai.name} 目前的 Token 會立即失效，需要重新「複製到我的 AI」。確定重發？`)) return;
+          if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發',
+            message: `重發後，<b>${esc(ai.name)}</b> 目前的 Token 會立即失效，需要把新 Token 換給它。` })) return;
           const r = await api(`/api/my-ais/${ai.participantId}/reissue`, { method: 'POST' });
-          await draw();
           loadParticipants().catch(() => {});
           openTokenOnly(r);
         } else if (b.dataset.act === 'disable') {
-          if (!confirm(`停用 ${ai.name}？Token 會立即失效，它將無法再讀寫群組。`)) return;
+          if (!await confirmDialog({ title: '停用 AI 助手？', confirmText: '停用', danger: true,
+            message: `停用後 <b>${esc(ai.name)}</b> 的 Token 會立即失效，它將無法再讀寫群組，之後可以重新啟用。` })) return;
           await api(`/api/my-ais/${ai.participantId}/disable`, { method: 'POST' });
           await draw();
         } else if (b.dataset.act === 'enable') {
@@ -891,46 +970,50 @@
   function openTokenOnly(ai) {
     const body = openModal('已重發 Token', `
       <p>${esc(ai.name)} 的舊 Token 已立即失效。新 Token 到期：<b>${fmtTime(ai.expiresAt)}</b></p>
-      <div class="row actions">
-        <button class="btn primary" type="button" id="tok-copy">只複製 Token</button>
-        <button class="btn" type="button" id="tok-full">複製完整接入設定</button>
-      </div>
-      <p class="notice">已接入的 AI：把新 Token 換進它的 Token 檔或環境變數（例如 <code>.token</code>、<code>AIGILE_TOKEN</code>）即可，不必重讀整份設定。也可以直接貼給它：「Token 已更新為 ……，請替換後繼續輪詢」。<br>第一次接入或 AI 已忘記設定時，才用「複製完整接入設定」。</p>`);
-    body.querySelector('#tok-copy').onclick = async () => toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
-    body.querySelector('#tok-full').onclick = async () => {
+      <p class="notice">已接入的 AI：把新 Token 換進它的 Token 檔或環境變數（例如 <code>.token</code>、<code>AIGILE_TOKEN</code>）即可，不必重讀整份設定。也可以直接貼給它：「Token 已更新為 ……，請替換後繼續輪詢」。第一次接入或 AI 已忘記設定時，才用「複製完整接入設定」。</p>`, {
+      size: 'narrow',
+      foot: `<button class="btn" type="button" id="tok-full">複製完整接入設定</button>
+             <button class="btn primary" type="button" id="tok-copy">只複製 Token</button>`,
+    });
+    const m = body.modal;
+    m.querySelector('#tok-copy').onclick = async () => toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
+    m.querySelector('#tok-full').onclick = async () => {
       const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`);
       toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
     };
   }
 
-  function aiCardHtml(ai) {
+  function aiCardHtml(ai, expanded = false) {
     const active = ai.status === 'active';
     const level = tokenLevel(ai.expiresAt);
-    const statusTag = !active ? '<span class="tag off">已停用</span>'
-      : level === 'expired' ? '<span class="tag warn">Token 已過期</span>'
-      : level === '2h' ? '<span class="tag warn">Token 2 小時內到期</span>'
-      : level === '24h' ? '<span class="tag warn">Token 24 小時內到期</span>' : '<span class="tag ok">有效</span>';
+    const expired = level === 'expired';
+    const statusTag = !active ? '<span class="pill-tag grey">已停用</span>'
+      : expired ? '<span class="pill-tag red">Token 已過期</span>'
+      : level === '2h' ? '<span class="pill-tag yellow">Token 2 小時內到期</span>'
+      : level === '24h' ? '<span class="pill-tag yellow">Token 24 小時內到期</span>' : '<span class="pill-tag green">有效</span>';
+    const id = ai.participantId;
     return `
-      <div class="card ai-card">
+      <div class="ai-card">
         <div class="ai-card-head">
           ${avatar(ai)}
           <div class="member-info">
             <div class="member-name"><b>${esc(ai.name)}</b>${statusTag}</div>
-            <div class="member-sub">${esc(ai.role)} #${esc(ai.shortCode)} ${envTag(ai)}
+            <div class="member-sub">${esc([ai.role, '#' + ai.shortCode, ai.environment].filter(Boolean).join(' · '))}
               <span class="ai-online"><span class="dot ${ai.isOnline ? 'on' : ''}"></span>${ai.isOnline ? '在線' : '離線／閒置'}</span></div>
-            <div class="member-sub">Token 到期：${ai.expiresAt ? fmtTime(ai.expiresAt) : '—'}</div>
+            <div class="member-sub ${active && level ? 'warn-text' : ''}">Token 到期：${ai.expiresAt ? fmtTime(ai.expiresAt) : '—'}</div>
           </div>
         </div>
-        ${active ? `
         <div class="row actions">
-          <button class="btn primary" type="button" data-act="token" data-id="${ai.participantId}">只複製 Token</button>
-          <button class="btn" type="button" data-act="reissue" data-id="${ai.participantId}">重發</button>
-        </div>` : `
-        <div class="row actions"><button class="btn" type="button" data-act="enable" data-id="${ai.participantId}">重新啟用</button></div>`}
-        <details class="settings">
-          <summary>詳細／進階</summary>
-          <div class="duties"><b>主要職責：</b>${esc(ai.duties)}</div>
+          ${!active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
+            : expired ? `<button class="btn primary" type="button" data-act="reissue" data-id="${id}">重發 Token</button>`
+            : `<button class="btn primary" type="button" data-act="token" data-id="${id}">只複製 Token</button>
+               <button class="btn" type="button" data-act="reissue" data-id="${id}">重發 Token</button>`}
+          <button type="button" class="link push-right" data-act="more" data-id="${id}" aria-expanded="${expanded}">${expanded ? '收合設定' : '詳細設定'}</button>
+        </div>
+        ${expanded ? `
+        <div class="ai-detail">
           <dl>
+            <dt>主要職責</dt><dd>${esc(ai.duties)}</dd>
             <dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
             <dt>可自主處理的事項</dt><dd>${esc(ai.autonomy)}</dd>
             <dt>必須確認的事項</dt><dd>${esc(ai.mustConfirm)}</dd>
@@ -938,52 +1021,67 @@
           </dl>
           ${active ? `
           <div class="row actions">
-            <button class="btn" type="button" data-act="copy" data-id="${ai.participantId}">複製完整接入設定</button>
-            <button class="btn" type="button" data-act="edit" data-id="${ai.participantId}">編輯</button>
-            <button class="btn danger" type="button" data-act="disable" data-id="${ai.participantId}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
+            <button class="btn small" type="button" data-act="copy" data-id="${id}">複製完整接入設定</button>
+            <button class="btn small" type="button" data-act="edit" data-id="${id}">編輯</button>
+            <button class="btn small danger-outline" type="button" data-act="disable" data-id="${id}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
           </div>
-          <p class="notice">接入設定與 Token 都是此 AI 的存取憑證，請只貼到自己的 AI 對話。</p>` : ''}
-          <p class="muted small">版本 v${ai.version} · 更新時間：${fmtTime(ai.updatedAt)}</p>
-        </details>
+          <p class="muted small">接入設定與 Token 都是此 AI 的存取憑證，請只貼到自己的 AI 對話。</p>` : ''}
+          <p class="muted small">版本 v${ai.version} · 更新時間 ${fmtTime(ai.updatedAt)}</p>
+        </div>` : ''}
       </div>`;
   }
 
   async function openAiForm(ai) {
     const { items: roles, fields, environments = [] } = await loadRoles();
     const editing = !!ai;
+    const envKeys = environments.map(e => e.key);
+    const cur = editing ? (ai.environment || '') : '';
+    const envOpts = [...envKeys, ...(cur && !envKeys.includes(cur) ? [cur] : []), ''];
     const body = openModal(editing ? '編輯 AI 助手' : '新增 AI 助手', `
       <form id="ai-form" class="stack">
-        <label>角色範例選擇（選取後將自動預填六題設定）
+        <label>角色範本
           <select name="roleKey">${roles.map(r => `<option value="${r.key}">${esc(r.option)}</option>`).join('')}</select>
+          <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
         </label>
-        <p class="notice" id="role-hint"></p>
-        <label>角色顯示名稱 (1-30 字)<input name="role" required maxlength="30"></label>
-        <label>所在環境（選取後會在「必須確認的事項」帶入該環境的限制，可再修改）
-          <input name="environment" maxlength="20" list="env-list" placeholder="行內／行外／投信，或自行輸入">
-          <datalist id="env-list">${environments.map(e => `<option value="${esc(e.key)}">`).join('')}</datalist>
-        </label>
-        <div class="section-title">AI 設定六題（皆為必填，不可純空白，每題上限 1000 字）</div>
-        <label>1. AI 名稱（人類名下此 AI 的識別名稱）<input name="name" required maxlength="40"></label>
-        ${fields.map(f => `<label>${esc(f.label)}<textarea name="${f.key}" rows="3" required maxlength="1000"></textarea></label>`).join('')}
-        <p class="error" id="ai-error" role="alert"></p>
-        <div class="row end">
-          <button class="btn" type="button" data-close>取消</button>
-          <button class="btn primary" type="submit">${editing ? '儲存變更' : '建立 AI 助手'}</button>
+        <div class="two-col">
+          <label>角色顯示名稱<input name="role" required maxlength="30"></label>
+          <div class="field">
+            <span class="field-label" id="env-label">所在環境</span>
+            <div class="seg-scope env-seg" role="group" aria-labelledby="env-label">
+              ${envOpts.map(k => `<button type="button" data-env="${esc(k)}" aria-pressed="false">${esc(k || '未設定')}</button>`).join('')}
+            </div>
+            <input type="hidden" name="environment">
+            <span class="field-hint">會在「必須確認的事項」帶入該環境的限制。</span>
+          </div>
         </div>
-      </form>`, { foot: false });
+        <hr>
+        <div><div class="group-title flush">AI 設定六題</div><span class="field-hint">皆為必填，每題上限 1000 字。</span></div>
+        <label>1. AI 名稱<input name="name" required maxlength="40"></label>
+        ${fields.map(f => `<label class="ta-field"><span class="ta-head"><span>${esc(f.label)}</span><span class="counter" data-count="${f.key}">0/1000</span></span><textarea name="${f.key}" rows="4" required maxlength="1000"></textarea></label>`).join('')}
+        <p class="error" id="ai-error" role="alert"></p>
+      </form>`, {
+      size: 'form',
+      foot: `<button class="btn" type="button" data-close>取消</button>
+             <button class="btn primary" type="submit" form="ai-form">${editing ? '儲存變更' : '建立 AI 助手'}</button>`,
+    });
     const form = body.querySelector('#ai-form');
+    const counts = () => { for (const f of fields) body.querySelector(`[data-count="${f.key}"]`).textContent = `${form[f.key].value.length}/1000`; };
+    const setEnv = v => {
+      form.environment.value = v;
+      body.querySelectorAll('[data-env]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.env === v)));
+    };
     const fill = (src, includeName) => {
       form.role.value = src.role;
-      if (src.environment !== undefined) form.environment.value = src.environment;
+      if (src.environment !== undefined) setEnv(src.environment || '');
       if (includeName) form.name.value = src.name;
       for (const f of fields) form[f.key].value = src[f.key];
+      counts();
     };
     const roleHint = key => {
-      const hint = body.querySelector('#role-hint');
-      hint.textContent = editing ? '切換範例會覆蓋下方六題內容（名稱不變）。' : '';
-      hint.hidden = !editing;
+      body.querySelector('#role-hint').textContent = editing ? '切換範本會覆蓋下方六題內容（名稱不變）。' : '選取後自動預填下方六題，可再修改。';
       return roles.find(r => r.key === key);
     };
+    setEnv('');
     if (editing) {
       form.roleKey.value = ai.roleKey || 'custom';
       fill(ai, true);
@@ -993,23 +1091,27 @@
       fill({ ...r, name: `${state.me.name}的${r.suffix}` }, true);
     }
     let lastAutoName = form.name.value;
-    form.roleKey.addEventListener('change', () => {
-      const r = roleHint(form.roleKey.value);
-      const autoName = `${state.me.name}的${r.suffix}`;
-      // 名稱若還是自動產生的就一起換；使用者改過就保留
-      const keepName = editing || form.name.value !== lastAutoName;
-      fill({ ...r, name: autoName }, !keepName);
-      if (!keepName) lastAutoName = autoName;
-    });
     const applyEnvNote = () => {
       let text = form.mustConfirm.value;
       for (const e of environments) text = text.split(e.note).join('');
       text = text.trim();
       const note = environments.find(e => e.key === form.environment.value.trim())?.note;
       form.mustConfirm.value = note ? (text ? text + '\n' + note : note) : text;
+      counts();
     };
-    form.environment.addEventListener('change', applyEnvNote);
-    form.roleKey.addEventListener('change', applyEnvNote); // 換角色範例後補回環境限制
+    form.roleKey.addEventListener('change', () => {
+      const r = roleHint(form.roleKey.value);
+      const autoName = `${state.me.name}的${r.suffix}`;
+      // 名稱若還是自動產生的就一起換；使用者改過就保留
+      const keepName = editing || form.name.value !== lastAutoName;
+      const env = form.environment.value;
+      fill({ ...r, name: autoName }, !keepName);
+      setEnv(env);
+      if (!keepName) lastAutoName = autoName;
+      applyEnvNote(); // 換角色範本後補回環境限制
+    });
+    body.querySelectorAll('[data-env]').forEach(b => b.addEventListener('click', () => { setEnv(b.dataset.env); applyEnvNote(); }));
+    form.addEventListener('input', counts);
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form));
@@ -1018,7 +1120,7 @@
         if (editing) await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data });
         else await api('/api/my-ais', { method: 'POST', body: data });
         await openMyAi();
-        toast(editing ? '已儲存' : '已建立。按「複製到我的 AI」把接入設定貼給你的 AI');
+        toast(editing ? '已儲存' : '已建立。按「只複製 Token」或在詳細設定裡複製完整接入設定給你的 AI');
       } catch (err) { body.querySelector('#ai-error').textContent = err.message; }
     });
   }
@@ -1035,28 +1137,36 @@
   }
 
   async function openInbox() {
-    const body = openModal('通知收件匣', '<div id="inbox-list" class="stack"></div>');
+    const body = openModal('通知', '<div id="inbox-list"></div>', {
+      sub: '<span id="inbox-sub">載入中…</span>',
+      actions: '<button class="btn small" type="button" id="ack-all" hidden>全部標為已處理</button>',
+    });
     const ack = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
+    const ackAll = body.modal.querySelector('#ack-all');
     let ids = [];
     async function draw() {
       const d = await api('/api/notifications?status=pending&limit=100');
       ids = d.items.map(n => n.notificationId);
+      body.modal.querySelector('#inbox-sub').textContent = d.items.length ? `${d.items.length}${d.hasMore ? '+' : ''} 則待處理` : '沒有待處理的通知';
+      ackAll.hidden = !d.items.length;
       const reasonTag = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
-      body.querySelector('#inbox-list').innerHTML = d.items.length ? `
-        <div class="row spread"><span class="muted">${d.items.length}${d.hasMore ? '+' : ''} 則待處理</span><button class="btn" type="button" data-ack-all>全部標為已處理</button></div>
-        ${d.items.map(n => `
-          <div class="card">
-            <div class="row"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reasonTag[r] || '').join('')}
-              <span class="msg-time">${fmtTime(n.createdAt)}</span></div>
-            <div class="msg-text">${esc(n.preview)}</div>
-            <div class="row"><button class="btn" type="button" data-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">查看並標為已處理</button>
-            <button class="btn" type="button" data-ack="${esc(n.notificationId)}">標為已處理</button></div>
-          </div>`).join('')}`
-        : '<p class="muted">沒有待處理的通知。</p>';
+      body.querySelector('#inbox-list').innerHTML = d.items.length ? d.items.map(n => {
+        const who = state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
+        return `
+          <div class="inbox-row">
+            ${avatar(who)}
+            <div class="inbox-main">
+              <div class="inbox-top"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reasonTag[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></div>
+              <div class="inbox-preview">${esc(n.preview)}</div>
+              <div class="row"><button class="btn primary small" type="button" data-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">查看</button>
+                <button class="btn small" type="button" data-ack="${esc(n.notificationId)}">標為已處理</button></div>
+            </div>
+          </div>`;
+      }).join('') : '<p class="muted">沒有待處理的通知。</p>';
     }
-    body.addEventListener('click', async e => {
+    body.modal.addEventListener('click', async e => {
       try {
-        if (e.target.closest('[data-ack-all]')) await ack(ids);
+        if (e.target.closest('#ack-all')) await ack(ids);
         else if (e.target.closest('[data-ack]')) await ack([e.target.closest('[data-ack]').dataset.ack]);
         else if (e.target.closest('[data-goto]')) {
           const g = e.target.closest('[data-goto]');
@@ -1079,6 +1189,10 @@
   const fileIcon = ext => ({ pdf: '📕', docx: '📘', xlsx: '📗', pptx: '📙', png: '🖼️', jpg: '🖼️', jpeg: '🖼️' }[ext] || '📄');
   // 上傳者本人，或上傳者是我名下的 AI → 可刪除
   const canDeleteFile = f => f.uploaderId === meId() || myAiIds().has(f.uploaderId);
+  const leftText = iso => {
+    const min = Math.max(0, Math.round((new Date(iso) - Date.now()) / 60000));
+    return min >= 60 ? `剩 ${Math.floor(min / 60)} 小時 ${min % 60} 分鐘` : `剩 ${min} 分鐘`;
+  };
 
   // 附檔訊息：只顯示上傳者的附註，自動產生的「[文件] …」由卡片呈現
   function fileNoteHtml(text) {
@@ -1097,7 +1211,7 @@
           <span class="muted small">${fmtBytes(f.size)} · 到期 ${fmtTime(f.expiresAt)} · SHA-256 ${esc(f.sha256.slice(0, 12))}…</span>
         </div>
         <button class="btn" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
-        ${canDeleteFile(f) ? `<button class="btn" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
+        ${canDeleteFile(f) ? `<button class="btn danger-outline" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
       </div>`;
   }
 
@@ -1116,7 +1230,7 @@
   }
 
   async function deleteFileById(id) {
-    if (!confirm('確定刪除這個文件？刪除後所有人都無法再下載。')) return false;
+    if (!await confirmDialog({ title: '刪除文件？', confirmText: '刪除', danger: true, message: '刪除後所有人都無法再下載這個文件。' })) return false;
     try {
       await api(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
       toast('已刪除');
@@ -1148,17 +1262,18 @@
     if (!FILE_EXTS.includes(ext)) problem = `不允許的檔案類型「.${ext}」，只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg。`;
     else if (file.size > MAX_FILE) problem = `檔案 ${fmtBytes(file.size)} 超過 2 MB 上限。`;
     const body = openModal('上傳文件', `
-      <div class="file-card"><span class="file-icon">${fileIcon(ext)}</span>
+      <div class="file-box"><span class="file-icon">${fileIcon(ext)}</span>
         <div class="file-info"><b class="file-name">${esc(file.name)}</b><span class="muted small">${fmtBytes(file.size)}</span></div></div>
-      ${problem ? `<p class="error">${esc(problem)}</p>` : `
-      <p class="notice warn">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。</p>
-      <label>附註（選填，可用 @ 指定對象）<textarea id="up-note" rows="2" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></label>
-      <label class="check declare"><input type="checkbox" id="up-declare">我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</label>
-      <p class="error" id="up-error" role="alert"></p>
-      <div class="row end"><button class="btn" type="button" data-close>取消</button>
-        <button class="btn primary" type="button" id="up-go" disabled>上傳</button></div>`}`, { foot: !!problem });
+      ${problem ? `<div class="warn-box red">${esc(problem)}</div>` : `
+      <div class="warn-box">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。</div>
+      <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><textarea id="up-note" rows="3" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></label>
+      <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>
+      <p class="error" id="up-error" role="alert"></p>`}`, problem ? {} : {
+      foot: `<button class="btn" type="button" data-close>取消</button>
+             <button class="btn primary" type="button" id="up-go" disabled>上傳</button>`,
+    });
     if (problem) return;
-    const go = body.querySelector('#up-go');
+    const go = body.modal.querySelector('#up-go');
     body.querySelector('#up-declare').addEventListener('change', e => { go.disabled = !e.target.checked; });
     go.addEventListener('click', async () => {
       go.disabled = true; go.textContent = '上傳中…';
@@ -1184,18 +1299,31 @@
     });
   }
 
-  // 文件分頁：目前檔案、容量、稽核
+  // 文件：目前檔案、容量、稽核
   async function openFiles() {
-    const body = openModal('文件', '<div id="files-list" class="stack"></div>');
+    const body = openModal('文件', '<div id="files-list" class="stack"></div>', {
+      sub: '上傳 1 小時後自動刪除',
+      actions: '<button class="btn small" type="button" id="files-up">上傳</button>',
+    });
+    body.modal.querySelector('#files-up').onclick = () => $('#file-input').click();
     try {
       const d = await api('/api/files');
       const pct = Math.min(100, d.usedBytes / d.limitBytes * 100);
       body.querySelector('#files-list').innerHTML = `
-        <p class="notice">只能上傳文件類（pdf、docx、xlsx、pptx、md、txt、png、jpg，單檔 ≤ 2 MB），禁止程式碼與客戶個資；上傳 1 小時後自動刪除。</p>
+        <p class="muted small">只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg，單檔 2 MB 以內，禁止程式碼與客戶個資。</p>
         <div class="usage"><div class="usage-bar"><span style="width:${pct.toFixed(1)}%"></span></div>
           <span class="muted small">已用 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}</span></div>
-        ${d.items.length ? d.items.map(f => `${fileCardHtml(f)}<div class="muted small file-by">上傳者：${esc(f.uploader?.name || '?')}${f.uploader?.memberType === 'ai' ? '（AI）' : ''} · ${fmtTime(f.createdAt)}</div>`).join('')
-          : '<p class="muted">目前沒有文件。用輸入框旁的 📎 上傳。</p>'}
+        <div class="file-list">${d.items.length ? d.items.map(f => `
+          <div class="file-row">
+            <span class="file-icon" aria-hidden="true">${fileIcon(f.ext)}</span>
+            <div class="file-info">
+              <b class="file-name">${esc(f.name)}</b>
+              <span class="muted small">${fmtBytes(f.size)} · ${leftText(f.expiresAt)}</span>
+              <span class="muted small">${esc(f.uploader?.name || '?')}${f.uploader?.memberType === 'ai' ? '（AI）' : ''} · ${fmtTime(f.createdAt)}</span>
+            </div>
+            <button class="btn small" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
+            ${canDeleteFile(f) ? `<button class="btn small danger-outline" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
+          </div>`).join('') : '<p class="muted">目前沒有文件。按右上角「上傳」或輸入框旁的 📎。</p>'}</div>
         <details class="audit"><summary>稽核紀錄</summary><div id="audit-list" class="muted small">載入中…</div></details>`;
       body.querySelector('details.audit').addEventListener('toggle', async e => {
         if (!e.target.open) return;
@@ -1203,12 +1331,12 @@
         try {
           const a = await api('/api/files/audit?limit=200');
           const label = { upload: '上傳', download: '下載', delete: '刪除', reject: '拒絕', expire: '到期清除' };
-          box.innerHTML = a.items.length ? `<table class="audit-table"><thead><tr><th>時間</th><th>動作</th><th>操作者</th><th>檔名</th><th>大小</th><th>SHA-256</th><th>聲明</th><th>備註</th></tr></thead><tbody>${
+          box.innerHTML = a.items.length ? `<div class="table-scroll"><table class="audit-table"><thead><tr><th>時間</th><th>動作</th><th>操作者</th><th>檔名</th><th>大小</th><th>SHA-256</th><th>聲明</th><th>備註</th></tr></thead><tbody>${
             a.items.map(x => `<tr><td>${fmtTime(x.at)}</td><td>${label[x.action] || x.action}</td>
               <td>${esc(x.actor.name || x.actor.participantId || '')}${x.actor.memberType === 'ai' ? '（AI）' : x.actor.memberType === 'human' ? '（人類）' : ''}</td>
               <td>${esc(x.name || '')}</td><td>${x.size == null ? '' : fmtBytes(x.size)}</td>
               <td>${x.sha256 ? esc(x.sha256.slice(0, 12)) + '…' : ''}</td><td>${x.declared == null ? '' : x.declared ? '✓' : '✗'}</td>
-              <td>${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table>` : '沒有紀錄。';
+              <td>${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></div>` : '沒有紀錄。';
         } catch (err) { box.textContent = err.message; }
       });
     } catch (err) {
@@ -1219,54 +1347,71 @@
   // API 資訊
   function openApi() {
     const base = location.origin;
+    const ep = (m, path, desc) => `<li><span class="method ${m.toLowerCase()}">${m}</span><div><code>${path}</code><span class="muted small">${desc}</span></div></li>`;
     const body = openModal('API 資訊', `
-      <div class="kv">
-        <span>API Base URL</span><code>${esc(base)}</code>
-        <span>本人 participantId</span><code>${esc(meId())}</code>
-        <span>本人 Token（登入用）</span><span class="row"><code id="my-token">••••••••••••</code><button class="btn" type="button" id="tok-show">顯示</button><button class="btn" type="button" id="tok-copy">複製</button></span>
-      </div>
-      <p class="notice warn">這是「你本人」的 Token，等同登入密碼：在其他瀏覽器或裝置的加入畫面選「用 Token 登入」貼上，就能用同一個身分登入。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。</p>
-      <div class="section-title">主要端點</div>
+      <div class="kv-field"><span class="field-label">API Base URL</span>
+        <div class="copy-row"><code class="val">${esc(base)}</code><button class="btn small" type="button" data-copy="${esc(base)}">複製</button></div></div>
+      <div class="kv-field"><span class="field-label">本人 participantId</span>
+        <div class="copy-row"><code class="val">${esc(meId())}</code><button class="btn small" type="button" data-copy="${esc(meId())}">複製</button></div></div>
+      <div class="kv-field"><span class="field-label">本人 Token（登入用）</span>
+        <div class="copy-row"><code class="val" id="my-token">••••••••••••</code><button class="btn small" type="button" id="tok-show">顯示</button><button class="btn small" type="button" id="tok-copy">複製</button></div></div>
+      <div class="warn-box red">這是你本人的 Token，等同登入密碼：在其他裝置選「用 Token 登入」貼上即可用同一身分登入。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。</div>
+      <div class="group-title">主要端點</div>
       <ul class="endpoints">
-        <li><code>GET /api/me</code> 自身身分</li>
-        <li><code>GET /api/participants</code> 有效成員與在線狀態</li>
-        <li><code>GET /api/messages?limit=50&amp;after=&lt;nextCursor&gt;</code> 增量讀取訊息</li>
-        <li><code>GET /api/messages/:messageId</code> 單則訊息</li>
-        <li><code>POST /api/messages</code> 發文（text、requestId、recipientIds、replyToMessageId、audience）</li>
-        <li><code>GET /api/notifications?status=pending&amp;limit=50</code> 待處理通知</li>
-        <li><code>POST /api/notifications/ack</code> 確認通知（notificationIds）</li>
-        <li><code>POST /api/files?name=&amp;declared=true</code> 上傳文件（原始位元組）；<code>GET /api/files</code>、<code>GET /api/files/:id</code> 清單與下載</li>
+        ${ep('GET', '/api/me', '自身身分')}
+        ${ep('GET', '/api/participants', '有效成員與在線狀態')}
+        ${ep('GET', '/api/messages?limit=50&amp;after=&lt;nextCursor&gt;', '增量讀取訊息')}
+        ${ep('GET', '/api/messages/:messageId', '單則訊息')}
+        ${ep('POST', '/api/messages', '發文（text、requestId、recipientIds、replyToMessageId、audience）')}
+        ${ep('GET', '/api/notifications?status=pending&amp;limit=50', '待處理通知')}
+        ${ep('GET', '/api/notifications/count', '未讀通知數')}
+        ${ep('POST', '/api/notifications/ack', '確認通知（notificationIds）')}
+        ${ep('POST', '/api/files?name=&amp;declared=true', '上傳文件（原始位元組）')}
+        ${ep('GET', '/api/files', '文件清單；/api/files/:id 下載')}
       </ul>
-      <p>完整規格：<a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 代理人接入通訊協定指南 (Markdown)</a></p>
-      <div class="section-title">快速測試</div>
+      <p><a href="/api/docs/ai-integration" target="_blank" rel="noopener">完整規格：AI 代理人接入通訊協定指南</a></p>
+      <div class="group-title">快速測試</div>
       <code class="block">curl -H "Authorization: Bearer &lt;TOKEN&gt;" ${esc(base)}/api/me</code>`);
     body.querySelector('#tok-show').onclick = () => { body.querySelector('#my-token').textContent = state.token; };
     body.querySelector('#tok-copy').onclick = async () => toast((await copyText(state.token)) ? '已複製' : '複製失敗');
+    body.addEventListener('click', async e => {
+      const c = e.target.closest('[data-copy]');
+      if (c) toast((await copyText(c.dataset.copy)) ? '已複製' : '複製失敗');
+    });
   }
 
   // 進階設定
   function openSettings() {
     const theme = store.get(THEME_KEY) || 'system';
     const body = openModal('進階設定', `
-      <label>外觀
-        <select id="set-theme">
-          <option value="system" ${theme === 'system' ? 'selected' : ''}>跟隨系統</option>
-          <option value="light" ${theme === 'light' ? 'selected' : ''}>淺色</option>
-          <option value="dark" ${theme === 'dark' ? 'selected' : ''}>深色</option>
-        </select>
-      </label>
-      <label class="check"><input type="checkbox" id="set-mine" ${state.onlyMine ? 'checked' : ''}>只顯示與我或我的 AI 相關的訊息</label>
-      <hr>
-      <p class="notice">離開群組會停用你和你名下的所有 AI，其他成員將看不到你們。</p>
-      <button class="btn danger" type="button" id="set-leave">離開群組</button>`);
-    body.querySelector('#set-theme').onchange = e => {
-      const v = e.target.value;
+      <div class="field"><span class="field-label" id="theme-label">外觀</span>
+        <div class="seg-scope full" role="group" aria-labelledby="theme-label">
+          ${[['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']].map(([k, t]) => `<button type="button" data-theme-opt="${k}" aria-pressed="${theme === k}">${t}</button>`).join('')}
+        </div></div>
+      <div class="switch-row">
+        <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
+        <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
+      </div>
+      <div class="danger-zone">
+        <b>離開群組</b>
+        <p class="muted small">會停用你和你名下的所有 AI，其他成員將看不到你們，Token 全部失效。</p>
+        <button class="btn small danger-outline" type="button" id="set-leave">離開群組</button>
+      </div>`);
+    body.querySelectorAll('[data-theme-opt]').forEach(b => b.addEventListener('click', () => {
+      const v = b.dataset.themeOpt;
       if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);
       applyTheme(v);
+      body.querySelectorAll('[data-theme-opt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    }));
+    const sw = body.querySelector('#set-mine');
+    sw.onclick = () => {
+      const on = sw.getAttribute('aria-checked') !== 'true';
+      sw.setAttribute('aria-checked', String(on));
+      setFilter({ scope: on ? 'related' : 'all' });
     };
-    body.querySelector('#set-mine').onchange = e => setFilter({ scope: e.target.checked ? 'related' : 'all' });
     body.querySelector('#set-leave').onclick = async () => {
-      if (!confirm('確定離開群組？你和名下 AI 的 Token 都會失效。')) return;
+      if (!await confirmDialog({ title: '離開群組？', confirmText: '離開群組', danger: true,
+        message: '你和名下所有 AI 的 Token 都會立即失效，其他成員將看不到你們。' })) return;
       await api('/api/leave', { method: 'POST' }).catch(() => {});
       logout(false);
     };
@@ -1286,7 +1431,7 @@
       <p class="notice">用手機掃描，即可在手機上以「${esc(state.me.name)}」身分登入。此 QR Code 等同密碼，請勿分享。</p>
       <div id="qr" class="qr"></div>
       <button class="btn" type="button" id="qr-copy">複製登入連結</button>
-      <p class="notice">提示：用 localhost 開啟時手機連不到；請改用電腦的區網 IP 開啟本頁後再產生 QR Code。</p>`);
+      <p class="notice">提示：用 localhost 開啟時手機連不到；請改用電腦的區網 IP 開啟本頁後再產生 QR Code。</p>`, { size: 'narrow' });
     body.querySelector('#qr-copy').onclick = async () => toast((await copyText(link)) ? '已複製' : '複製失敗');
     try {
       if (!window.QRCode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js');
