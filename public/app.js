@@ -85,7 +85,9 @@
   applyTheme(store.get(THEME_KEY));
 
   // 文字頭像：AI 用角色代碼（PO、PG…），自訂角色取角色名前兩字；人類取名字第一個字
+  // 自訂頭像文字優先，否則用預設
   function avatarText(p) {
+    if (p.avatar) return p.avatar;
     if (p.memberType === 'ai') return p.roleKey && p.roleKey !== 'custom' ? p.roleKey : [...(p.role || 'AI')].slice(0, 2).join('');
     if (p.memberType === 'system') return '系';
     return [...(p.name || '人')][0];
@@ -181,6 +183,12 @@
   }
   document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
 
+  function drawMe() {
+    const meCard = `${avatar(state.me)}<div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · #${esc(state.me.shortCode)} · 本人</span></div>`;
+    $('#me-line').innerHTML = meCard;
+    $('#sheet-me').innerHTML = meCard;
+  }
+
   // ---------- 啟動 ----------
   async function start() {
     state.me = await api('/api/me');
@@ -193,9 +201,7 @@
     }
     $('#join').hidden = true;
     $('#app').hidden = false;
-    const meCard = `${avatar(state.me)}<div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · #${esc(state.me.shortCode)} · 本人</span></div>`;
-    $('#me-line').innerHTML = meCard;
-    $('#sheet-me').innerHTML = meCard;
+    drawMe();
     await loadParticipants();
     const d = await api('/api/messages?limit=100');
     state.messages = d.items;
@@ -349,7 +355,7 @@
     return `
       <article class="${cls}" id="msg-${esc(m.messageId)}">
         <div class="msg-head">
-          ${avatar(a)}
+          ${avatar(state.participants.get(a.participantId) || a)}
           <div class="msg-who">
             <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time></div>
             <div class="msg-line2">${esc(subLine(a))}</div>
@@ -1044,7 +1050,11 @@
           <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
         </label>
         <div class="two-col">
-          <label>角色顯示名稱<input name="role" required maxlength="30"></label>
+          <div class="field">
+            <label>角色顯示名稱<input name="role" required maxlength="30"></label>
+            <label class="avatar-field">頭像文字<span class="avatar-edit"><span id="ai-avatar-preview"></span><input name="avatar" maxlength="16" placeholder="留白＝角色代碼"></span>
+              <span class="field-hint">最多 2 個字，可用表情符號。</span></label>
+          </div>
           <div class="field">
             <span class="field-label" id="env-label">所在環境</span>
             <div class="seg-scope env-seg" role="group" aria-labelledby="env-label">
@@ -1070,6 +1080,10 @@
       form.environment.value = v;
       body.querySelectorAll('[data-env]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.env === v)));
     };
+    const preview = () => {
+      const r = roles.find(x => x.key === form.roleKey.value);
+      body.querySelector('#ai-avatar-preview').innerHTML = avatar({ memberType: 'ai', roleKey: form.roleKey.value, role: form.role.value || r?.role, avatar: form.avatar.value.trim() });
+    };
     const fill = (src, includeName) => {
       form.role.value = src.role;
       if (src.environment !== undefined) setEnv(src.environment || '');
@@ -1090,6 +1104,8 @@
       const r = roleHint(roles[0].key);
       fill({ ...r, name: `${state.me.name}的${r.suffix}` }, true);
     }
+    if (editing) form.avatar.value = ai.avatar || '';
+    preview();
     let lastAutoName = form.name.value;
     const applyEnvNote = () => {
       let text = form.mustConfirm.value;
@@ -1111,7 +1127,8 @@
       applyEnvNote(); // 換角色範本後補回環境限制
     });
     body.querySelectorAll('[data-env]').forEach(b => b.addEventListener('click', () => { setEnv(b.dataset.env); applyEnvNote(); }));
-    form.addEventListener('input', counts);
+    form.addEventListener('input', () => { counts(); preview(); });
+    form.roleKey.addEventListener('change', preview);
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form));
@@ -1388,6 +1405,11 @@
         <div class="seg-scope full" role="group" aria-labelledby="theme-label">
           ${[['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']].map(([k, t]) => `<button type="button" data-theme-opt="${k}" aria-pressed="${theme === k}">${t}</button>`).join('')}
         </div></div>
+      <div class="field"><span class="field-label">我的頭像</span>
+        <div class="avatar-edit"><span id="me-avatar-preview">${avatar(state.me)}</span>
+          <input id="me-avatar" maxlength="16" value="${esc(state.me.avatar || '')}" placeholder="留白＝名字第一個字" aria-label="頭像文字">
+          <button class="btn small" type="button" id="me-avatar-save">儲存</button></div>
+        <span class="field-hint">最多 2 個字，可用表情符號；所有人看到的頭像都會更新。</span></div>
       <div class="switch-row">
         <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
         <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
@@ -1403,6 +1425,18 @@
       applyTheme(v);
       body.querySelectorAll('[data-theme-opt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     }));
+    const av = body.querySelector('#me-avatar');
+    av.addEventListener('input', () => { body.querySelector('#me-avatar-preview').innerHTML = avatar({ ...state.me, avatar: av.value.trim() }); });
+    body.querySelector('#me-avatar-save').onclick = async () => {
+      try {
+        const r = await api('/api/me', { method: 'PATCH', body: { avatar: av.value.trim() } });
+        state.me.avatar = r.avatar;
+        drawMe();
+        await loadParticipants();
+        renderMessages(false);
+        toast('頭像已更新');
+      } catch (err) { toast(err.message); }
+    };
     const sw = body.querySelector('#set-mine');
     sw.onclick = () => {
       const on = sw.getAttribute('aria-checked') !== 'true';

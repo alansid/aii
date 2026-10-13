@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS participants (
   must_confirm TEXT NOT NULL DEFAULT '',
   handoff TEXT NOT NULL DEFAULT '',
   env TEXT NOT NULL DEFAULT '',            -- 所在環境：行內／行外／投信…
+  avatar TEXT NOT NULL DEFAULT '',         -- 頭像文字（空白＝自動：AI 角色代碼、人類名字首字）
   token TEXT NOT NULL UNIQUE,
   token_expires_at INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',   -- active | disabled

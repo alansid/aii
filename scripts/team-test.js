@@ -113,6 +113,14 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.equal((await call(oldTok, '/api/me')).status, 401, '舊 Token 失效');
     assert.equal((await call(re.token, '/api/me')).status, 200, '新 Token 可用');
     pg.token = re.token;
+    // 頭像文字：人類改自己的、人類改名下 AI 的；最多 2 個字
+    assert.equal((await call(liu.token, '/api/me', 'PATCH', { avatar: '🐱' })).body.avatar, '🐱');
+    assert.equal((await call(liu.token, '/api/me', 'PATCH', { avatar: '太長了' })).status, 400, '超過 2 字');
+    const pgAv = (await call(liu.token, `/api/my-ais/${pg.participantId}`, 'PATCH', { avatar: '工程' })).body;
+    assert.equal(pgAv.avatar, '工程');
+    const avList = (await call(liu.token, '/api/participants')).body.items;
+    assert.equal(avList.find(p => p.participantId === pg.participantId).avatar, '工程', '成員名單帶頭像');
+    assert.equal((await call(liu.token, '/api/me', 'PATCH', { avatar: '' })).body.avatar, null, '清除後回預設');
     // 未讀通知數：只計數，和收件匣筆數一致
     const cnt = (await call(liu.token, '/api/notifications/count')).body.pending;
     assert.equal(cnt, (await call(liu.token, '/api/notifications?status=pending&limit=100')).body.items.length, '通知數一致');

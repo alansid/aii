@@ -38,6 +38,7 @@ function migrate(db) {
     must_confirm: "TEXT NOT NULL DEFAULT ''", handoff: "TEXT NOT NULL DEFAULT ''",
     token_expires_at: 'INTEGER NOT NULL DEFAULT 0',
     env: "TEXT NOT NULL DEFAULT ''",
+    avatar: "TEXT NOT NULL DEFAULT ''",
   });
   add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT' });
   const soon = Date.now() + 24 * 3600_000;

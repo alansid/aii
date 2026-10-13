@@ -686,3 +686,6 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .side-foot { flex: none; position: relative; z-index: 1; background: var(--surface); }
 .modal-body > *, .modal-body .stack > *, .audit { min-width: 0; }
 .tm-state .link { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-align: left; }
+.avatar-edit { display: flex; gap: 8px; align-items: center; }
+.avatar-edit input { flex: 1; min-width: 0; }
+.avatar-field { font-weight: 600; }

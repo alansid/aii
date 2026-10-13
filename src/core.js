@@ -80,7 +80,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < ACTIVE_WINDOW_MS;
 
   function identity(p, people) {
-    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, shortCode: p.code, memberType: p.kind, environment: p.env || null };
+    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, shortCode: p.code, memberType: p.kind, environment: p.env || null };
     if (p.kind === 'ai') {
       out.ownerParticipantId = p.owner_id;
       out.ownerName = people.get(p.owner_id)?.name ?? null;
@@ -393,6 +393,14 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     updatedAt: ai.updated_at,
   });
 
+  // 頭像文字：最多 2 個字（含表情符號），空白代表用預設
+  function readAvatar(v) {
+    const s = String(v ?? '').trim();
+    const n = typeof Intl.Segmenter === 'function' ? [...new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(s)].length : [...s].length;
+    if (n > 2 || s.length > 16) throw invalid('頭像文字最多 2 個字');
+    return s;
+  }
+
   function readSettings(body, current = null) {
     const role = body.role !== undefined ? String(body.role).trim() : current?.role ?? '';
     if (!role || role.length > 30) throw invalid('角色顯示名稱需為 1～30 字');
@@ -400,7 +408,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     if (!ROLES.some(r => r.key === roleKey)) throw invalid('roleKey 不存在');
     const environment = body.environment !== undefined ? String(body.environment ?? '').trim() : current?.environment ?? '';
     if (environment.length > 20) throw invalid('所在環境上限 20 字');
-    const out = { role, roleKey, environment };
+    const avatar = body.avatar !== undefined ? readAvatar(body.avatar) : current?.avatar ?? '';
+    const out = { role, roleKey, environment, avatar };
     for (const f of SETTING_FIELDS) {
       const label = f.label.replace(/^\d\.\s*/, '').replace(/（.*$/, '');
       const v = body[f.key] !== undefined ? String(body[f.key]).trim() : current?.[f.key] ?? '';
@@ -419,9 +428,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const id = randId('p');
     invalidatePeople();
     await db.run(`INSERT INTO participants (id, kind, name, role, role_key, code, owner_id, duties, style, autonomy, must_confirm, handoff,
-      env, token, token_expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      env, avatar, token, token_expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, 'ai', name, s.role, s.roleKey, await newCode(), me.id, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff,
-      s.environment, newToken(), Date.now() + AI_TOKEN_TTL_MS, ts, ts);
+      s.environment, s.avatar, newToken(), Date.now() + AI_TOKEN_TTL_MS, ts, ts);
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', id), await peopleMap(ctx));
   }
 
@@ -429,11 +438,11 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const ai = await myAi(me, id);
     const name = body.name !== undefined ? validateName(body.name) : ai.name;
     await assertNameFree(name, ai.id);
-    const s = readSettings(body, { role: ai.role, ...settingsOf(ai) });
+    const s = readSettings(body, { role: ai.role, avatar: ai.avatar || '', ...settingsOf(ai) });
     invalidatePeople();
     await db.run(`UPDATE participants SET name = ?, role = ?, role_key = ?, duties = ?, style = ?, autonomy = ?, must_confirm = ?,
-      handoff = ?, env = ?, version = version + 1, updated_at = ? WHERE id = ?`,
-      name, s.role, s.roleKey, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff, s.environment, nowIso(), ai.id);
+      handoff = ?, env = ?, avatar = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+      name, s.role, s.roleKey, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff, s.environment, s.avatar, nowIso(), ai.id);
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', ai.id), await peopleMap(ctx));
   }
 
@@ -582,6 +591,15 @@ ${roster}
     expiresAt: iso(me.token_expires_at),
     ...(me.kind === 'ai' ? { settings: settingsOf(me) } : {}),
   })));
+  // 更新自己的頭像文字（人類與 AI 皆可）
+  route('PATCH', '/api/me', async ({ me, req, ctx }) => {
+    const body = await readJson(req);
+    if (body.avatar === undefined) throw invalid('目前只能更新 avatar');
+    const avatar = readAvatar(body.avatar);
+    invalidatePeople();
+    await db.run('UPDATE participants SET avatar = ?, updated_at = ? WHERE id = ?', avatar, nowIso(), me.id);
+    return identity({ ...me, avatar }, await peopleMap(ctx));
+  });
   route('GET', '/api/participants', async ({ ctx }) => {
     const people = await peopleMap(ctx);
     const now = Date.now();

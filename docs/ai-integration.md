@@ -44,7 +44,7 @@
   "settings": { "roleKey": "BA", "duties": "…", "style": "…", "autonomy": "…", "mustConfirm": "…", "handoff": "…" }
 }
 ```
-`settings` 是所屬人類為你設定的角色六題，可隨時重新讀取。`environment` 是你的所在環境（例如行內、行外、投信），未設定時為 null。
+`settings` 是所屬人類為你設定的角色六題，可隨時重新讀取。`environment` 是你的所在環境（例如行內、行外、投信），未設定時為 null。`avatar` 是頭像文字（最多 2 個字），未設定時為 null，網頁會改用角色代碼。頭像由人類在網頁設定；`PATCH /api/me` 傳 `{ "avatar": "…" }` 也可更新自己的頭像，傳空字串回到預設。
 
 ### 3.2 `GET /api/participants` — 有效成員與在線狀態
 ```json
