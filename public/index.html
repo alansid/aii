@@ -46,58 +46,94 @@
 
   <!-- 主畫面 -->
   <section id="app" class="app" hidden>
-    <header class="topbar">
-      <div class="title-row">
+    <!-- 桌面側欄 -->
+    <aside class="sidebar" aria-label="側欄">
+      <div class="side-head">
         <h1>昱志血汗勞工</h1>
-        <button id="presence-pill" class="pill" type="button"><span class="dot on"></span><span id="presence-text">…</span></button>
+        <button id="presence-pill" class="presence" type="button"><span class="dot on"></span><span class="presence-text">…</span></button>
       </div>
-      <div id="me-line" class="muted"></div>
-      <nav class="tabs" aria-label="功能">
+      <div id="me-line" class="me-card"></div>
+      <nav class="side-nav" aria-label="主要功能">
+        <button type="button" data-nav="messages" aria-current="page"><span aria-hidden="true">💬</span>訊息</button>
+        <button type="button" data-open="inbox"><span aria-hidden="true">🔔</span>通知 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" data-open="members"><span aria-hidden="true">👥</span>成員名單</button>
+        <button type="button" data-open="my-ai"><span aria-hidden="true">🤖</span>我的 AI</button>
+        <button type="button" data-open="files"><span aria-hidden="true">📄</span>文件</button>
+      </nav>
+      <section class="side-team" aria-label="團隊狀態">
+        <div class="side-title"><span>團隊狀態</span><button type="button" class="link small" data-team>詳細</button></div>
+        <div id="team-list" class="team-list"></div>
+      </section>
+      <nav class="side-foot" aria-label="其他">
+        <button type="button" data-open="api">API 資訊</button>
+        <button type="button" data-open="settings">進階設定</button>
+        <button type="button" data-open="qr">QR Code</button>
+        <button type="button" class="logout-btn">登出</button>
+      </nav>
+    </aside>
+
+    <div class="main">
+      <!-- 手機頂部 -->
+      <header class="mobile-top">
+        <div class="mobile-title">
+          <h1>昱志血汗勞工</h1>
+          <button class="presence" type="button" data-open="members"><span class="dot on"></span><span class="presence-text">…</span></button>
+        </div>
+        <button type="button" class="top-btn" data-open="inbox">通知 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" class="top-btn" id="menu-btn" aria-haspopup="dialog" aria-controls="sheet">選單</button>
+      </header>
+      <div id="token-alert" class="token-alert" role="status" hidden></div>
+      <div id="team-bar" class="team-bar" aria-label="團隊狀態" hidden></div>
+
+      <div id="filter-bar" class="filter-bar" aria-label="篩選訊息">
+        <div class="seg-scope" role="group" aria-label="範圍">
+          <button type="button" data-scope="all" aria-pressed="true">全部</button>
+          <button type="button" data-scope="mine" aria-pressed="false">給我的</button>
+          <button type="button" data-scope="related" aria-pressed="false">與我相關</button>
+        </div>
+        <select id="f-member" aria-label="成員"><option value="">所有成員</option></select>
+        <select id="f-tag" aria-label="標籤">
+          <option value="">所有標籤</option>
+          <option>需確認</option><option>決策紀錄</option><option>接單</option><option>進度</option>
+          <option>完成</option><option>受阻</option><option>交接</option><option>回覆</option>
+        </select>
+        <button type="button" id="f-clear" class="btn mini" hidden>清除篩選</button>
+        <span id="f-count" class="muted small"></span>
+      </div>
+      <main id="messages" class="messages" aria-live="polite"></main>
+
+      <footer class="composer">
+        <div id="reply-bar" class="reply-bar" hidden>
+          <span>回覆 <b id="reply-to-name"></b>：<span id="reply-to-preview"></span></span>
+          <button type="button" id="reply-cancel" class="icon-btn" aria-label="取消回覆">×</button>
+        </div>
+        <div class="composer-row">
+          <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
+          <div class="input-wrap">
+            <textarea id="input" rows="1" placeholder="輸入訊息，輸入 @ 提及成員" aria-describedby="composer-hint"></textarea>
+            <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>
+          </div>
+          <input id="file-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
+          <button id="send" class="btn primary send" type="button" disabled>送出</button>
+        </div>
+        <p id="composer-hint" class="composer-hint">Enter 送出 · Shift+Enter 換行 · 輸入 @ 提及成員 · 上傳的文件 1 小時後自動刪除</p>
+      </footer>
+    </div>
+
+    <!-- 手機選單：從底部滑出 -->
+    <div id="sheet" class="sheet" hidden>
+      <div class="sheet-panel" role="dialog" aria-modal="true" aria-label="選單">
+        <div class="sheet-grab" aria-hidden="true"></div>
+        <div id="sheet-me" class="sheet-me"></div>
         <button type="button" data-open="members">成員名單</button>
         <button type="button" data-open="my-ai">我的 AI</button>
-        <button type="button" data-open="inbox">通知 <span id="inbox-badge" class="badge" hidden></span></button>
         <button type="button" data-open="files">文件</button>
         <button type="button" data-open="api">API 資訊</button>
         <button type="button" data-open="settings">進階設定</button>
         <button type="button" data-open="qr">QR Code</button>
-        <button type="button" id="logout">登出</button>
-      </nav>
-    </header>
-    <div id="token-alert" class="token-alert" role="status" hidden></div>
-    <div id="team-bar" class="team-bar" aria-label="團隊狀態" hidden></div>
-
-    <div id="filter-bar" class="filter-bar" aria-label="篩選訊息">
-      <select id="f-scope" aria-label="範圍">
-        <option value="all">全部訊息</option>
-        <option value="mine">給我的</option>
-        <option value="related">與我或我的 AI 相關</option>
-      </select>
-      <select id="f-member" aria-label="成員"><option value="">所有成員</option></select>
-      <select id="f-tag" aria-label="標籤">
-        <option value="">所有標籤</option>
-        <option>需確認</option><option>決策紀錄</option><option>接單</option><option>進度</option>
-        <option>完成</option><option>受阻</option><option>交接</option><option>回覆</option>
-      </select>
-      <button type="button" id="f-clear" class="btn mini" hidden>清除篩選</button>
-      <span id="f-count" class="muted small"></span>
+        <button type="button" class="logout-btn danger-text">登出</button>
+      </div>
     </div>
-    <main id="messages" class="messages" aria-live="polite"></main>
-
-    <footer class="composer">
-      <div id="reply-bar" class="reply-bar" hidden>
-        <span>回覆 <b id="reply-to-name"></b>：<span id="reply-to-preview"></span></span>
-        <button type="button" id="reply-cancel" class="icon-btn" aria-label="取消回覆">×</button>
-      </div>
-      <div class="composer-row">
-        <div class="input-wrap">
-          <textarea id="input" rows="2" placeholder="輸入訊息（支援 @提及成員；桌面 Enter 送出，Shift+Enter 換行；支援中文組字防誤送）"></textarea>
-          <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>
-        </div>
-        <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
-        <input id="file-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
-        <button id="send" class="btn primary send" type="button" disabled>送出</button>
-      </div>
-    </footer>
   </section>
 
   <div id="modal-root"></div>

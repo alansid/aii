@@ -179,7 +179,7 @@
     clearTimeout(pollTimer);
     location.replace('/');
   }
-  $('#logout').addEventListener('click', () => logout(true));
+  document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
 
   // ---------- 啟動 ----------
   async function start() {
@@ -193,7 +193,9 @@
     }
     $('#join').hidden = true;
     $('#app').hidden = false;
-    $('#me-line').innerHTML = `本人：<b>${esc(state.me.name)}</b> (${esc(state.me.role || '未設定')}) #${esc(state.me.shortCode)}`;
+    const meCard = `${avatar(state.me)}<div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · #${esc(state.me.shortCode)} · 本人</span></div>`;
+    $('#me-line').innerHTML = meCard;
+    $('#sheet-me').innerHTML = meCard;
     await loadParticipants();
     const d = await api('/api/messages?limit=100');
     state.messages = d.items;
@@ -210,7 +212,7 @@
     const d = await api('/api/participants');
     state.participants = new Map(d.items.map(p => [p.participantId, p]));
     const online = d.items.filter(p => p.isOnline).length;
-    $('#presence-text').textContent = `${d.items.length} 人在群 (活躍估計 ${online})`;
+    document.querySelectorAll('.presence-text').forEach(el => { el.textContent = `${d.items.length} 人在群 · 近期活躍 ${online}`; });
     drawTokenAlert(d.items);
     syncFilterBar();
     return d.items;
@@ -233,9 +235,13 @@
     if (!mine.length) return;
     const word = { expired: '已過期', '2h': '2 小時內到期', '24h': '24 小時內到期' };
     box.className = 'token-alert' + (mine.some(x => x.level !== '24h') ? ' urgent' : '');
-    box.innerHTML = `🔑 你的 AI Token：${mine.map(x => `<b>${esc(x.p.name)}</b> ${word[x.level]}（${fmtTime(x.p.expiresAt)}）`).join('、')}
-      <button type="button" class="btn mini">到「我的 AI」重發</button>`;
-    box.querySelector('button').onclick = () => openMyAi();
+    const key = mine.map(x => x.p.participantId + x.level).join();
+    if (state.tokenAlertDismissed === key) { box.hidden = true; return; }
+    box.innerHTML = `<span class="token-alert-text">你的 AI ${mine.map(x => `「${esc(x.p.name)}」Token ${word[x.level]}（${fmtTime(x.p.expiresAt)}）`).join('、')}，到期後 AI 會停止連線。</span>
+      <button type="button" class="btn alert-btn">重發 Token</button>
+      <button type="button" class="icon-btn alert-close" aria-label="關閉提醒">×</button>`;
+    box.querySelector('.alert-btn').onclick = () => openMyAi();
+    box.querySelector('.alert-close').onclick = () => { state.tokenAlertDismissed = key; box.hidden = true; };
   }
 
   // 輪詢：前景每 3 秒拉新訊息，背景分頁放慢到 15 秒；成員與通知數每 15 秒更新
@@ -292,12 +298,43 @@
   };
   const myAiIds = () => new Set([...state.participants.values()].filter(p => p.ownerParticipantId === meId()).map(p => p.participantId));
 
-  function renderText(text) {
+  function renderText(text, withLead = false) {
+    let lead = '';
+    if (withLead) {
+      const t = String(text).match(/^\s*\[([^\]\n]{1,40})\]\s?/);
+      if (t) { lead = leadPill(t[1]); text = text.slice(t[0].length); }
+    }
     let html = esc(text);
     const names = [...state.participants.values()].map(p => p.name).concat(ALL.name).sort((a, b) => b.length - a.length);
     for (const n of names) html = html.split('@' + esc(n)).join(`\u0000@${esc(n)}\u0001`);
     html = html.replace(/\u0000/g, '<span class="mention">').replace(/\u0001/g, '</span>');
-    return html.replace(/\bhttps?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+    // 網址轉連結；網址以外的 40 碼 SHA 只顯示前 7 碼，點一下複製完整值
+    return lead + html.split(/(\bhttps?:\/\/[^\s<]+)/).map((part, i) => i % 2
+      ? `<a href="${part}" target="_blank" rel="noopener">${part}</a>`
+      : part.replace(/\b[0-9a-f]{40}\b/g, h => `<button type="button" class="sha" data-sha="${h}" title="${h}（點一下複製）">${h.slice(0, 7)}</button>`)).join('');
+  }
+
+  // 第二行：AI 寫成「角色 · AI · 所屬人 · 所在環境」
+  function subLine(a) {
+    if (a.memberType === 'ai') return [a.role, 'AI', a.ownerName, a.environment].filter(Boolean).join(' · ');
+    if (a.memberType === 'system') return '系統';
+    return [a.role || '人類', a.environment].filter(Boolean).join(' · ');
+  }
+  function statusTags(m, toMe, replyMe) {
+    const tags = [
+      m.audience === 'all' ? '<span class="tag all">全體通知</span>' : '',
+      toMe && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '',
+      replyMe && !isMine(m) ? '<span class="tag reply">回覆我</span>' : '',
+      toMyAi(m) ? '<span class="tag my-ai">給我的 AI</span>' : '',
+      unansweredTag(m),
+    ].filter(Boolean);
+    return tags.length ? `<div class="msg-tags">${tags.join('')}</div>` : '';
+  }
+  // 訊息開頭的 [接單]、[完成]… 改成彩色小標籤
+  function leadPill(tag) {
+    const kind = /受阻/.test(tag) ? 'red' : /需確認|需協助/.test(tag) ? 'orange' : /決策紀錄/.test(tag) ? 'grey'
+      : /完成|已部署|已 ?push/.test(tag) ? 'green' : /接單|進度|交接/.test(tag) ? 'blue' : 'light';
+    return `<span class="lead lead-${kind}">${esc(tag)}</span>`;
   }
 
   function messageHtml(m) {
@@ -313,36 +350,28 @@
       <article class="${cls}" id="msg-${esc(m.messageId)}">
         <div class="msg-head">
           ${avatar(a)}
-          <div class="msg-meta">
-            <span class="msg-author">${esc(a.name)}</span>
-            <span class="muted small">${esc(a.role || '')} #${esc(a.shortCode)}</span>${envTag(a)}
-            <span class="muted small seq">(seq: ${m.sequence})</span>
-            ${memberTag(a)}
-            ${m.audience === 'all' ? '<span class="tag all">全體通知</span>' : ''}
-            ${toMe && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : ''}
-            ${replyMe && !isMine(m) ? '<span class="tag reply">回覆我</span>' : ''}
-            ${toMyAi(m) ? '<span class="tag my-ai">給我的 AI</span>' : ''}
-            ${unansweredTag(m)}
-          </div>
-          <div class="msg-side">
-            <span class="msg-time">${fmtTime(m.createdAt)}</span>
-            <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+          <div class="msg-who">
+            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time></div>
+            <div class="msg-line2">${esc(subLine(a))}</div>
           </div>
         </div>
-        ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">引用訊息 (${esc(shortId(m.replyToMessageId))})${parent ? `　${esc(parent.author.name)}：${esc(parent.text.slice(0, 80))}` : ''}</button>` : ''}
-        ${recipients ? `<div class="recipients">指定對象: ${recipients}</div>` : ''}
+        ${statusTags(m, toMe, replyMe)}
+        ${recipients ? `<div class="recipients"><span class="muted">給</span> ${recipients}</div>` : ''}
+        ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
         ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : textHtml(m)}
-        ${threadToggle(m)}
+        <div class="msg-foot">
+          <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+          ${!m.file && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
+          ${threadToggle(m)}
+        </div>
       </article>`;
   }
 
   // 長訊息預設折疊（超過 6 行或 400 字）
   const isLong = t => t.split('\n').length > 6 || t.length > 400;
   function textHtml(m) {
-    if (!isLong(m.text)) return `<div class="msg-text">${renderText(m.text)}</div>`;
-    const open = state.expanded.has(m.messageId);
-    return `<div class="msg-text${open ? '' : ' clamp'}">${renderText(m.text)}</div>
-      <button type="button" class="link more" data-more="${esc(m.messageId)}">${open ? '收合' : '展開全文'}</button>`;
+    const clamp = isLong(m.text) && !state.expanded.has(m.messageId);
+    return `<div class="msg-text${clamp ? ' clamp' : ''}">${renderText(m.text, true)}</div>`;
   }
   // 回覆串：已載入的直接回覆數，可收合
   const repliesOf = id => state.messages.filter(x => x.replyToMessageId === id);
@@ -378,7 +407,7 @@
   const filtering = () => state.filter.scope !== 'all' || state.filter.member || state.filter.tag;
   function syncFilterBar() {
     const f = state.filter;
-    $('#f-scope').value = f.scope;
+    document.querySelectorAll('[data-scope]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === f.scope)));
     $('#f-tag').value = f.tag;
     const sel = $('#f-member');
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled').sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
@@ -393,7 +422,7 @@
     syncFilterBar();
     renderMessages(true);
   }
-  $('#f-scope').onchange = e => setFilter({ scope: e.target.value });
+  document.querySelectorAll('[data-scope]').forEach(b => { b.onclick = () => setFilter({ scope: b.dataset.scope }); });
   $('#f-member').onchange = e => setFilter({ member: e.target.value });
   $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
   $('#f-clear').onclick = () => setFilter({ scope: 'all', member: '', tag: '' });
@@ -450,6 +479,8 @@
     if (r) return setReply(state.byId.get(r.dataset.reply));
     const j = e.target.closest('[data-jump]');
     if (j) return jumpTo(j.dataset.jump);
+    const sha = e.target.closest('[data-sha]');
+    if (sha) return copyText(sha.dataset.sha).then(ok => toast(ok ? '已複製完整 SHA' : '複製失敗'));
     const more = e.target.closest('[data-more]');
     if (more) {
       const id = more.dataset.more;
@@ -637,7 +668,19 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#modal-root').firstElementChild) closeModal(); });
 
   const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
-  document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openers[b.dataset.open]()));
+  document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
+  document.querySelector('[data-nav="messages"]').addEventListener('click', () => { scrollBottom(); $('#input').focus(); });
+  // 手機選單（底部滑出）
+  const sheet = $('#sheet');
+  function openSheet() { sheet.hidden = false; $('#menu-btn').setAttribute('aria-expanded', 'true'); sheet.querySelector('.sheet-panel > button').focus(); }
+  function closeSheet(refocus = true) {
+    if (sheet.hidden) return;
+    sheet.hidden = true; $('#menu-btn').setAttribute('aria-expanded', 'false');
+    if (refocus) $('#menu-btn').focus();
+  }
+  $('#menu-btn').addEventListener('click', openSheet);
+  sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
+  sheet.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
   $('#presence-pill').addEventListener('click', openMembers);
 
   // ---------- 團隊狀態 ----------
@@ -686,7 +729,7 @@
   function renderTeamBar() {
     const t = state.team;
     const bar = $('#team-bar');
-    if (!t) { bar.hidden = true; return; }
+    if (!t) { bar.hidden = true; $('#team-list').innerHTML = ''; return; }
     const chips = t.members.map(mb => {
       const h = health(mb);
       const st = mb.status ? STATE_LABEL[mb.status.state] : '';
@@ -697,11 +740,22 @@
         <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
       </button>`;
     }).join('');
-    const dec = t.decisions.length ? `<button type="button" class="chip decide" data-team>📝 等你決定 ${t.decisions.length}</button>` : '';
+    const dec = t.decisions.length ? `<button type="button" class="chip decide" data-team>等你決定 ${t.decisions.length}</button>` : '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;
+    // 側欄：兩行清單（名稱／最後上線 · 環境），狀態靠右
+    const rows = t.members.map(mb => {
+      const h = health(mb);
+      const st = mb.status ? STATE_LABEL[mb.status.state] : '';
+      const sub = [mb.memberType === 'ai' || !mb.isOnline ? (h.cls === 'green' || h.cls === 'grey' ? agoText(mb.lastSeenAt) : h.text) : '在線', mb.environment].filter(Boolean).join(' · ');
+      return `<button type="button" class="team-row h-${h.cls}" data-team title="${esc(mb.status ? `${st}：${mb.status.title}` : mb.name)}">
+        <span class="dot"></span><span class="team-row-main"><b>${esc(mb.name)}</b><span>${esc(sub)}</span></span>
+        ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
+      </button>`;
+    }).join('');
+    $('#team-list').innerHTML = (t.decisions.length ? `<button type="button" class="decide-row" data-team><span>等你決定</span><b>${t.decisions.length}</b></button>` : '') + rows;
   }
-  $('#team-bar').addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
+  for (const el of [$('#team-bar'), $('#team-list'), $('.side-title')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
 
   async function openTeam() {
     await loadTeam();
@@ -973,9 +1027,10 @@
   async function refreshInboxCount() {
     try {
       const { pending } = await api('/api/notifications/count');
-      const b = $('#inbox-badge');
-      b.hidden = !pending;
-      b.textContent = pending > 99 ? '99+' : pending;
+      document.querySelectorAll('.inbox-badge').forEach(b => {
+        b.hidden = !pending;
+        b.textContent = pending > 99 ? '99+' : pending;
+      });
     } catch {}
   }
 
