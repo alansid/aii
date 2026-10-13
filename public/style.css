@@ -689,3 +689,14 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .avatar-edit { display: flex; gap: 8px; align-items: center; }
 .avatar-edit input { flex: 1; min-width: 0; }
 .avatar-field { font-weight: 600; }
+
+/* UX 複驗修正：深色 urgent 提醒、紅框按鈕 hover；團隊狀態欄寬不被內容撐開 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .token-alert.urgent { background:#3d1c19; color:#f5b5ad; border-bottom-color:#6b2a24; }
+  :root:not([data-theme="light"]) .btn.danger-outline:hover { background:#3d1c19; }
+}
+:root[data-theme="dark"] .token-alert.urgent { background:#3d1c19; color:#f5b5ad; border-bottom-color:#6b2a24; }
+:root[data-theme="dark"] .btn.danger-outline:hover { background:#3d1c19; }
+:root[data-theme="light"] .token-alert.urgent { background:#fdecea; color:#8a1c13; border-bottom-color:#f2b8b2; }
+.tm-row { grid-template-columns: minmax(0,1.4fr) minmax(0,1fr) minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr); }
+@media (max-width: 899px) { .tm-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } }
