@@ -80,7 +80,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < ACTIVE_WINDOW_MS;
 
   function identity(p, people) {
-    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, shortCode: p.code, memberType: p.kind, environment: p.env || null };
+    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null };
     if (p.kind === 'ai') {
       out.ownerParticipantId = p.owner_id;
       out.ownerName = people.get(p.owner_id)?.name ?? null;
@@ -591,6 +591,44 @@ ${roster}
     expiresAt: iso(me.token_expires_at),
     ...(me.kind === 'ai' ? { settings: settingsOf(me) } : {}),
   })));
+  // 頭像圖片：網頁先裁成 256×256 再上傳；只收 png／jpeg／webp，200 KB 以內
+  const AVATAR_MAX = 200 * 1024;
+  function avatarMime(b) {
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'image/webp';
+    return null;
+  }
+  async function putAvatar(ctx, target, req) {
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (!bytes.length) throw invalid('沒有收到圖片');
+    if (bytes.length > AVATAR_MAX) throw invalid('頭像圖片超過 200 KB，請先縮小');
+    const mime = avatarMime(bytes);
+    if (!mime) throw invalid('頭像只接受 png、jpg、webp 圖片');
+    const ts = nowIso();
+    await db.run('INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', target.id, mime, bytes, ts);
+    invalidatePeople();
+    await db.run('UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', Date.now(), ts, target.id);
+    return identity(await db.get('SELECT * FROM participants WHERE id = ?', target.id), await peopleMap(ctx));
+  }
+  async function deleteAvatar(ctx, target) {
+    await db.run('DELETE FROM avatars WHERE participant_id = ?', target.id);
+    invalidatePeople();
+    await db.run('UPDATE participants SET avatar_v = 0, updated_at = ? WHERE id = ?', nowIso(), target.id);
+    return identity(await db.get('SELECT * FROM participants WHERE id = ?', target.id), await peopleMap(ctx));
+  }
+  route('PUT', '/api/me/avatar', ({ me, req, ctx }) => putAvatar(ctx, me, req));
+  route('DELETE', '/api/me/avatar', ({ me, ctx }) => deleteAvatar(ctx, me));
+  route('PUT', '/api/my-ais/:id/avatar', async ({ me, req, params, ctx }) => { requireHuman(me); return putAvatar(ctx, await myAi(me, params.id), req); });
+  route('DELETE', '/api/my-ais/:id/avatar', async ({ me, params, ctx }) => { requireHuman(me); return deleteAvatar(ctx, await myAi(me, params.id)); });
+  // 讀圖：網址帶版本號（?v=），瀏覽器可長期快取，不會每次輪詢都讀資料庫
+  route('GET', '/api/avatars/:id', async ({ params }) => {
+    const a = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', params.id);
+    if (!a) throw new ApiError(404, 'NOT_FOUND', '沒有頭像圖片');
+    const bytes = a.data instanceof Uint8Array ? a.data : new Uint8Array(a.data);
+    return new Response(bytes, { headers: { 'Content-Type': a.mime, 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } });
+  });
+
   // 更新自己的頭像文字（人類與 AI 皆可）
   route('PATCH', '/api/me', async ({ me, req, ctx }) => {
     const body = await readJson(req);

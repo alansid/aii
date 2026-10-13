@@ -121,6 +121,18 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     const avList = (await call(liu.token, '/api/participants')).body.items;
     assert.equal(avList.find(p => p.participantId === pg.participantId).avatar, '工程', '成員名單帶頭像');
     assert.equal((await call(liu.token, '/api/me', 'PATCH', { avatar: '' })).body.avatar, null, '清除後回預設');
+    // 頭像圖片：上傳、讀取、格式檢查、刪除
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const putImg = (tok, path, body, type = 'image/png') => fetch(BASE + path, { method: 'PUT', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': type }, body }).then(async r => ({ status: r.status, body: await r.json() }));
+    const up = await putImg(liu.token, '/api/me/avatar', png);
+    assert.equal(up.status, 200); assert.ok(up.body.avatarImg, '有圖片版本');
+    const got = await fetch(BASE + '/api/avatars/' + up.body.participantId, { headers: { Authorization: 'Bearer ' + liu.token } });
+    assert.equal(got.headers.get('content-type'), 'image/png');
+    assert.deepEqual(new Uint8Array(await got.arrayBuffer()), png, '讀回相同內容');
+    assert.equal((await putImg(liu.token, '/api/me/avatar', new TextEncoder().encode('<svg/>'), 'image/svg+xml')).status, 400, '拒絕非 png/jpg/webp');
+    assert.equal((await putImg(liu.token, `/api/my-ais/${pg.participantId}/avatar`, png)).status, 200, '可替名下 AI 上傳');
+    assert.equal((await putImg(pg.token, `/api/my-ais/${pg.participantId}/avatar`, png)).status, 403, 'AI 不能用 my-ais');
+    assert.equal((await call(liu.token, '/api/me/avatar', 'DELETE')).body.avatarImg, null, '刪除後回文字頭像');
     // 未讀通知數：只計數，和收件匣筆數一致
     const cnt = (await call(liu.token, '/api/notifications/count')).body.pending;
     assert.equal(cnt, (await call(liu.token, '/api/notifications?status=pending&limit=100')).body.items.length, '通知數一致');

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS participants (
   handoff TEXT NOT NULL DEFAULT '',
   env TEXT NOT NULL DEFAULT '',            -- 所在環境：行內／行外／投信…
   avatar TEXT NOT NULL DEFAULT '',         -- 頭像文字（空白＝自動：AI 角色代碼、人類名字首字）
+  avatar_v INTEGER NOT NULL DEFAULT 0,     -- 頭像圖片版本（0＝沒有圖片；圖片存在 avatars）
   token TEXT NOT NULL UNIQUE,
   token_expires_at INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',   -- active | disabled
@@ -92,6 +93,14 @@ CREATE TABLE IF NOT EXISTS file_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_participants_owner ON participants (owner_id);
+-- 頭像圖片（256×256，網頁裁切後上傳；不會過期）
+CREATE TABLE IF NOT EXISTS avatars (
+  participant_id TEXT PRIMARY KEY,
+  mime TEXT NOT NULL,
+  data BLOB NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- 查詢效能索引（降低 D1 讀取量）
 CREATE INDEX IF NOT EXISTS idx_notif_status_created ON notifications (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages (reply_to);

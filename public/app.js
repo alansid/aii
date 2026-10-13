@@ -92,7 +92,13 @@
     if (p.memberType === 'system') return '系';
     return [...(p.name || '人')][0];
   }
-  const avatar = p => `<span class="avatar ${p.memberType === 'ai' ? 'ai' : 'human'}" aria-hidden="true">${esc(avatarText(p))}</span>`;
+  // 有圖片頭像時先顯示文字，圖片載入後由 hydrateAvatars 補上
+  const avatar = p => {
+    const shape = p.memberType === 'ai' ? 'ai' : 'human';
+    if (p.imgUrl) return `<span class="avatar ${shape} img-on" style="background-image:url(&quot;${esc(p.imgUrl)}&quot;)" aria-hidden="true"></span>`;
+    const img = p.avatarImg && p.participantId ? ` data-avimg="${esc(p.participantId)}" data-v="${esc(p.avatarImg)}"` : '';
+    return `<span class="avatar ${shape}"${img} aria-hidden="true">${esc(avatarText(p))}</span>`;
+  };
   const envTag = p => p?.environment ? `<span class="tag env" title="所在環境">📍${esc(p.environment)}</span>` : '';
   const memberTag = p => p.memberType === 'ai'
     ? `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`
@@ -184,10 +190,12 @@
   document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
 
   function drawMe() {
-    const meCard = `${avatar(state.me)}<div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · #${esc(state.me.shortCode)} · 本人</span></div>`;
+    const meCard = `<button type="button" class="me-avatar-btn" data-change-avatar title="更換頭像" aria-label="更換頭像">${avatar(state.me)}<span class="pen" aria-hidden="true">✎</span></button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · #${esc(state.me.shortCode)} · 本人</span></div>`;
     $('#me-line').innerHTML = meCard;
     $('#sheet-me').innerHTML = meCard;
   }
+
+  document.addEventListener('click', e => { if (e.target.closest('[data-change-avatar]')) { closeSheet(false); changeMyAvatar(); } });
 
   // ---------- 啟動 ----------
   async function start() {
@@ -730,6 +738,185 @@
     else if (!modal.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
   });
 
+  // ---------- 頭像 ----------
+  // 圖片頭像：以版本號快取 blob URL，畫面上有 data-avimg 的頭像會自動補上圖片
+  const avatarUrls = new Map();
+  function avatarUrl(id, v) {
+    const key = `${id}:${v}`;
+    if (!avatarUrls.has(key)) {
+      avatarUrls.set(key, fetch(`/api/avatars/${encodeURIComponent(id)}?v=${v}`, { headers: { Authorization: `Bearer ${state.token}` } })
+        .then(r => (r.ok ? r.blob() : null)).then(b => (b ? URL.createObjectURL(b) : null)).catch(() => null));
+    }
+    return avatarUrls.get(key);
+  }
+  function hydrateAvatars(root = document) {
+    root.querySelectorAll?.('[data-avimg]:not([data-avdone])').forEach(el => {
+      el.setAttribute('data-avdone', '');
+      avatarUrl(el.dataset.avimg, el.dataset.v).then(url => {
+        if (url) { el.style.backgroundImage = `url("${url}")`; el.classList.add('img-on'); }
+      });
+    });
+  }
+  new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) { hydrateAvatars(n.parentElement || n); } })
+    .observe(document.body, { childList: true, subtree: true });
+
+  // 更換頭像彈窗（疊在目前彈窗上）：上傳圖片並裁切，或用文字／表情符號
+  // cur：{ imgUrl, text }；回傳 { kind: 'img', blob } | { kind: 'text', text, removeImg } | null（取消）
+  function avatarDialog({ title, isAi, fallback, cur }) {
+    return new Promise(resolve => {
+      const prev = document.activeElement;
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      const shape = isAi ? 'ai' : 'human';
+      host.innerHTML = modalFrame({
+        title, size: 'narrow',
+        body: `
+          <div class="av-previews">
+            <span class="av-prev big ${shape}" id="av-big"></span>
+            <div class="av-small"><span class="av-prev s32 ${shape}"></span><span class="muted small">訊息</span></div>
+            <div class="av-small"><span class="av-prev s24 ${shape}"></span><span class="muted small">清單</span></div>
+          </div>
+          <div class="seg-scope full" role="group" aria-label="頭像類型">
+            <button type="button" data-mode="img">上傳圖片</button>
+            <button type="button" data-mode="text">文字／表情符號</button>
+          </div>
+          <div id="av-img-pane">
+            <input type="file" id="av-file" accept="image/png,image/jpeg,image/webp" hidden>
+            <button type="button" class="av-drop" id="av-drop">
+              <b>拖曳圖片到這裡，或點一下選擇檔案</b>
+              <span class="muted small">png、jpg、webp · 5 MB 以內 · 至少 128 × 128 px</span>
+            </button>
+            <div class="av-crop-wrap" id="av-crop-wrap" hidden>
+              <div class="av-crop" id="av-crop"><img id="av-img" alt="" draggable="false"><span class="av-mask ${shape}"></span></div>
+              <span class="muted small">拖曳圖片調整位置</span>
+              <label class="av-zoom">縮放<input type="range" id="av-zoom" min="1" max="3" step="0.01" value="1"></label>
+              <button type="button" class="btn small" id="av-repick">重新選擇</button>
+            </div>
+            <div class="warn-box red" id="av-err" role="alert" hidden></div>
+            <button type="button" class="link danger-text" id="av-remove" hidden>移除圖片，改回文字頭像</button>
+          </div>
+          <label id="av-text-pane" hidden>頭像文字
+            <input id="av-text" maxlength="16" placeholder="留白＝${esc(fallback)}" value="${esc(cur.text || '')}">
+            <span class="field-hint">最多 2 個字，可用表情符號。</span>
+          </label>
+          <p class="muted small">頭像會裁成正方形、縮成 256 × 256 px 後儲存，不會在 1 小時後刪除。請勿使用含客戶個資的圖片。</p>`,
+        foot: `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-ok>儲存</button>`,
+      });
+      document.body.append(host);
+      const $ = s => host.querySelector(s);
+      const st = { mode: cur.imgUrl || !cur.text ? 'img' : 'text', img: null, w: 0, h: 0, zoom: 1, ox: 0, oy: 0, removed: false };
+      const D = 200, BOX = 240;
+      const geom = () => {
+        const sc = D / Math.min(st.w, st.h) * st.zoom, W = st.w * sc, H = st.h * sc;
+        const mx = (W - D) / 2, my = (H - D) / 2;
+        st.ox = Math.max(-mx, Math.min(mx, st.ox)); st.oy = Math.max(-my, Math.min(my, st.oy));
+        return { sc, W, H, left: BOX / 2 - W / 2 + st.ox, top: BOX / 2 - H / 2 + st.oy };
+      };
+      const crop = type => {
+        const g = geom(), c = document.createElement('canvas');
+        c.width = c.height = 256;
+        const sx = (g.W / 2 - st.ox - D / 2) / g.sc, sy = (g.H / 2 - st.oy - D / 2) / g.sc, ss = D / g.sc;
+        c.getContext('2d').drawImage(st.img, sx, sy, ss, ss, 0, 0, 256, 256);
+        return type === 'url' ? c.toDataURL('image/webp', 0.9) : new Promise(r => c.toBlob(b => r(b), 'image/webp', 0.9));
+      };
+      // 合併同一輪的多次重畫（不用 requestAnimationFrame：背景分頁不會觸發）
+      let pending = 0;
+      const draw = () => {
+        clearTimeout(pending);
+        pending = setTimeout(() => {
+          host.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === st.mode)));
+          $('#av-img-pane').hidden = st.mode !== 'img';
+          $('#av-text-pane').hidden = st.mode !== 'text';
+          $('#av-drop').hidden = !!st.img;
+          $('#av-crop-wrap').hidden = !st.img;
+          $('#av-remove').hidden = !(st.mode === 'img' && cur.imgUrl && !st.removed && !st.img);
+          if (st.img) {
+            const g = geom(), im = $('#av-img');
+            Object.assign(im.style, { width: g.W + 'px', height: g.H + 'px', left: g.left + 'px', top: g.top + 'px' });
+          }
+          const url = st.mode === 'img' ? (st.img ? crop('url') : (!st.removed && cur.imgUrl) || '') : '';
+          const text = [...($('#av-text').value.trim() || fallback)].slice(0, 2).join('');
+          host.querySelectorAll('.av-prev').forEach(el => {
+            el.textContent = url ? '' : text;
+            el.style.backgroundImage = url ? `url("${url}")` : '';
+            el.classList.toggle('img-on', !!url);
+          });
+          $('[data-ok]').disabled = st.mode === 'img' && !st.img && (!cur.imgUrl || st.removed);
+        });
+      };
+      const err = msg => { $('#av-err').hidden = !msg; $('#av-err').textContent = msg || ''; };
+      const load = file => {
+        if (!file) return;
+        if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return err(`不支援「${file.name.split('.').pop()}」格式，請改用 png、jpg 或 webp。`);
+        if (file.size > 5 * 1024 * 1024) return err(`檔案 ${(file.size / 1048576).toFixed(1)} MB，超過 5 MB 上限。`);
+        const url = URL.createObjectURL(file), img = new Image();
+        img.onload = () => {
+          if (img.width < 128 || img.height < 128) { URL.revokeObjectURL(url); return err(`圖片只有 ${img.width} × ${img.height} px，至少需要 128 × 128 px。`); }
+          Object.assign(st, { img, w: img.width, h: img.height, zoom: 1, ox: 0, oy: 0 });
+          $('#av-img').src = url; $('#av-zoom').value = 1;
+          err(''); draw();
+        };
+        img.onerror = () => err('圖片無法讀取，檔案可能已損毀。');
+        img.src = url;
+      };
+      host.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { st.mode = b.dataset.mode; err(''); draw(); }));
+      $('#av-drop').addEventListener('click', () => $('#av-file').click());
+      $('#av-repick').addEventListener('click', () => $('#av-file').click());
+      $('#av-file').addEventListener('change', e => { load(e.target.files[0]); e.target.value = ''; });
+      const drop = $('#av-drop');
+      drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+      drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+      drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); load(e.dataTransfer.files[0]); });
+      const area = $('#av-crop');
+      let drag = null;
+      area.addEventListener('pointerdown', e => { area.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, ox: st.ox, oy: st.oy }; });
+      area.addEventListener('pointermove', e => { if (!drag) return; st.ox = drag.ox + e.clientX - drag.x; st.oy = drag.oy + e.clientY - drag.y; draw(); });
+      const up = () => { drag = null; };
+      area.addEventListener('pointerup', up); area.addEventListener('pointercancel', up);
+      $('#av-zoom').addEventListener('input', e => { st.zoom = parseFloat(e.target.value); draw(); });
+      $('#av-text').addEventListener('input', draw);
+      $('#av-remove').addEventListener('click', () => { st.removed = true; st.mode = 'text'; draw(); });
+      const done = v => { host.remove(); if (prev?.isConnected) prev.focus(); resolve(v); };
+      const overlay = host.firstElementChild;
+      overlay.addEventListener('click', async e => {
+        if (e.target.closest('[data-ok]')) {
+          const text = $('#av-text').value.trim();
+          if (st.mode === 'img' && st.img) return done({ kind: 'img', blob: await crop('blob'), url: crop('url'), text: cur.text || '' });
+          if (st.mode === 'img') return done({ kind: 'keep' });
+          return done({ kind: 'text', text, removeImg: !!cur.imgUrl });
+        }
+        if (e.target === overlay || e.target.closest('[data-close]')) done(null);
+      });
+      overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
+      draw();
+      host.querySelector(`[data-mode="${st.mode}"]`).focus();
+    });
+  }
+
+  // 套用到自己
+  async function changeMyAvatar() {
+    const cur = { text: state.me.avatar || '', imgUrl: state.me.avatarImg ? await avatarUrl(meId(), state.me.avatarImg) : null };
+    const r = await avatarDialog({ title: '更換頭像', isAi: state.me.memberType === 'ai', fallback: [...(state.me.name || '人')][0], cur });
+    if (!r || r.kind === 'keep') return;
+    try {
+      let me;
+      if (r.kind === 'img') {
+        const res = await fetch('/api/me/avatar', { method: 'PUT', headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': r.blob.type }, body: r.blob });
+        me = await res.json();
+        if (!res.ok) throw new Error(me?.error?.message || `HTTP ${res.status}`);
+      } else {
+        if (r.removeImg) await api('/api/me/avatar', { method: 'DELETE' });
+        me = await api('/api/me', { method: 'PATCH', body: { avatar: r.text } });
+      }
+      Object.assign(state.me, { avatar: me.avatar, avatarImg: me.avatarImg });
+      drawMe();
+      await loadParticipants();
+      renderMessages(false);
+      document.querySelectorAll('#set-avatar').forEach(el => { el.innerHTML = avatar(state.me); });
+      toast('頭像已更新');
+    } catch (err) { toast(err.message); }
+  }
+
   const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
   document.querySelector('[data-nav="messages"]').addEventListener('click', () => { scrollBottom(); $('#input').focus(); });
@@ -1052,8 +1239,12 @@
         <div class="two-col">
           <div class="field">
             <label>角色顯示名稱<input name="role" required maxlength="30"></label>
-            <label class="avatar-field">頭像文字<span class="avatar-edit"><span id="ai-avatar-preview"></span><input name="avatar" maxlength="16" placeholder="留白＝角色代碼"></span>
-              <span class="field-hint">最多 2 個字，可用表情符號。</span></label>
+            <div class="avatar-row compact">
+              <span class="av-48" id="ai-avatar-preview"></span>
+              <div><b>頭像</b><span class="muted small">未設定時顯示角色代碼</span></div>
+              <button class="btn small" type="button" id="ai-avatar-change">更換</button>
+              <input type="hidden" name="avatar">
+            </div>
           </div>
           <div class="field">
             <span class="field-label" id="env-label">所在環境</span>
@@ -1080,9 +1271,22 @@
       form.environment.value = v;
       body.querySelectorAll('[data-env]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.env === v)));
     };
+    // 頭像圖片：existing＝沿用已上傳的、new＝這次新選的、none＝不用圖片
+    const img = { state: editing && ai.avatarImg ? 'existing' : 'none', blob: null, url: null };
+    const autoText = () => form.roleKey.value !== 'custom' ? form.roleKey.value : [...(form.role.value || 'AI')].slice(0, 2).join('');
     const preview = () => {
-      const r = roles.find(x => x.key === form.roleKey.value);
-      body.querySelector('#ai-avatar-preview').innerHTML = avatar({ memberType: 'ai', roleKey: form.roleKey.value, role: form.role.value || r?.role, avatar: form.avatar.value.trim() });
+      const p = { memberType: 'ai', roleKey: form.roleKey.value, role: form.role.value, avatar: form.avatar.value.trim() };
+      if (img.state === 'new') p.imgUrl = img.url;
+      if (img.state === 'existing') Object.assign(p, { participantId: ai.participantId, avatarImg: ai.avatarImg });
+      body.querySelector('#ai-avatar-preview').innerHTML = avatar(p);
+    };
+    body.querySelector('#ai-avatar-change').onclick = async () => {
+      const cur = { text: form.avatar.value, imgUrl: img.state === 'new' ? img.url : img.state === 'existing' ? await avatarUrl(ai.participantId, ai.avatarImg) : null };
+      const r = await avatarDialog({ title: '更換 AI 頭像', isAi: true, fallback: autoText(), cur });
+      if (!r || r.kind === 'keep') return;
+      if (r.kind === 'img') Object.assign(img, { state: 'new', blob: r.blob, url: r.url });
+      else { form.avatar.value = r.text; Object.assign(img, { state: 'none', blob: null, url: null }); }
+      preview();
     };
     const fill = (src, includeName) => {
       form.role.value = src.role;
@@ -1134,8 +1338,15 @@
       const data = Object.fromEntries(new FormData(form));
       for (const [k, v] of Object.entries(data)) data[k] = v.trim();
       try {
-        if (editing) await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data });
-        else await api('/api/my-ais', { method: 'POST', body: data });
+        const saved = editing ? await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data })
+          : await api('/api/my-ais', { method: 'POST', body: data });
+        if (img.state === 'new') {
+          const res = await fetch(`/api/my-ais/${saved.participantId}/avatar`, { method: 'PUT', headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': img.blob.type }, body: img.blob });
+          if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error?.message || '頭像上傳失敗');
+        } else if (img.state === 'none' && editing && ai.avatarImg) {
+          await api(`/api/my-ais/${saved.participantId}/avatar`, { method: 'DELETE' });
+        }
+        loadParticipants().then(() => renderMessages(false)).catch(() => {});
         await openMyAi();
         toast(editing ? '已儲存' : '已建立。按「只複製 Token」或在詳細設定裡複製完整接入設定給你的 AI');
       } catch (err) { body.querySelector('#ai-error').textContent = err.message; }
@@ -1405,11 +1616,11 @@
         <div class="seg-scope full" role="group" aria-labelledby="theme-label">
           ${[['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']].map(([k, t]) => `<button type="button" data-theme-opt="${k}" aria-pressed="${theme === k}">${t}</button>`).join('')}
         </div></div>
-      <div class="field"><span class="field-label">我的頭像</span>
-        <div class="avatar-edit"><span id="me-avatar-preview">${avatar(state.me)}</span>
-          <input id="me-avatar" maxlength="16" value="${esc(state.me.avatar || '')}" placeholder="留白＝名字第一個字" aria-label="頭像文字">
-          <button class="btn small" type="button" id="me-avatar-save">儲存</button></div>
-        <span class="field-hint">最多 2 個字，可用表情符號；所有人看到的頭像都會更新。</span></div>
+      <div class="avatar-row">
+        <span class="av-56" id="set-avatar">${avatar(state.me)}</span>
+        <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
+        <button class="btn small" type="button" data-change-avatar>更換</button>
+      </div>
       <div class="switch-row">
         <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
         <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
@@ -1425,18 +1636,6 @@
       applyTheme(v);
       body.querySelectorAll('[data-theme-opt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     }));
-    const av = body.querySelector('#me-avatar');
-    av.addEventListener('input', () => { body.querySelector('#me-avatar-preview').innerHTML = avatar({ ...state.me, avatar: av.value.trim() }); });
-    body.querySelector('#me-avatar-save').onclick = async () => {
-      try {
-        const r = await api('/api/me', { method: 'PATCH', body: { avatar: av.value.trim() } });
-        state.me.avatar = r.avatar;
-        drawMe();
-        await loadParticipants();
-        renderMessages(false);
-        toast('頭像已更新');
-      } catch (err) { toast(err.message); }
-    };
     const sw = body.querySelector('#set-mine');
     sw.onclick = () => {
       const on = sw.getAttribute('aria-checked') !== 'true';
