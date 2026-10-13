@@ -603,6 +603,10 @@ ${roster}
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
+  route('GET', '/api/notifications/count', async ({ me }) => {
+    const r = await db.get("SELECT COUNT(*) AS c FROM notifications WHERE recipient_id = ? AND status = 'pending'", me.id);
+    return { pending: r.c };
+  });
   route('POST', '/api/notifications/ack', async ({ me, req }) => ackNotifications(me, (await readJson(req)).notificationIds));
 
   route('GET', '/api/my-ais', async ({ me, ctx }) => {
@@ -774,11 +778,47 @@ ${roster}
   }
   const headline = text => String(text).trimStart().split('\n')[0].replace(/^\[[^\]]*\]\s*/, '').slice(0, 80);
 
+  // 團隊狀態用的最近 200 則訊息與 [需確認] 的回覆：保留在記憶體，之後只補讀新訊息
+  let recentCache = { rows: null, maxSeq: 0, replies: new Map() }; // replies: [需確認] id → 回覆列
+  async function recentMessages() {
+    const cols = 'SELECT id, seq, author_id, text, reply_to, created_at FROM messages';
+    if (!recentCache.rows) {
+      const rows = await db.all(`${cols} ORDER BY seq DESC LIMIT 200`);
+      recentCache = { rows, maxSeq: rows[0]?.seq || 0, replies: null };
+      return rows;
+    }
+    const fresh = await db.all(`${cols} WHERE seq > ? ORDER BY seq DESC LIMIT 200`, recentCache.maxSeq);
+    if (fresh.length) {
+      if (recentCache.replies) {
+        for (const m of fresh) recentCache.replies.get(m.reply_to)?.push(m);
+      }
+      recentCache.rows = fresh.concat(recentCache.rows).slice(0, 200);
+      recentCache.maxSeq = fresh[0].seq;
+    }
+    return recentCache.rows;
+  }
+  async function repliesTo(asks) {
+    if (!asks.length) return [];
+    const cache = recentCache.replies;
+    const missing = asks.filter(m => !cache?.has(m.id));
+    if (missing.length) {
+      const rows = await db.all('SELECT reply_to, author_id, text FROM messages WHERE reply_to IN (SELECT value FROM json_each(?))',
+        JSON.stringify(missing.map(m => m.id)));
+      const map = cache || new Map();
+      for (const m of missing) map.set(m.id, []);
+      for (const r of rows) map.get(r.reply_to).push(r);
+      recentCache.replies = map;
+    }
+    const live = new Set(asks.map(m => m.id));
+    for (const id of recentCache.replies.keys()) if (!live.has(id)) recentCache.replies.delete(id);
+    return asks.flatMap(m => recentCache.replies.get(m.id));
+  }
+
   async function teamStatus(ctx) {
     if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return teamCache.data;
     const people = await peopleMap(ctx);
     const now = Date.now();
-    const recent = await db.all('SELECT id, seq, author_id, text, reply_to, created_at FROM messages ORDER BY seq DESC LIMIT 200');
+    const recent = await recentMessages();
 
     // 每位成員最新一則帶狀態標籤的訊息
     const stateBy = new Map();
@@ -820,7 +860,7 @@ ${roster}
     // 等人決定：[需確認] 訊息，直到 (1) 人類直接回覆、(2) 人類按「已處理」、(3) PO 角色的 AI 以 [決策紀錄] 回覆
     const asks = recent.filter(m => inferState(m.text) === 'waiting');
     const askIds = JSON.stringify(asks.map(m => m.id));
-    const replies = asks.length ? await db.all('SELECT reply_to, author_id, text FROM messages WHERE reply_to IN (SELECT value FROM json_each(?))', askIds) : [];
+    const replies = await repliesTo(asks);
     const resolved = new Set(asks.length
       ? (await db.all('SELECT message_id FROM decision_resolutions WHERE message_id IN (SELECT value FROM json_each(?))', askIds)).map(r => r.message_id) : []);
     const closes = r => {

@@ -874,10 +874,10 @@
   // 通知收件匣
   async function refreshInboxCount() {
     try {
-      const d = await api('/api/notifications?status=pending&limit=100');
+      const { pending } = await api('/api/notifications/count');
       const b = $('#inbox-badge');
-      b.hidden = !d.items.length;
-      b.textContent = d.hasMore ? '99+' : d.items.length;
+      b.hidden = !pending;
+      b.textContent = pending > 99 ? '99+' : pending;
     } catch {}
   }
 

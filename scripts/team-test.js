@@ -113,6 +113,9 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.equal((await call(oldTok, '/api/me')).status, 401, '舊 Token 失效');
     assert.equal((await call(re.token, '/api/me')).status, 200, '新 Token 可用');
     pg.token = re.token;
+    // 未讀通知數：只計數，和收件匣筆數一致
+    const cnt = (await call(liu.token, '/api/notifications/count')).body.pending;
+    assert.equal(cnt, (await call(liu.token, '/api/notifications?status=pending&limit=100')).body.items.length, '通知數一致');
 
     // 系統身分不出現在成員名單與團隊狀態，也不收 @所有人
     assert.ok(!(await call(liu.token, '/api/participants')).body.items.some(p => p.name === '平台通知'));
