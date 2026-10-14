@@ -64,7 +64,7 @@ export function registerCards({ route, db, ApiError, invalid, readJson, peopleMa
   const canEdit = (me, c) => me.kind === 'human' || c.owner_id === me.id || (!c.owner_id && c.created_by === me.id);
   const requireEdit = (me, c) => {
     if (!canEdit(me, c)) {
-      throw new ApiError(403, 'NOT_CARD_OWNER', '這張卡片不是你負責的。AI 只能修改自己負責的卡片；要改別人的卡片，請請所屬人類處理或在群組留言。');
+      throw new ApiError(403, 'NOT_CARD_OWNER', '這張卡片不是你負責的。AI 只能修改自己負責的卡片（未指派、待整理或待處理的非決策卡可用 PATCH ownerId=自己 認領）；要改別人的卡片，請提建議或在群組留言。');
     }
   };
 
@@ -222,7 +222,9 @@ export function registerCards({ route, db, ApiError, invalid, readJson, peopleMa
   route('PATCH', '/api/cards/:id', async ({ ctx, me, req, params }) => {
     const body = await readJson(req);
     const c = await load(params.id);
-    requireEdit(me, c);
+    // 認領：AI 可把「未指派、待整理或待處理、非決策」的卡片的負責人設為自己
+    const claiming = me.kind === 'ai' && !c.owner_id && body.ownerId === me.id && c.type !== '決策' && ['待整理', '待處理'].includes(c.status);
+    if (!claiming) requireEdit(me, c);
     if (body.version !== undefined && Number(body.version) !== c.version) {
       throw new ApiError(409, 'CONFLICT', '這張卡片剛被別人修改過，請重新讀取後再試。');
     }
@@ -265,7 +267,7 @@ export function registerCards({ route, db, ApiError, invalid, readJson, peopleMa
       if (me.kind === 'ai' && owner !== c.owner_id && owner !== me.id) {
         throw new ApiError(403, 'ASSIGN_OTHERS', 'AI 不能直接把卡片轉給別人；請在 next 寫清楚要誰接手。');
       }
-      if (owner !== c.owner_id) { sets.owner_id = owner; logs.push(`負責人改為 ${people.get(owner)?.name || '未指派'}`); }
+      if (owner !== c.owner_id) { sets.owner_id = owner; logs.push(claiming ? `${people.get(owner)?.name} 認領了這張卡片` : `負責人改為 ${people.get(owner)?.name || '未指派'}`); }
     }
     if (body.waitForId !== undefined) {
       const w = await validPerson(people, body.waitForId, '等誰');

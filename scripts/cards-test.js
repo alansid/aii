@@ -61,6 +61,19 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await call(pg.token, `/api/cards/${own.cardId}`, 'PATCH', { next: '先寫 API' })).status, 200, 'AI 可改自己建立且未指派的卡');
     assert.equal((await call(qa.token, `/api/cards/${c1.cardId}`, 'PATCH', { next: '亂改' })).body.error.code, 'NOT_CARD_OWNER', 'AI 不能改別人的卡');
     assert.equal((await call(pg.token, `/api/cards/${c1.cardId}`, 'PATCH', { ownerId: qa.participantId })).body.error.code, 'ASSIGN_OTHERS', 'AI 不能轉給別人');
+    // 認領：未指派＋待整理／待處理＋非決策，AI 可把負責人設為自己
+    const free = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '無人認領的工作' })).body;
+    assert.equal((await call(qa.token, `/api/cards/${free.cardId}`, 'PATCH', { next: '亂改' })).body.error.code, 'NOT_CARD_OWNER', '沒認領前不能改');
+    assert.equal((await call(qa.token, `/api/cards/${free.cardId}`, 'PATCH', { ownerId: pg.participantId })).body.error.code, 'NOT_CARD_OWNER', '認領只能認領給自己');
+    const claimed = (await call(qa.token, `/api/cards/${free.cardId}`, 'PATCH', { ownerId: qa.participantId, status: '進行中' })).body;
+    assert.equal(claimed.owner.participantId, qa.participantId, '認領成功');
+    assert.ok((await call(qa.token, `/api/cards/${free.cardId}`)).body.log.some(l => l.text.includes('認領')), '紀錄註明認領');
+    assert.equal((await call(pg.token, `/api/cards/${free.cardId}`, 'PATCH', { ownerId: pg.participantId })).body.error.code, 'NOT_CARD_OWNER', '不能搶已有負責人的卡');
+    await call(liu.token, `/api/cards/${free.cardId}`, 'PATCH', { ownerId: null }); // 人類改派回未指派，不影響後面的團隊狀態斷言
+    const busy = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '已進行中但無人', status: '進行中' })).body;
+    assert.equal((await call(qa.token, `/api/cards/${busy.cardId}`, 'PATCH', { ownerId: qa.participantId })).body.error.code, 'NOT_CARD_OWNER', '進行中的未指派卡不能認領');
+    const decFree = (await call(liu.token, "/api/cards", "POST", { requestId: rid(), type: "決策", title: "決策不能認領", question: '要不要？' })).body;
+    assert.equal((await call(qa.token, `/api/cards/${decFree.cardId}`, "PATCH", { ownerId: qa.participantId })).body.error.code, "NOT_CARD_OWNER", "決策卡不能認領");
     const upd = (await call(pg.token, `/api/cards/${c1.cardId}`, 'PATCH', { status: '進行中', next: '做裁切', waitForId: liuId })).body;
     assert.equal(upd.status, '進行中'); assert.equal(upd.waitFor.name, '劉昱志'); assert.equal(upd.version, 2);
 
