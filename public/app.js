@@ -1300,6 +1300,38 @@
     if (!reopen) work.editing = false;
     renderDrawer(!reopen);
   }
+  const canHandover = d => d.type !== '決策' && !closedSt(d.status) && d.owner && (state.me.memberType === 'human' || d.owner.participantId === meId());
+  // 交接歷程：從紀錄裡「交接 A → B：說明」整理成 PO → UX → PG
+  function handoverChain(d) {
+    const hs = [...(d.log || [])].reverse().map(l => /^交接 (.+?) → (.+?)：/.exec(l.text)).filter(Boolean);
+    if (!hs.length) return '';
+    const names = [hs[0][1], ...hs.map(m => m[2])];
+    return `<div class="handover-chain"><span class="muted small">交接歷程</span> ${names.map(n => `<b>${esc(n)}</b>`).join(' → ')}</div>`;
+  }
+  function openHandover() {
+    const d = work.detail;
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId);
+    const body = openModal('交接卡片', `
+      <form id="handover-form" class="stack">
+        <div class="info-box">${esc(d.cardId)} ${esc(d.title)}<br>交接後負責人換成對方，狀態回到「待處理」，並在群組 @ 對方通知。</div>
+        <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${p.role ? '（' + esc(p.role) + '）' : ''}</option>`).join('')}</select></label>
+        <label>交接說明（必填）<textarea name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
+        <p class="muted small">說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。</p>
+        <p class="error" id="handover-error" role="alert"></p>
+      </form>`, { size: 'form', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="handover-form">確認交接</button>' });
+    body.querySelector('#handover-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        const c = await api(`/api/cards/${encodeURIComponent(d.cardId)}/handover`, { method: 'POST', body: { toId: f.toId.value, note: f.note.value.trim(), version: d.version } });
+        work.cards.set(c.cardId, { ...c, log: undefined, messageIds: undefined });
+        closeModal();
+        toast(`已交接給 ${c.owner?.name}`);
+        renderWork();
+        openCard(c.cardId);
+      } catch (err) { body.querySelector('#handover-error').textContent = err.message; }
+    });
+  }
   function closeCard() {
     $('#card-drawer')?.remove();
     document.body.classList.remove('drawer-docked');
@@ -1344,6 +1376,7 @@
           <div class="drawer-status">
             <label class="dst">狀態<select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
             ${!closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}
+            ${canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
             ${d.status === '已完成' && !d.verified ? `<button class="btn small primary" type="button" data-act="verify" ${mine ? 'disabled title="完成者不能自己驗證"' : ''}>標為已驗證</button>` : ''}
           </div>
           ${d.done || d.verified ? `<div class="dmarks">
@@ -1351,6 +1384,7 @@
             ${d.verified ? `<span class="cmark ver-bg">已驗證 · ${esc(d.verified.by?.name || '')} · ${shortTime(d.verified.at)}</span>` : ''}
             ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
           </div>` : ''}
+          ${handoverChain(d)}
           ${d.type === '決策' && d.decision ? `<section class="ddecision"><h3>決策</h3><p class="dq">${esc(d.decision.question)}</p>${decisionBox(d)}${decisionStatus(d)}</section>` : ''}
           ${work.editing ? `
           <form id="card-edit" class="stack">
@@ -1406,6 +1440,7 @@
     const id = work.openId;
     if (a.dataset.act === 'open-work') { work.returnFocus = null; closeCard(); showPage('work'); return openCard(id); }
     if (a.dataset.act === 'copy-id') return copyText(id).then(ok => toast(ok ? `已複製 ${id}` : '複製失敗'));
+    if (a.dataset.act === 'handover') return openHandover();
     if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });

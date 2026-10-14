@@ -7,10 +7,10 @@ export const CARD_STATUSES = ['待整理', '待處理', '進行中', '待確認'
 export const CARD_TYPES = ['工作', '阻塞', '決策'];
 const BUILTIN_RESULTS = ['不同意', '要求補充']; // 決定時固定可用，不可當選項名稱
 const OPEN_STATUSES_SQL = "('已完成','已封存')";
-export const CARD_LIMITS = { title: 100, reason: 500, next: 300, blocker: 300, criteria: 500, question: 200, recommendation: 500, impact: 200, afterNext: 300, note: 500, option: 40 };
+export const CARD_LIMITS = { title: 100, reason: 500, next: 300, blocker: 300, criteria: 500, question: 200, recommendation: 500, impact: 200, afterNext: 300, note: 500, option: 40, handover: 300 };
 const CARD_NO_BASE = 100; // 顯示編號 = C-(seq + 100)
 
-const FIELD_LABEL = { title: '標題', reason: '原因', next: '下一步', blocker: '阻塞', criteria: '完成條件', question: '決策問題', recommendation: '建議方案', impact: '影響', afterNext: '決定後' };
+const FIELD_LABEL = { title: '標題', reason: '原因', next: '下一步', blocker: '阻塞', criteria: '完成條件', question: '決策問題', recommendation: '建議方案', impact: '影響', afterNext: '決定後', handover: '交接說明' };
 const DECISION_COL = { question: 'question', recommendation: 'recommendation', impact: 'impact', afterNext: 'after_next' };
 const cardNo = seq => `C-${seq + CARD_NO_BASE}`;
 
@@ -33,7 +33,7 @@ export async function teamCards(db) {
   return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id })) };
 }
 
-export function registerCards({ route, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople }) {
+export function registerCards({ route, createMessage, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople }) {
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   const parseNo = id => {
     const m = /^C-(\d+)$/.exec(id);
@@ -322,6 +322,39 @@ export function registerCards({ route, db, ApiError, invalid, readJson, peopleMa
     const at = nowIso();
     await save(c, { verified_by: me.id, verified_at: at }, ['標為已驗證'], me, at);
     return view(await load(params.id), await peopleMap(ctx));
+  });
+
+  // 交接：負責人把自己的卡交給指定成員。接手者回到「待處理」；伺服器代交接者在群組發一則 [交接] 並 @ 對方（既有 @ 通知）
+  route('POST', '/api/cards/:id/handover', async ({ ctx, me, req, params }) => {
+    const body = await readJson(req);
+    const c = await load(params.id);
+    if (me.kind === 'ai' && c.owner_id !== me.id) throw new ApiError(403, 'NOT_CARD_OWNER', 'AI 只能交接自己負責的卡片。');
+    if (c.type === '決策') throw new ApiError(400, 'NO_HANDOVER_DECISION', '決策卡片不能交接，它本來就在等決策者決定。');
+    if (c.status === '已完成' || c.status === '已封存') throw new ApiError(400, 'CARD_CLOSED', '已完成或已封存的卡片不能交接。');
+    if (body.version !== undefined && Number(body.version) !== c.version) throw new ApiError(409, 'CONFLICT', '這張卡片剛被別人修改過，請重新讀取後再試。');
+    const people = await peopleMap(ctx);
+    const to = await validPerson(people, body.toId, '接手者');
+    if (!to) throw invalid('toId 為必填：要交給誰');
+    if (to === c.owner_id || to === me.id) throw new ApiError(400, 'SAME_OWNER', '不能交給目前的負責人或自己。');
+    const note = text({ handover: body.note }, 'handover', { required: true });
+    if (note === undefined) throw invalid('交接說明（note）為必填');
+    const at = nowIso(), fromName = people.get(c.owner_id || me.id)?.name || me.name, toName = people.get(to).name;
+    const sets = { owner_id: to, status: '待處理' };
+    if (c.wait_for_id === to) sets.wait_for_id = null;
+    const logs = [`交接 ${fromName} → ${toName}：${note}`];
+    if (c.status !== '待處理') logs.push(`狀態 ${c.status} → 待處理`);
+    await save(c, sets, logs, me, at);
+    invalidatePeople();
+    // 專案標記取自卡片標題前綴，沒有前綴就不加
+    const proj = /^\[(平台|銀行系統)\]\s*/.exec(c.title);
+    const msgText = `[交接] ${proj ? `【${proj[1]}】` : ''}${cardNo(c.seq)} ${c.title.slice(proj ? proj[0].length : 0)} → @${toName}：${note}`;
+    let messageId = null, notifyError = null;
+    try {
+      const r = await createMessage(ctx, me, { text: msgText, requestId: `handover_${c.uid}_${c.version}`, recipientIds: [to] });
+      messageId = r.message.messageId;
+      await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
+    } catch (err) { notifyError = err.message; }
+    return { ...view(await load(params.id), people), handoverMessageId: messageId, ...(notifyError ? { notifyError } : {}) };
   });
 
   route('POST', '/api/cards/:id/messages', async ({ ctx, me, req, params }) => {

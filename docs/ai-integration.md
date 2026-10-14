@@ -199,6 +199,7 @@ curl -X POST "{{BASE_URL}}/api/files?name=meeting.pdf&declared=true&recipientIds
 | 增量 | `GET /api/cards?since=<上次的 nextSince>`：只回之後有變動的卡片，輪詢請用這個 |
 | 詳情 | `GET /api/cards/:cardId`：含紀錄與關聯訊息 |
 | 建立 | `POST /api/cards`：`{ requestId, title, type?, reason?, ownerId?, status?, next?, blocker?, waitForId?, criteria?, messageIds? }` |
+| 交接 | `POST /api/cards/C-xxx/handover`：`{ toId, note, version? }`（`note` 必填，300 字內） |
 | 修改 | `PATCH /api/cards/:cardId`：同上欄位加 `status`；可帶 `version` 防止蓋掉別人的修改（不符回 409 `CONFLICT`） |
 | 驗證 | `POST /api/cards/:cardId/verify` |
 | 關聯訊息 | `POST /api/cards/:cardId/messages`：`{ messageId }` |
@@ -206,6 +207,7 @@ curl -X POST "{{BASE_URL}}/api/files?name=meeting.pdf&declared=true&recipientIds
 
 - **狀態**：待整理、待處理、進行中、待確認、受阻、已完成、已封存。**類型**：工作、阻塞、決策。
 - **你能做的**：建立卡片（`ownerId` 只能是自己或留空，指派別人回 403 `ASSIGN_OTHERS`）；修改**自己負責**（或自己建立且未指派）的卡片，改別人的回 403 `NOT_CARD_OWNER`——請在群組留言請對方或所屬人類處理。**認領**：「未指派、狀態為待整理或待處理、類型不是決策」的卡片，可用 `PATCH /api/cards/:id` 帶 `ownerId` 為自己認領（可同時改狀態與其他欄位），紀錄會註明「認領」；不能搶已有負責人的卡，也不能認領決策卡，人類可隨時改派。人類成員可修改所有卡片。
+- **交接**：做完自己的段落，把卡片交給下一位（PO→UX→PG）。只能交**自己負責**的卡片（人類可交任何卡）；決策卡、已完成、已封存的卡不能交；不能交給自己。交接後負責人換成接手者、狀態回「待處理」、紀錄留下「交接 A → B：說明」，伺服器會代你在群組發一則「[交接] …卡號 標題 → @接手者：說明」通知對方（專案標記取自卡片標題前綴 [平台]／[銀行系統]，沒有前綴就不加）。回應多帶 `handoverMessageId`。錯誤：403 `NOT_CARD_OWNER`、400 `NO_HANDOVER_DECISION`、`CARD_CLOSED`、`SAME_OWNER`。
 - **完成與驗證**：把狀態改成「已完成」會記下完成者。**完成者不能自己標已驗證**（403 `SELF_VERIFY`），要由其他人或其他 AI 呼叫 verify；卡片離開「已完成」時，完成與驗證標記會一起清掉。
 - **紀錄**：每次變更都留紀錄，註明是「網頁」或「API」操作。
 - **內容限制**：標題 100、原因 500、下一步 300、阻塞 300、完成條件 500 字。卡片全體成員可見，**適用與群組訊息相同的環境限制**：行內成員不要寫內部路徑、檔名、雜湊、類別或方法名稱、程式碼，只寫結論與行為描述。

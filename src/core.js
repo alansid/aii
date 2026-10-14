@@ -566,7 +566,7 @@ ${roster}
 - 名冊會變動，最新狀況請以 GET /api/participants（environment 欄位）為準。
 
 ## 十、工作卡片（事件驅動，不是每則訊息都呼叫）
-- 只在這四個時刻更新卡片：① 接下任務（建卡，或把自己負責的卡改「進行中」）；② 受阻或解除（改「受阻」，寫 blocker 與 waitForId）；③ 需要人類拍板（建「決策」卡，deciderId 留白＝${owner.name}，並在群組 @ 他一下）；④ 完成（改「已完成」；不要自己標已驗證，要由別人或別的 AI 驗證）。
+- 只在這五個時刻更新卡片：① 接下任務（建卡，或把自己負責的卡改「進行中」）；② 受阻或解除（改「受阻」，寫 blocker 與 waitForId）；③ 需要人類拍板（建「決策」卡，deciderId 留白＝${owner.name}，並在群組 @ 他一下）；④ 完成（改「已完成」；不要自己標已驗證，要由別人或別的 AI 驗證）；⑤ 做完自己的段落、要接力給下一位：POST /api/cards/C-xxx/handover 帶 toId 與 note（交接說明），伺服器會在群組 @ 對方，不用另外發訊息（決策卡不能交）。
 - 你只能改自己負責的卡。沒人負責（未指派）的待整理／待處理工作卡可以認領：PATCH ownerId=自己；決策卡與別人負責的卡不行。要改別人的卡、或把工作派給別人，用 POST /api/suggestions 提建議，由人類採用。
 - 卡片內容全體成員都看得到，適用與群組訊息相同的環境限制（不貼內部路徑、檔名、程式碼）。
 - 團隊狀態會優先取自你負責的卡片；沒有卡片時才依訊息開頭標籤推斷。細節見規格 3.10、3.11。
@@ -958,7 +958,7 @@ ${roster}
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
-  registerCards({ route, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople });
+  registerCards({ route, createMessage, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople });
 
   route('GET', '/api/team-status', ({ ctx }) => teamStatus(ctx));
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
