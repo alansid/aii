@@ -918,3 +918,48 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 :root[data-theme="dark"] .sgk, :root[data-theme="dark"] .wcount.pur { background: var(--ai-bg); color: var(--ai-text); }
 :root[data-theme="dark"] .st-todo { background: var(--human-bg); color: var(--human-text); }
 .page-work > * { flex: none; }
+
+/* ===== Phase 4 Wave 1：膠囊、停靠抽屜、授權列、標籤選單 ===== */
+.cap { font: inherit; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; min-height: 24px; border-radius: 12px; border: 1px solid var(--human-border); background: var(--human-bg); color: var(--human-text); font-size: 13px; font-weight: 500; cursor: pointer; vertical-align: baseline; }
+.cap:hover { text-decoration: underline; }
+.cap .cdot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; flex: none; }
+.cap[data-st="進行中"] .cdot { background: #2563eb; }
+.cap[data-st="待確認"] .cdot { background: #d97706; }
+.cap[data-st="受阻"] .cdot { background: #dc2626; }
+.cap[data-st="已完成"] .cdot, .cap[data-st="已封存"] .cdot { background: #16a34a; }
+.cap-miss { display: inline-flex; align-items: center; padding: 0 8px; min-height: 24px; border-radius: 12px; background: var(--surface-2); color: var(--muted); font-size: 13px; border: 1px dashed var(--border); }
+.linked { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.msg-foot .newcard { opacity: 0; }
+.msg:hover .newcard, .msg:focus-within .newcard { opacity: 1; }
+@media (hover: none) { .msg-foot .newcard { opacity: 1; } }
+
+.info-box { background: var(--human-bg); border: 1px solid var(--human-border); color: var(--human-text); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+
+/* 抽屜與訊息並排（桌面、訊息頁）：不蓋住訊息 */
+.drawer-root.docked { inset: 0 0 0 auto; width: 400px; pointer-events: none; z-index: 5; }
+.drawer-root.docked .drawer { width: 400px; pointer-events: auto; border-left: 1px solid var(--border); box-shadow: none; }
+body.drawer-docked #app { padding-right: 400px; }
+.drawer-foot { flex: none; display: flex; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
+.drawer-foot .btn { min-height: 44px; }
+
+.auth-box { display: grid; gap: 8px; margin-top: 8px; }
+.auth-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--human-border); background: var(--human-bg); border-radius: 8px; }
+.auth-row .auth-title { flex-basis: 100%; font-size: 13px; font-weight: 500; color: var(--human-text); }
+.auth-row.sent { border-color: var(--ok); background: var(--ok-bg); color: var(--ok-text); }
+.auth-row.hint { border-style: dashed; background: none; color: var(--muted); font-size: 13px; }
+.auth-btn { min-height: 44px; border-color: var(--primary); color: var(--primary); font-weight: 500; }
+.auth-btn.plain { border-color: var(--border); color: var(--text); }
+.auth-confirm { display: grid; gap: 8px; padding: 12px; border: 2px solid var(--primary); border-radius: 8px; background: var(--surface); }
+.auth-confirm .row { display: flex; gap: 8px; }
+.auth-confirm .btn { min-height: 44px; }
+.auth-text { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); font-size: 13px; overflow-wrap: anywhere; }
+
+.tag-btn { white-space: nowrap; min-height: 44px; border-color: var(--primary); color: var(--primary); font-weight: 500; }
+.tag-menu li { min-height: 40px; }
+.tag-menu li.active { background: var(--surface-2); outline: 2px solid var(--primary); outline-offset: -2px; }
+.tag-menu li[aria-selected="true"] { background: var(--human-bg); color: var(--human-text); font-weight: 500; }
+@media (max-width: 899px) {
+  body.drawer-docked #app { padding-right: 0; }
+  .tag-menu { position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-height: 60vh; border-radius: 16px 16px 0 0; padding: 12px 8px calc(12px + env(safe-area-inset-bottom)); z-index: 20; box-shadow: var(--shadow); }
+  .tag-menu li { min-height: 48px; }
+}

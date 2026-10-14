@@ -8,7 +8,8 @@ import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
 import { registerCards, teamCards } from './cards.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
-const ACTIVE_WINDOW_MS = 30_000;
+const ACTIVE_WINDOW_MS = 30_000;           // 人類：網頁每幾秒就會回報
+const AI_ACTIVE_WINDOW_MS = 20 * 60_000;   // AI：依 15 分鐘輪詢，門檻對齊輪詢間隔才不會閃離線
 const RATE_LIMIT_PER_MIN = 120;
 const MAX_TEXT = 2000;
 const MAX_SETTING = 1000;
@@ -78,7 +79,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   }
   let teamCache = { at: 0, data: null };
 
-  const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < ACTIVE_WINDOW_MS;
+  const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < (p.kind === 'ai' ? AI_ACTIVE_WINDOW_MS : ACTIVE_WINDOW_MS);
 
   function identity(p, people) {
     const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null };
@@ -824,8 +825,8 @@ ${roster}
   route('DELETE', '/api/files/:id', ({ me, params }) => deleteFile(me, params.id));
 
   // ---------- 團隊狀態（平台改善：看得出每個人在做什麼、有沒有連上） ----------
-  const STALE_MS = (Number(config.staleMinutes) || 15) * 60_000;       // AI 超過這段時間沒出現 → 可能斷線
-  const UNANSWERED_MS = (Number(config.unansweredMinutes) || 15) * 60_000; // 指派超過這段時間沒讀取 → 尚未回應
+  const STALE_MS = (Number(config.staleMinutes) || 20) * 60_000;       // AI 超過這段時間沒出現 → 可能斷線
+  const UNANSWERED_MS = (Number(config.unansweredMinutes) || 20) * 60_000; // 指派超過這段時間沒讀取 → 尚未回應
   const TOKEN_WARN_MS = 2 * 3600_000;
   const TEAM_CACHE_MS = config.teamCacheMs !== undefined ? Number(config.teamCacheMs) : TEAM_CACHE_MS_DEFAULT;                                   // Token 到期前 2 小時提醒
 

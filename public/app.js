@@ -219,6 +219,7 @@
     renderMessages(true);
     refreshInboxCount();
     loadTeam();
+    loadCards().then(() => { renderMessages(false); if (state.page === 'work') renderWork(); }).catch(() => {});
     connectEvents();
     showPage(store.get(PAGE_KEY) === 'work' ? 'work' : 'messages');
   }
@@ -273,7 +274,7 @@
         loadParticipants().catch(() => {});
         refreshInboxCount();
       }
-      if (!document.hidden && state.page === 'work' && Date.now() - work.lastSync > 30_000) syncCards().catch(() => {});
+      if (!document.hidden && work.loaded && Date.now() - work.lastSync > (state.page === 'work' ? 30_000 : 90_000)) syncCards().catch(() => {});
       if (!document.hidden && Date.now() - lastTeamPoll > 60_000) {
         lastTeamPoll = Date.now();
         loadTeam();
@@ -299,6 +300,7 @@
   }
 
   // ---------- 訊息 ----------
+  const BASE_TITLE = document.title;
   const meId = () => state.me.participantId;
   const isToMe = m => m.recipients.some(r => r.participantId === meId());
   const isReplyToMe = m => {
@@ -327,7 +329,14 @@
     // 網址轉連結；網址以外的 40 碼 SHA 只顯示前 7 碼，點一下複製完整值
     return lead + html.split(/(\bhttps?:\/\/[^\s<]+)/).map((part, i) => i % 2
       ? `<a href="${part}" target="_blank" rel="noopener">${part}</a>`
-      : part.replace(/\b[0-9a-f]{40}\b/g, h => `<button type="button" class="sha" data-sha="${h}" title="${h}（點一下複製）">${h.slice(0, 7)}</button>`)).join('');
+      : part.replace(/\b[0-9a-f]{40}\b/g, h => `<button type="button" class="sha" data-sha="${h}" title="${h}（點一下複製）">${h.slice(0, 7)}</button>`)
+        .replace(/\bC-\d{3,}\b/g, capsuleHtml)).join('');
+  }
+  // 訊息內的 C-xxx 轉成膠囊：卡號＋狀態文字（不只靠顏色）；清單載入後找不到的卡號灰字不可點
+  function capsuleHtml(id) {
+    const c = work.cards.get(id);
+    if (!c) return work.loaded ? `<span class="cap cap-miss">${id} 找不到</span>` : id;
+    return `<button type="button" class="cap" data-cap="${id}" data-st="${esc(c.status)}">${id}<i class="cdot" aria-hidden="true"></i>${esc(c.status)}</button>`;
   }
 
   // 第二行：AI 寫成「角色 · AI · 所屬人 · 所在環境」
@@ -375,8 +384,11 @@
         ${recipients ? `<div class="recipients"><span class="muted">給</span> ${recipients}</div>` : ''}
         ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
         ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : textHtml(m)}
+        ${authHtml(m)}
         <div class="msg-foot">
           <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+          ${m.file ? '' : `<button class="reply-btn newcard" type="button" data-newcard="${esc(m.messageId)}">＋建卡</button>`}
+          ${linkedCapsules(m)}
           ${!m.file && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
           ${threadToggle(m)}
         </div>
@@ -495,6 +507,11 @@
     if (r) return setReply(state.byId.get(r.dataset.reply));
     const j = e.target.closest('[data-jump]');
     if (j) return jumpTo(j.dataset.jump);
+    const cap = e.target.closest('[data-cap]');
+    if (cap) return openCard(cap.dataset.cap, cap);
+    const nc = e.target.closest('[data-newcard]');
+    if (nc) return openNewCard(null, state.byId.get(nc.dataset.newcard));
+    if (authClick(e)) return;
     const sha = e.target.closest('[data-sha]');
     if (sha) return copyText(sha.dataset.sha).then(ok => toast(ok ? '已複製完整 SHA' : '複製失敗'));
     const more = e.target.closest('[data-more]');
@@ -995,6 +1012,7 @@
     for (const c of d.items) work.cards.set(c.cardId, c);
     if (d.items.length) work.since = d.nextSince;
     renderWork();
+    if (state.page === 'messages' && d.items.length) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
     if (work.openId && d.items.some(c => c.cardId === work.openId) && !work.editing) openCard(work.openId);
   }
 
@@ -1032,6 +1050,7 @@
   }
 
   function showPage(page) {
+    if (work.openId) closeCard();
     state.page = page === 'work' ? 'work' : 'messages';
     store.set(PAGE_KEY, state.page);
     $('#page-messages').hidden = state.page !== 'messages';
@@ -1270,9 +1289,11 @@
   }
 
   // 卡片詳情（桌面右側抽屜、手機底部滑出）
-  async function openCard(id) {
+  async function openCard(id, trigger) {
     let d;
     try { d = await api(`/api/cards/${encodeURIComponent(id)}`); } catch (err) { return toast(err.message); }
+    if (trigger) work.returnFocus = trigger;
+    rememberLinks(d);
     work.cards.set(id, { ...d, log: undefined, messageIds: undefined });
     const reopen = work.openId === id && $('#card-drawer');
     work.openId = id; work.detail = d;
@@ -1281,8 +1302,13 @@
   }
   function closeCard() {
     $('#card-drawer')?.remove();
+    document.body.classList.remove('drawer-docked');
     work.openId = null; work.detail = null; work.editing = false;
+    const back = work.returnFocus; work.returnFocus = null;
+    if (back?.isConnected) back.focus(); // 回到原本點的膠囊
   }
+  // 在訊息頁的桌面版，抽屜與訊息並排（不遮住訊息）；手機與工作頁維持原本的遮罩／底部面板
+  const dockedMode = () => state.page === 'messages' && matchMedia('(min-width: 900px)').matches;
   function renderDrawer(focus) {
     const d = work.detail;
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
@@ -1303,9 +1329,12 @@
       host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
       host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
     }
+    const docked = dockedMode();
+    host.classList.toggle('docked', docked);
+    document.body.classList.toggle('drawer-docked', docked);
     host.innerHTML = `
-      <div class="drawer-overlay" data-close-drawer></div>
-      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
+      <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
           <div class="drawer-titles"><span class="cid">${esc(d.cardId)}</span>${typeTag(d)}<h2 id="drawer-title">${esc(d.title)}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
@@ -1355,6 +1384,7 @@
           <div class="group-title">紀錄</div>
           <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>
         </div>
+        ${state.page === 'messages' ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
       </aside>`;
     host.querySelector('#card-edit')?.addEventListener('submit', async e => {
       e.preventDefault();
@@ -1364,13 +1394,18 @@
     });
     if (focus) host.querySelector('.modal-x').focus();
   }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && work.openId && document.body.classList.contains('drawer-docked') && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root') && !document.querySelector('#tag-menu:not([hidden])')) closeCard();
+  });
   async function drawerClick(e) {
     if (e.target.closest('[data-close-drawer]')) return closeCard();
     const j = e.target.closest('[data-jump-msg]');
-    if (j) { const id = j.dataset.jumpMsg; closeCard(); showPage('messages'); return jumpTo(id); }
+    if (j) { const id = j.dataset.jumpMsg; if (!(state.page === 'messages' && dockedMode())) { closeCard(); showPage('messages'); } return jumpTo(id); }
     const a = e.target.closest('[data-act]');
     if (!a) return;
     const id = work.openId;
+    if (a.dataset.act === 'open-work') { work.returnFocus = null; closeCard(); showPage('work'); return openCard(id); }
+    if (a.dataset.act === 'copy-id') return copyText(id).then(ok => toast(ok ? `已複製 ${id}` : '複製失敗'));
     if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
@@ -1383,11 +1418,12 @@
   }
 
   // 新增卡片
-  function openNewCard(sg) {
+  function openNewCard(sg, srcMsg) {
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
     const opts = none => `<option value="">${none}</option>` + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
-    const body = openModal(sg ? '編輯後採用建議' : '新增卡片', `
+    const body = openModal(sg ? '編輯後採用建議' : srcMsg ? '從訊息建立卡片' : '新增卡片', `
       <form id="card-new-form" class="stack">
+        ${srcMsg ? `<div class="info-box">來源訊息「${esc(srcMsg.author.name)} · ${shortTime(srcMsg.createdAt)}」會自動關聯到這張卡，無法移除。</div>` : ''}
         ${sg ? `<div class="warn-box">${esc(sg.from?.name || 'AI')} 的建議：${esc(sg.why)}</div>` : ''}
         <div class="field"><span class="field-label" id="nt-label">類型</span>
           <div class="seg-scope full" role="group" aria-labelledby="nt-label">
@@ -1438,6 +1474,11 @@
       form.status.closest('label').hidden = true; form.status.disabled = true;
       if (c.type === '阻塞') body.querySelector('[data-nt="阻塞"]').click();
     }
+    if (srcMsg) {
+      const plain = srcMsg.text.replace(/^\s*\[[^\]\n]{1,40}\]\s?/, '').trim();
+      form.title.value = plain.split('\n')[0].slice(0, 100);
+      form.reason.value = plain.slice(0, 500);
+    }
     const requestId = 'web_' + (crypto.randomUUID?.() || Date.now() + Math.random());
     form.addEventListener('submit', async e => {
       e.preventDefault();
@@ -1450,16 +1491,166 @@
       if (!data.waitForId) delete data.waitForId;
       try {
         const c = sg ? await api(`/api/suggestions/${encodeURIComponent(sg.suggestionId)}/apply`, { method: 'POST', body: { title: data.title, reason: data.reason, ownerId: data.ownerId ?? null, next: data.next, criteria: data.criteria, type: data.type, waitForId: data.waitForId ?? null } })
-          : await api('/api/cards', { method: 'POST', body: { ...data, requestId } });
+          : await api('/api/cards', { method: 'POST', body: { ...data, requestId, ...(srcMsg ? { messageIds: [srcMsg.messageId] } : {}) } });
         if (sg) await loadSuggestions();
         work.cards.set(c.cardId, c);
         closeModal();
+        if (srcMsg) rememberLinks({ cardId: c.cardId, messageIds: [srcMsg.messageId] });
         renderWork();
+        if (srcMsg) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
         toast(`已建立 ${c.cardId}`);
         openCard(c.cardId);
       } catch (err) { body.querySelector('#card-new-error').textContent = err.message; }
     });
   }
+
+  // ---------- 訊息上的授權列（C-105）：只給該 AI 的所屬人類；純前端判斷，送出的就是一般的 [回覆] 訊息 ----------
+  const SHA40 = /\b[0-9a-f]{40}\b/g;
+  const authPending = new Map(); // messageId → { text, requestId, busy, error }
+  const poRole = r => ((state.participants.get(r.author.participantId) || r.author).roleKey) === 'PO';
+  const myAiMsg = m => state.me?.memberType === 'human' && !m.file && (() => {
+    const a = state.participants.get(m.author.participantId);
+    return !!a && a.memberType === 'ai' && a.ownerParticipantId === meId();
+  })();
+  function authText(m, kind, sha) {
+    if (kind === 'push') return `[回覆] 同意 push：${sha}`;
+    if (kind === 'commit') return `[回覆] 同意 commit（針對第 ${m.sequence} 則），請附完整 40 碼 SHA`;
+    return kind === 'ok' ? '[回覆] 同意照辦' : '[回覆] 暫緩處理';
+  }
+  const authBtn = (m, kind, label, sha, plain) => `<button type="button" class="btn auth-btn${plain ? ' plain' : ''}" data-auth="${kind}" data-asha="${sha || ''}" data-amsg="${esc(m.messageId)}">${label}</button>`;
+  function authConfirm(m, p) {
+    return `<div class="auth-confirm" role="group" aria-label="確認送出">
+      <b>你將以自己的名義送出：</b>
+      <div class="auth-text">${esc(p.text)}<span class="muted small">回覆 ${esc(m.author.name)} 那則；收件人 ${esc(m.author.name)}</span></div>
+      ${p.text.includes('push') ? '<span class="muted small">授權只綁這個 SHA 與這一次；下次 push 需重新授權。</span>' : ''}
+      ${p.error ? `<p class="error" role="alert">送出失敗：${esc(p.error)}　可按「重試」。</p>` : ''}
+      <div class="row"><button type="button" class="btn primary" data-auth-send="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>${p.error ? '重試' : '確認送出'}</button>
+      <button type="button" class="btn" data-auth-cancel="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>取消</button></div></div>`;
+  }
+  function authHtml(m) {
+    if (!myAiMsg(m)) return '';
+    const text = m.text, mineR = repliesOf(m.messageId).filter(isMine);
+    const pend = authPending.get(m.messageId);
+    const rows = [];
+    const shas = [...new Set(text.match(SHA40) || [])];
+    for (const sha of shas) {
+      const sent = mineR.find(r => r.text.includes('同意 push：' + sha));
+      if (sent) rows.push(`<div class="auth-row sent"><b>已授權 Push · ${shortTime(sent.createdAt)}</b><span class="muted small">僅限 ${sha.slice(0, 7)}…${sha.slice(-4)}</span></div>`);
+      else if (pend && pend.key === 'push:' + sha) rows.push(authConfirm(m, pend));
+      else rows.push(`<div class="auth-row"><span class="auth-title">授權此 SHA（${sha.slice(0, 7)}…${sha.slice(-4)}）</span>${authBtn(m, 'push', '同意 Push', sha)}</div>`);
+    }
+    if (!shas.length && /push/i.test(text) && /\b(?=[0-9a-f]*\d)[0-9a-f]{7,39}\b/.test(text) && !mineR.some(r => /同意 push/.test(r.text))) {
+      rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
+    }
+    if (!shas.length && /^\s*\[需確認\]/.test(text)) {
+      const sent = mineR.find(r => /^\[回覆\] (同意 commit|同意照辦|暫緩處理)/.test(r.text));
+      const answered = sent || repliesOf(m.messageId).some(r => !isMine(r) && poRole(r));
+      const hasCommit = /commit/i.test(text);
+      if (sent) rows.push(`<div class="auth-row sent"><b>已回覆 · ${shortTime(sent.createdAt)}</b><span class="muted small">${esc(sent.text.slice(5, 40))}</span></div>`);
+      else if (pend && pend.key === 'need') rows.push(authConfirm(m, pend));
+      else if (!answered) rows.push(hasCommit
+        ? `<div class="auth-row"><span class="auth-title">授權 Commit</span>${authBtn(m, 'commit', '同意 Commit')}</div>`
+        : `<div class="auth-row">${authBtn(m, 'ok', '同意照辦', '', true)}${authBtn(m, 'hold', '暫緩處理', '', true)}</div>`);
+    }
+    return rows.length ? `<div class="auth-box">${rows.join('')}</div>` : '';
+  }
+  function refreshMsg(id) {
+    const el = document.getElementById('msg-' + id);
+    if (el && state.byId.has(id)) el.outerHTML = messageHtml(state.byId.get(id));
+    document.getElementById('msg-' + id)?.querySelector('[data-auth-send]')?.focus();
+  }
+  function authClick(e) {
+    const go = e.target.closest('[data-auth]');
+    if (go) {
+      const m = state.byId.get(go.dataset.amsg);
+      if (!m) return true;
+      const kind = go.dataset.auth, sha = go.dataset.asha;
+      authPending.set(m.messageId, { key: kind === 'push' ? 'push:' + sha : 'need', text: authText(m, kind, sha), requestId: newRequestId() });
+      refreshMsg(m.messageId);
+      return true;
+    }
+    const cancel = e.target.closest('[data-auth-cancel]');
+    if (cancel) {
+      const id = cancel.dataset.authCancel;
+      authPending.delete(id); refreshMsg(id);
+      document.getElementById('msg-' + id)?.querySelector('[data-auth]')?.focus();
+      return true;
+    }
+    const send = e.target.closest('[data-auth-send]');
+    if (send) {
+      const id = send.dataset.authSend, m = state.byId.get(id), p = authPending.get(id);
+      if (!m || !p || p.busy) return true;
+      p.busy = true; p.error = ''; refreshMsg(id);
+      api('/api/messages', { method: 'POST', body: { text: p.text, requestId: p.requestId, replyToMessageId: id, recipientIds: [m.author.participantId] } })
+        .then(r => { authPending.delete(id); onNewMessage(r); refreshMsg(id); toast('已送出授權'); })
+        .catch(err => {
+          p.busy = false; p.error = err.message;
+          if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'INVALID_REQUEST') p.requestId = newRequestId();
+          refreshMsg(id);
+        });
+      return true;
+    }
+    return false;
+  }
+  // 這則訊息建過的卡（本機記住；也會在開啟卡片時補上）
+  state.msgCards = new Map();
+  function linkedCapsules(m) {
+    const ids = state.msgCards.get(m.messageId);
+    return ids?.size ? `<span class="linked">${[...ids].map(capsuleHtml).join(' ')}</span>` : '';
+  }
+  function rememberLinks(card) {
+    for (const mid of card.messageIds || []) {
+      if (!state.msgCards.has(mid)) state.msgCards.set(mid, new Set());
+      state.msgCards.get(mid).add(card.cardId);
+    }
+  }
+
+  // ---------- 輸入框標籤選單（C-105）----------
+  const TAGS = [['接單', '說明理解的範圍'], ['進度', ''], ['完成', ''], ['需確認', ''], ['受阻', ''], ['交接', ''], ['回覆', '']];
+  const tagMenu = $('#tag-menu');
+  let tagIdx = null; // null＝關閉
+  const leadTagOf = v => (v.match(/^\s*\[([^\]\n]{1,40})\]/) || [])[1];
+  function openTagMenu() {
+    const cur = TAGS.findIndex(t => t[0] === leadTagOf(input.value));
+    tagIdx = cur >= 0 ? cur : 0;
+    renderTagMenu();
+  }
+  function renderTagMenu() {
+    const cur = leadTagOf(input.value);
+    tagMenu.innerHTML = TAGS.map(([t, hint], i) => `
+      <li role="option" data-i="${i}" aria-selected="${cur === t}" class="${i === tagIdx ? 'active' : ''}">[${t}]${cur === t ? '<span class="small">目前選取</span>' : hint ? `<span class="muted small">${hint}</span>` : ''}</li>`).join('');
+    tagMenu.hidden = false;
+    $('#tag-btn').setAttribute('aria-expanded', 'true');
+  }
+  function closeTagMenu() { tagIdx = null; tagMenu.hidden = true; $('#tag-btn').setAttribute('aria-expanded', 'false'); }
+  function pickTag(i) {
+    let v = input.value;
+    v = v.replace(/^\s*\[[^\]\n]{0,40}\]?\s?/, ''); // 已有標籤（或只打了一半）就取代
+    input.value = `[${TAGS[i][0]}] ` + v;
+    closeTagMenu();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    pendingRequestId = null;
+    onInput();
+  }
+  tagMenu.addEventListener('mousedown', e => {
+    const li = e.target.closest('li');
+    if (li) { e.preventDefault(); pickTag(Number(li.dataset.i)); }
+  });
+  $('#tag-btn').addEventListener('mousedown', e => e.preventDefault());
+  $('#tag-btn').addEventListener('click', () => { if (tagIdx === null) { input.focus(); openTagMenu(); } else closeTagMenu(); });
+  input.addEventListener('blur', () => setTimeout(closeTagMenu, 150));
+  input.addEventListener('input', () => { if (input.value === '[' && tagIdx === null) openTagMenu(); else if (tagIdx !== null && !input.value.startsWith('[') && input.value !== '') closeTagMenu(); });
+  input.addEventListener('keydown', e => {
+    if (tagIdx === null || e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopImmediatePropagation();
+      tagIdx = (tagIdx + (e.key === 'ArrowDown' ? 1 : TAGS.length - 1)) % TAGS.length;
+      return renderTagMenu();
+    }
+    if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); return pickTag(tagIdx); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeTagMenu(); }
+  }, true);
 
   const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
@@ -1499,7 +1690,7 @@
 
   function unansweredTag(m) {
     const who = state.unansweredByMsg.get(m.messageId);
-    return who?.length ? `<span class="tag unanswered" title="指派超過 ${state.team?.unansweredMinutes || 15} 分鐘仍未讀取">尚未回應：${who.map(esc).join('、')}</span>` : '';
+    return who?.length ? `<span class="tag unanswered" title="指派超過 ${state.team?.unansweredMinutes || 20} 分鐘仍未讀取">尚未回應：${who.map(esc).join('、')}</span>` : '';
   }
 
   async function loadTeam() {
@@ -1905,6 +2096,7 @@
   async function refreshInboxCount() {
     try {
       const { pending } = await api('/api/notifications/count');
+      document.title = (pending ? `(${pending > 99 ? '99+' : pending}) ` : '') + BASE_TITLE;
       document.querySelectorAll('.inbox-badge').forEach(b => {
         b.hidden = !pending;
         b.textContent = pending > 99 ? '99+' : pending;

@@ -111,9 +111,11 @@
         </div>
         <div class="composer-row">
           <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
+          <button id="tag-btn" class="btn tag-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="tag-menu">標籤 ▾</button>
           <div class="input-wrap">
             <textarea id="input" rows="1" placeholder="輸入訊息，輸入 @ 提及成員" aria-describedby="composer-hint"></textarea>
             <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>
+            <ul id="tag-menu" class="mention-list tag-menu" role="listbox" aria-label="訊息標籤" hidden></ul>
           </div>
           <input id="file-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
           <button id="send" class="btn primary send" type="button" disabled>送出</button>
