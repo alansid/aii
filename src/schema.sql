@@ -128,6 +128,11 @@ CREATE TABLE IF NOT EXISTS cards (
   request_id TEXT,
   done_by TEXT, done_at TEXT,
   verified_by TEXT, verified_at TEXT,
+  decider_id TEXT, proposer_id TEXT,        -- 決策卡片：指定決策者、提案人
+  question TEXT NOT NULL DEFAULT '', recommendation TEXT NOT NULL DEFAULT '',
+  options TEXT NOT NULL DEFAULT '',         -- 選項，JSON 陣列
+  impact TEXT NOT NULL DEFAULT '', after_next TEXT NOT NULL DEFAULT '',
+  decision_result TEXT, decision_by TEXT, decision_at TEXT, decision_note TEXT NOT NULL DEFAULT '',
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

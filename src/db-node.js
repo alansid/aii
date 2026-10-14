@@ -41,6 +41,19 @@ function migrate(db) {
     avatar: "TEXT NOT NULL DEFAULT ''",
     avatar_v: 'INTEGER NOT NULL DEFAULT 0',
   });
+  add('cards', {
+    decider_id: "TEXT",
+    proposer_id: "TEXT",
+    question: "TEXT NOT NULL DEFAULT ''",
+    recommendation: "TEXT NOT NULL DEFAULT ''",
+    options: "TEXT NOT NULL DEFAULT ''",
+    impact: "TEXT NOT NULL DEFAULT ''",
+    after_next: "TEXT NOT NULL DEFAULT ''",
+    decision_result: "TEXT",
+    decision_by: "TEXT",
+    decision_at: "TEXT",
+    decision_note: "TEXT NOT NULL DEFAULT ''",
+  });
   add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT' });
   const soon = Date.now() + 24 * 3600_000;
   db.prepare('UPDATE participants SET token_expires_at = ? WHERE token_expires_at = 0').run(soon);

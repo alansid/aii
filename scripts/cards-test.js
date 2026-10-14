@@ -53,7 +53,6 @@ const rid = () => 'req_c' + (++n);
     assert.equal(again.status, 200); assert.equal(again.body.cardId, c1.cardId, '同 requestId 不重複建立');
     const blk = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), type: '阻塞', title: 'BA Token 過期' })).body;
     assert.equal(blk.status, '受阻', '阻塞卡預設受阻');
-    assert.equal((await call(liu.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: 'x' })).status, 400, '決策卡第二階段才開放');
 
     // AI 權限：不能指派給別人、不能改別人的卡；可建自己的、改自己負責的
     assert.equal((await call(pg.token, '/api/cards', 'POST', { requestId: rid(), title: 'x', ownerId: qa.participantId })).status, 403, 'AI 不能指派別人');
@@ -101,6 +100,60 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await call(liu.token, '/api/cards?q=' + encodeURIComponent('頭像'))).body.items[0].cardId, c1.cardId, '關鍵字搜尋');
     assert.equal((await call(liu.token, '/api/cards?status=壞掉')).status, 400);
     assert.equal((await call(liu.token, '/api/cards/C-99999')).status, 404);
+
+    // ===== 第二階段：決策卡片 =====
+    const dreq = { requestId: rid(), type: '決策', title: '頭像上傳存哪裡？', question: '頭像上傳要存在哪裡、誰能改？', recommendation: '存在 D1，瀏覽器先縮成 256px', options: ['同意', '改存 R2'], impact: 'UX、PG', afterNext: '交 PG 實作', deciderId: liuId };
+    const d1 = (await call(pg.token, '/api/cards', 'POST', dreq)).body;
+    assert.equal(d1.type, '決策'); assert.equal(d1.status, '待確認', '決策卡建立即待確認');
+    assert.equal(d1.waitFor.participantId, liuId, '等決策者'); assert.equal(d1.decision.decider.participantId, liuId);
+    assert.equal(d1.decision.proposer.participantId, pg.participantId); assert.deepEqual(d1.decision.options, ['同意', '改存 R2']);
+    // AI 建決策卡預設決策者＝所屬人類；決策者必須是人類
+    const dDefault = (await call(pg.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: '預設決策者' })).body;
+    assert.equal(dDefault.decision.decider.participantId, liuId, 'AI 預設決策者是所屬人類');
+    assert.equal((await call(pg.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: 'x', deciderId: qa.participantId })).status, 400, '決策者不能是 AI');
+    assert.equal((await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: 'x', question: 'q' })).status, 400, '非決策卡不能填問題');
+    assert.equal((await call(liu.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: 'x', options: ['不同意'] })).status, 400, '選項不能和內建決定重名');
+    assert.equal((await call(liu.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: 'x', options: ['a', 'b', 'c', 'd', 'e'] })).status, 400, '選項最多 4 個');
+    // 只有指定決策者能決定（其他人類、AI 都不行）
+    assert.equal((await call(percy.token, `/api/cards/${d1.cardId}/decide`, 'POST', { result: '同意' })).body.error.code, 'NOT_DECIDER', '其他人類不能決定');
+    assert.equal((await call(pg.token, `/api/cards/${d1.cardId}/decide`, 'POST', { result: '同意' })).body.error.code, 'NOT_DECIDER', '提案的 AI 不能自己決定');
+    assert.equal((await call(pg.token, `/api/cards/${d1.cardId}`, 'PATCH', { status: '已完成' })).body.error.code, 'USE_DECIDE', '不能繞過決策直接標完成');
+    assert.equal((await call(liu.token, `/api/cards/${d1.cardId}`, 'PATCH', { type: '工作' })).body.error.code, 'TYPE_LOCKED');
+    assert.equal((await call(liu.token, `/api/cards/${d1.cardId}/decide`, 'POST', { result: '亂寫' })).status, 400, '結果要在選項內');
+    assert.equal((await call(liu.token, `/api/cards/${d1.cardId}/decide`, 'POST', { result: '不同意' })).status, 400, '不同意要寫原因');
+    // 要求補充：球回提案人；提案人補充後自動回到決策者
+    const sup = (await call(liu.token, `/api/cards/${d1.cardId}/decide`, 'POST', { result: '要求補充', note: '請補上檔案大小上限' })).body;
+    assert.equal(sup.status, '待確認'); assert.equal(sup.waitFor.participantId, pg.participantId, '等提案人補充');
+    assert.equal(sup.decision.result, null, '尚未決定');
+    const filled = (await call(pg.token, `/api/cards/${d1.cardId}`, 'PATCH', { recommendation: '存在 D1，256px webp，單檔 200 KB 內' })).body;
+    assert.equal(filled.waitFor.participantId, liuId, '補充後自動回到決策者');
+    // 同意：記錄決定、完成者是決策者、其他人才能驗證
+    const dec = (await call(liu.token, `/api/cards/${d1.cardId}/decide`, 'POST', { result: '改存 R2', note: '先不考慮付費' })).body;
+    assert.equal(dec.status, '已完成'); assert.equal(dec.decision.result, '改存 R2'); assert.equal(dec.decision.by.participantId, liuId);
+    assert.equal(dec.decision.note, '先不考慮付費'); assert.equal(dec.waitFor, null); assert.equal(dec.done.by.participantId, liuId);
+    assert.equal((await call(liu.token, `/api/cards/${d1.cardId}/decide`, 'POST', { result: '同意' })).body.error.code, 'DECIDED', '不能重複決定');
+    assert.equal((await call(pg.token, `/api/cards/${d1.cardId}`, 'PATCH', { question: '偷改問題' })).body.error.code, 'DECIDED', '決定後不能改內容');
+    assert.equal((await call(liu.token, `/api/cards/${d1.cardId}/verify`, 'POST')).body.error.code, 'SELF_VERIFY', '決策者不能自己驗證');
+    assert.equal((await call(qa.token, `/api/cards/${d1.cardId}/verify`, 'POST')).status, 200);
+    const dlog = (await call(liu.token, `/api/cards/${d1.cardId}`)).body.log.map(l => l.text);
+    for (const t of ['要求補充：請補上檔案大小上限', '決定：改存 R2（先不考慮付費）']) assert.ok(dlog.includes(t), '紀錄：' + t);
+    assert.ok(dlog.some(t => t.startsWith('已補充，改為等')), '紀錄：補充後回決策者');
+    // 不同意：帶原因完成；重開（改回待確認）會撤回決定並重新等決策者
+    const d2 = (await call(pg.token, '/api/cards', 'POST', { ...dreq, requestId: rid(), title: '第二個決策', options: [] })).body;
+    assert.deepEqual(d2.decision.options, [], '沒有選項時預設「同意」');
+    const no = (await call(liu.token, `/api/cards/${d2.cardId}/decide`, 'POST', { result: '不同意', note: '範圍太大' })).body;
+    assert.equal(no.decision.result, '不同意'); assert.equal(no.decision.note, '範圍太大');
+    const re = (await call(liu.token, `/api/cards/${d2.cardId}`, 'PATCH', { status: '待確認' })).body;
+    assert.equal(re.decision.result, null, '重開後決定撤回'); assert.equal(re.waitFor.participantId, liuId, '重開後再等決策者'); assert.equal(re.verified, null);
+    assert.equal((await call(liu.token, `/api/cards/${d2.cardId}/decide`, 'POST', { result: '同意' })).status, 200, '預設選項「同意」');
+    // 換決策者只有人類能做，且等的人跟著換
+    const d3 = (await call(liu.token, '/api/cards', 'POST', { ...dreq, requestId: rid(), title: '第三個決策' })).body;
+    assert.equal((await call(pg.token, `/api/cards/${d3.cardId}`, 'PATCH', { deciderId: percy.participant.participantId })).status, 403, 'AI 不能換決策者');
+    const sw = (await call(liu.token, `/api/cards/${d3.cardId}`, 'PATCH', { deciderId: percy.participant.participantId })).body;
+    assert.equal(sw.decision.decider.name, 'Percy'); assert.equal(sw.waitFor.name, 'Percy');
+    assert.equal((await call(liu.token, `/api/cards/${d3.cardId}/decide`, 'POST', { result: '同意' })).body.error.code, 'NOT_DECIDER', '原決策者換掉後不能決定');
+    assert.equal((await call(percy.token, `/api/cards/${d3.cardId}/decide`, 'POST', { result: '同意' })).status, 200);
+    assert.equal((await call(liu.token, '/api/cards/' + (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '普通工作' })).body.cardId + '/decide', 'POST', { result: '同意' })).status, 400, '非決策卡不能 decide');
 
     console.log('cards: all checks passed');
   } catch (e) {

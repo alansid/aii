@@ -941,6 +941,38 @@
     return `<span class="cowner">${avatar(p)}<span>${esc(c.owner.name)}</span></span>`;
   }
 
+  const optionsOf = c => (c.decision?.options?.length ? c.decision.options : ['同意']);
+  // 這張決策卡現在是在等「我」做決定
+  const decidingMe = c => c.type === '決策' && c.status === '待確認' && !c.decision?.result && c.decision?.decider?.participantId === meId() && isMeRef(c.waitFor);
+  work.note = null; // { id, kind: '不同意' | '要求補充', text }
+  function decisionActions(c) {
+    if (work.note && work.note.id === c.cardId) {
+      const n = work.note;
+      return `<label class="dnote">${n.kind === '不同意' ? '不同意的原因' : '需要補充什麼'}
+          <textarea rows="2" maxlength="500" data-note-text>${esc(n.text)}</textarea></label>
+        <div class="row end"><button type="button" class="btn small" data-note-cancel>取消</button>
+          <button type="button" class="btn small primary" data-note-submit="${esc(c.cardId)}" ${n.text.trim() ? '' : 'disabled'}>${n.kind === '不同意' ? '送出不同意' : '送出要求'}</button></div>`;
+    }
+    return `<div class="dactions">
+      ${optionsOf(c).map((o, i) => `<button type="button" class="btn small ${i === 0 ? 'ok' : ''}" data-decide="${esc(c.cardId)}" data-result="${esc(o)}">${esc(o)}</button>`).join('')}
+      <button type="button" class="btn small" data-note-open="${esc(c.cardId)}" data-kind="不同意">不同意</button>
+      <button type="button" class="btn small" data-note-open="${esc(c.cardId)}" data-kind="要求補充">要求補充</button></div>`;
+  }
+  function decisionBox(c) {
+    const d = c.decision;
+    return `<div class="dbox"><span class="small muted strong">建議方案</span><span>${esc(d.recommendation || '未提供')}</span></div>
+      <dl class="dfields compact"><dt>提案人</dt><dd>${esc(d.proposer?.name || '—')}</dd><dt>決策者</dt><dd>${esc(d.decider?.name || '—')}</dd>
+        <dt>影響</dt><dd>${esc(d.impact || '—')}</dd><dt>決定後</dt><dd>${esc(d.afterNext || '—')}</dd></dl>`;
+  }
+  function decisionStatus(c) {
+    const d = c.decision;
+    if (d.result) return `<div class="dresult"><b>決定：${esc(d.result)}</b><span class="muted small">${esc(d.by?.name || '')} · ${shortTime(d.at)}${d.note ? ' · ' + esc(d.note) : ''}</span></div>`;
+    if (decidingMe(c)) return decisionActions(c);
+    if (c.status !== '待確認') return '';
+    const who = c.waitFor?.name || d.decider?.name;
+    return `<p class="muted small">${c.waitFor && c.waitFor.participantId !== d.decider?.participantId ? `已請 ${esc(who)} 補充後，再回到 ${esc(d.decider?.name || '決策者')} 決定。` : `等 ${esc(who)} 決定。`}</p>`;
+  }
+
   async function loadCards() {
     const d = await api('/api/cards?include=archived&limit=200');
     work.cards = new Map(d.items.map(c => [c.cardId, c]));
@@ -1007,14 +1039,15 @@
       <div class="work-filters">
         <input id="card-q" type="search" placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片" value="${esc(work.q)}">
         <select id="card-owner" aria-label="負責人"><option value="">所有負責人</option>${people.map(p => `<option value="${esc(p.participantId)}" ${work.owner === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
-        <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞'].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策'].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
       ${work.view === 'A' ? overviewHtml(all) : boardHtml(all)}`;
     if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
   function overviewHtml(all) {
-    const waitMe = all.filter(c => isMeRef(c.waitFor) && !closedSt(c.status));
+    const decideMe = all.filter(decidingMe);
+    const waitMe = all.filter(c => isMeRef(c.waitFor) && !closedSt(c.status) && !decidingMe(c));
     const blocked = all.filter(c => c.status === '受阻');
     const done = all.filter(c => c.status === '已完成');
     const panel = (title, cls, list, empty, meta) => `
@@ -1026,7 +1059,18 @@
       </section>`;
     const chips = [['open', '未完成', all.filter(c => !closedSt(c.status)).length], ...CARD_ST.map(s => [s, s, all.filter(c => c.status === s).length])];
     const listed = all.filter(c => (work.filter === 'open' ? !closedSt(c.status) : c.status === work.filter));
+    const decSection = decideMe.length ? `
+      <section class="wdecisions"><div class="wdec-head"><h3>待你決定</h3><span class="wcount ora">${decideMe.length}</span></div>
+        <div class="dgrid">${decideMe.map(c => `
+          <article class="dcard">
+            <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span><span class="cid">${esc(c.cardId)}</span><span class="grow"></span>
+              <button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
+            <h4>${esc(c.decision.question)}</h4>
+            ${decisionBox(c)}
+            ${decisionActions(c)}
+          </article>`).join('')}</div></section>` : '';
     return `
+      ${decSection}
       <div class="wpanels">
         ${panel('等你處理', 'mine', waitMe, '目前沒有等你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`)}
         ${panel('受阻', 'blocked', blocked, '沒有受阻的卡片。', c => waitText(c) || '未填寫阻塞原因')}
@@ -1074,7 +1118,9 @@
 
   // 互動
   const workBox = $('#page-work');
+  workBox.addEventListener('input', decisionInput);
   workBox.addEventListener('click', e => {
+    if (decisionClick(e)) return;
     const t = e.target;
     const v = t.closest('[data-view]');
     if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
@@ -1123,6 +1169,43 @@
     if (c && c.status !== col.dataset.col) patchCard(id, { status: col.dataset.col });
   });
 
+  async function decideCard(id, result, note) {
+    const c = work.cards.get(id);
+    try {
+      const r = await api(`/api/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { result, note, version: c?.version } });
+      work.cards.set(id, r);
+      work.note = null;
+      renderWork();
+      if (work.openId === id) openCard(id);
+      toast(result === '要求補充' ? `已請 ${r.waitFor?.name || '提案人'} 補充` : `已記錄決定：${result}`);
+    } catch (err) {
+      toast(err.message);
+      if (err.code === 'CONFLICT') { await syncCards().catch(() => {}); }
+    }
+  }
+  function decisionClick(e) {
+    const t = e.target;
+    const dc = t.closest('[data-decide]');
+    if (dc) { decideCard(dc.dataset.decide, dc.dataset.result, ''); return true; }
+    const open = t.closest('[data-note-open]');
+    if (open) { work.note = { id: open.dataset.noteOpen, kind: open.dataset.kind, text: '' }; refreshDecisionUi(); return true; }
+    if (t.closest('[data-note-cancel]')) { work.note = null; refreshDecisionUi(); return true; }
+    const sub = t.closest('[data-note-submit]');
+    if (sub && work.note?.text.trim()) { decideCard(sub.dataset.noteSubmit, work.note.kind, work.note.text.trim()); return true; }
+    return false;
+  }
+  function decisionInput(e) {
+    if (!e.target.matches?.('[data-note-text]') || !work.note) return;
+    work.note.text = e.target.value;
+    const btn = e.target.closest('.dcard, .drawer')?.querySelector('[data-note-submit]');
+    if (btn) btn.disabled = !work.note.text.trim();
+  }
+  function refreshDecisionUi() {
+    renderWork();
+    if (work.openId && work.detail) renderDrawer(false);
+    const ta = document.querySelector('[data-note-text]');
+    if (ta) { ta.focus(); }
+  }
   async function patchCard(id, body) {
     const c = work.cards.get(id);
     try {
@@ -1167,7 +1250,8 @@
       host.id = 'card-drawer';
       host.className = 'drawer-root';
       document.body.append(host);
-      host.addEventListener('click', drawerClick);
+      host.addEventListener('click', e => { if (!decisionClick(e)) drawerClick(e); });
+      host.addEventListener('input', decisionInput);
       host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
       host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
     }
@@ -1190,10 +1274,18 @@
             ${d.verified ? `<span class="cmark ver-bg">已驗證 · ${esc(d.verified.by?.name || '')} · ${shortTime(d.verified.at)}</span>` : ''}
             ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
           </div>` : ''}
+          ${d.type === '決策' && d.decision ? `<section class="ddecision"><h3>決策</h3><p class="dq">${esc(d.decision.question)}</p>${decisionBox(d)}${decisionStatus(d)}</section>` : ''}
           ${work.editing ? `
           <form id="card-edit" class="stack">
             <label>標題<input name="title" required maxlength="100" value="${esc(d.title)}"></label>
-            <label>類型<select name="type">${['工作', '阻塞'].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+            ${d.type === '決策' ? '' : `<label>類型<select name="type">${['工作', '阻塞'].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`}
+            ${d.type === '決策' && !d.decision?.result ? `
+            <label>決策問題<input name="question" required maxlength="200" value="${esc(d.decision.question)}"></label>
+            <label>建議方案<textarea name="recommendation" rows="2" maxlength="500">${esc(d.decision.recommendation)}</textarea></label>
+            <label>選項<textarea name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」">${esc((d.decision.options || []).join('\n'))}</textarea></label>
+            <label>影響<input name="impact" maxlength="200" value="${esc(d.decision.impact)}"></label>
+            <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
+            <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
             <label>原因<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
             <label>負責人<select name="ownerId">${opts(d.owner?.participantId, '未指派')}</select></label>
             <label>下一步<textarea name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
@@ -1250,9 +1342,20 @@
       <form id="card-new-form" class="stack">
         <div class="field"><span class="field-label" id="nt-label">類型</span>
           <div class="seg-scope full" role="group" aria-labelledby="nt-label">
-            <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button>
+            <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button>
           </div><input type="hidden" name="type" value="工作"></div>
         <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
+        <div id="nc-decision" class="stack" hidden>
+          <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
+          <label>建議方案<textarea name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
+          <label>選項<textarea name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」"></textarea>
+            <span class="field-hint">決策者另外一定能選「不同意」「要求補充」。</span></label>
+          <div class="two-col">
+            <label>影響<input name="impact" maxlength="200" placeholder="例如：UX、PG"></label>
+            <label>決策者<select name="deciderId">${people.filter(p => p.memberType === 'human').map(p => `<option value="${esc(p.participantId)}" ${p.participantId === meId() ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+          </div>
+          <label>決定後<input name="afterNext" maxlength="300" placeholder="決定後下一步是什麼"></label>
+        </div>
         <label>原因<textarea name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
         <div class="two-col">
           <label>負責人<select name="ownerId">${opts('未指派')}</select></label>
@@ -1271,7 +1374,11 @@
     body.querySelectorAll('[data-nt]').forEach(b => b.addEventListener('click', () => {
       form.type.value = b.dataset.nt;
       body.querySelectorAll('[data-nt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
-      form.status.disabled = b.dataset.nt === '阻塞'; // 阻塞卡固定為受阻
+      const t = b.dataset.nt;
+      form.status.disabled = t !== '工作'; // 阻塞固定為受阻、決策固定為待確認
+      body.querySelector('#nc-decision').hidden = t !== '決策';
+      form.waitForId.closest('label').hidden = t === '決策'; // 決策卡固定等決策者
+      for (const k of ['next', 'criteria']) form[k].closest('label').hidden = t === '決策';
     }));
     const requestId = 'web_' + (crypto.randomUUID?.() || Date.now() + Math.random());
     form.addEventListener('submit', async e => {
@@ -1279,6 +1386,10 @@
       const data = Object.fromEntries(new FormData(form));
       for (const k of Object.keys(data)) data[k] = data[k].trim();
       if (form.status.disabled) delete data.status;
+      if (data.type !== '決策') for (const k of ['question', 'recommendation', 'options', 'impact', 'deciderId', 'afterNext']) delete data[k];
+      else { delete data.waitForId; if (!data.options) data.options = []; else data.options = data.options.split('\n'); }
+      if (!data.ownerId) delete data.ownerId;
+      if (!data.waitForId) delete data.waitForId;
       try {
         const c = await api('/api/cards', { method: 'POST', body: { ...data, requestId } });
         work.cards.set(c.cardId, c);

@@ -865,3 +865,34 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 :root[data-theme="dark"] .bcol.over { background: var(--human-bg); }
 :root[data-theme="dark"] .cwait { background: var(--surface-2); }
 :root[data-theme="dark"] .wchips button[aria-pressed="true"] { background: #e5e7eb; border-color: #e5e7eb; color: #111827; }
+
+/* ===== 決策卡片（第二階段） ===== */
+.wdecisions { display: grid; gap: 10px; }
+.wdec-head { display: flex; gap: 8px; align-items: center; }
+.wdec-head h3 { margin: 0; font-size: 16px; }
+.wcount.ora { background: #ffedd5; color: #9a3412; }
+.dgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 12px; }
+.dcard { background: var(--surface); border: 1px solid #fbd3b0; border-radius: 12px; padding: 14px 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.dcard h4 { margin: 0; font-size: 16px; line-height: 1.45; overflow-wrap: anywhere; }
+.dcard-top { display: flex; gap: 8px; align-items: center; }
+.grow { flex: 1; }
+.strong { font-weight: 600; }
+.dbox { padding: 10px 12px; background: var(--surface-2); border-radius: 8px; display: grid; gap: 2px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.dfields.compact { grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font-size: 13px; }
+.dactions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn.ok { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+.dnote { display: grid; gap: 6px; font-size: 13.5px; font-weight: 600; }
+.dnote textarea { min-height: 60px; font-weight: 400; }
+.ddecision { border: 1px solid #fbd3b0; border-radius: 12px; padding: 12px 14px; display: grid; gap: 10px; }
+.ddecision h3 { margin: 0; font-size: 14px; color: var(--muted); }
+.dq { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
+.dresult { display: grid; gap: 2px; padding: 10px 12px; border-radius: 8px; background: #dcfce7; color: #166534; overflow-wrap: anywhere; }
+.dresult .muted { color: inherit; opacity: .85; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .dcard, :root:not([data-theme="light"]) .ddecision { border-color: var(--mine-border); }
+  :root:not([data-theme="light"]) .dresult { background: var(--ok-bg); color: var(--ok-text); }
+  :root:not([data-theme="light"]) .wcount.ora { background: var(--mine-bg); color: var(--text); }
+}
+:root[data-theme="dark"] .dcard, :root[data-theme="dark"] .ddecision { border-color: var(--mine-border); }
+:root[data-theme="dark"] .dresult { background: var(--ok-bg); color: var(--ok-text); }
+:root[data-theme="dark"] .wcount.ora { background: var(--mine-bg); color: var(--text); }
