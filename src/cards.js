@@ -1,6 +1,7 @@
 // 工作卡片 API（第一階段）：卡片、狀態、完成／驗證、紀錄、關聯訊息。
 // 權限：人類可改所有卡片；AI 只能建立卡片（負責人限自己或不指派）、修改自己負責的卡片。
 // 「已驗證」必須由完成者以外的人或 AI 標記。
+// AI 建議（第三階段）：AI 只能建議改別人的卡片／替別人建卡，由人類採用或略過。
 // 決策卡片（第二階段）：只有指定決策者（人類）能決定；要求補充會把球丟回提案人，補充後自動回到決策者。AI 建議在後續階段。
 export const CARD_STATUSES = ['待整理', '待處理', '進行中', '待確認', '受阻', '已完成', '已封存'];
 export const CARD_TYPES = ['工作', '阻塞', '決策'];
@@ -12,6 +13,25 @@ const CARD_NO_BASE = 100; // 顯示編號 = C-(seq + 100)
 const FIELD_LABEL = { title: '標題', reason: '原因', next: '下一步', blocker: '阻塞', criteria: '完成條件', question: '決策問題', recommendation: '建議方案', impact: '影響', afterNext: '決定後' };
 const DECISION_COL = { question: 'question', recommendation: 'recommendation', impact: 'impact', afterNext: 'after_next' };
 const cardNo = seq => `C-${seq + CARD_NO_BASE}`;
+
+
+// 團隊狀態用：每位負責人手上最急的未完成卡片、以及等決策者的決策卡（只讀未完成的卡片，量很小）
+const WORK_RANK = { 受阻: 0, 待確認: 1, 進行中: 2, 待處理: 3 };
+const WORK_STATE = { 受阻: 'blocked', 待確認: 'waiting', 進行中: 'working', 待處理: 'todo' };
+export async function teamCards(db) {
+  const open = await db.all("SELECT seq, owner_id, status, title, updated_at FROM cards WHERE owner_id IS NOT NULL AND status IN ('待處理','進行中','待確認','受阻') ORDER BY updated_at DESC");
+  const byOwner = new Map();
+  for (const c of open) {
+    const cur = byOwner.get(c.owner_id) || { best: null, count: 0 };
+    cur.count++;
+    if (!cur.best || WORK_RANK[c.status] < WORK_RANK[cur.best.status]) cur.best = c;
+    byOwner.set(c.owner_id, cur);
+  }
+  const work = new Map([...byOwner].map(([id, { best, count }]) => [id,
+    { state: WORK_STATE[best.status], title: best.title, cardId: cardNo(best.seq), at: best.updated_at, cardCount: count, source: 'card' }]));
+  const decisions = await db.all("SELECT seq, title, question, proposer_id, decider_id, created_at FROM cards WHERE type = '決策' AND status = '待確認' AND decision_result IS NULL ORDER BY created_at DESC LIMIT 30");
+  return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id })) };
+}
 
 export function registerCards({ route, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople }) {
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
@@ -311,5 +331,138 @@ export function registerCards({ route, db, ApiError, invalid, readJson, peopleMa
     if (n >= 50) throw invalid('一張卡片最多關聯 50 則訊息');
     await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, mid);
     return { cardId: cardNo(c.seq), messageId: mid };
+  });
+
+  // ===== AI 建議（第三階段） =====
+  const SUG_PENDING_MAX = 20;
+  const sugNo = id => `S-${id}`;
+  const parseSug = id => {
+    const m = /^S-(\d+)$/.exec(id);
+    if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到這則建議');
+    return Number(m[1]);
+  };
+  async function loadSug(id) {
+    const r = await db.get('SELECT * FROM suggestions WHERE id = ?', parseSug(id));
+    if (!r) throw new ApiError(404, 'NOT_FOUND', '找不到這則建議');
+    return r;
+  }
+  async function sugView(r, people) {
+    const p = JSON.parse(r.payload || '{}');
+    const card = r.card_seq ? await db.get('SELECT seq, title, status FROM cards WHERE seq = ?', r.card_seq) : null;
+    return {
+      suggestionId: sugNo(r.id), kind: r.kind, state: r.state, from: ref(people, r.from_id), why: r.why, basisMessageId: r.basis_message_id, createdAt: r.created_at,
+      card: card ? { cardId: cardNo(card.seq), title: card.title, status: card.status } : null,
+      to: p.to ?? null, waitFor: ref(people, p.waitForId),
+      create: r.kind === 'create' ? { type: p.type, title: p.title, reason: p.reason, owner: ref(people, p.ownerId), next: p.next, blocker: p.blocker, waitFor: ref(people, p.waitForId), criteria: p.criteria } : null,
+      resolvedBy: ref(people, r.resolved_by), resolvedAt: r.resolved_at, resultCardId: r.result_card_seq ? cardNo(r.result_card_seq) : null,
+    };
+  }
+
+  route('POST', '/api/suggestions', async ({ ctx, me, req }) => {
+    if (me.kind !== 'ai') throw invalid('建議是給 AI 用的：人類請直接建立或修改卡片。');
+    const body = await readJson(req);
+    const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
+    if (!requestId || requestId.length > 128) throw invalid('requestId 為必填，長度 1～128');
+    const people = await peopleMap(ctx);
+    const dup = await db.get('SELECT * FROM suggestions WHERE from_id = ? AND request_id = ?', me.id, requestId);
+    if (dup) return { __status: 200, ...(await sugView(dup, people)), duplicate: true };
+    const why = String(body.why ?? '').trim();
+    if (!why) throw invalid('why 為必填：請說明為什麼建議這樣改');
+    if (why.length > 300) throw invalid('why 上限 300 字');
+    if (body.basisMessageId && !(await db.get('SELECT id FROM messages WHERE id = ?', String(body.basisMessageId)))) throw invalid('找不到 basisMessageId 這則訊息');
+    const pending = (await db.get("SELECT COUNT(*) AS n FROM suggestions WHERE from_id = ? AND state = 'pending'", me.id)).n;
+    if (pending >= SUG_PENDING_MAX) throw new ApiError(429, 'TOO_MANY_SUGGESTIONS', `你還有 ${pending} 則建議沒被處理，請先等人類處理再提新的。`);
+
+    const kind = body.kind;
+    let cardSeq = null, payload;
+    if (kind === 'create') {
+      const title = text(body, 'title', { required: true });
+      if (title === undefined) throw invalid('title 為必填');
+      const type = checkType(body.type ?? '工作');
+      if (type === '決策') throw invalid('決策卡片請直接用 POST /api/cards 建立（它本來就是等人類決定）。');
+      const owner = await validPerson(people, body.ownerId, '負責人');
+      if (!owner || owner === me.id) throw new ApiError(400, 'USE_POST', '替自己建卡或不指派負責人，請直接用 POST /api/cards；建議只用在「把工作指派給別人」。');
+      payload = { type, title, reason: text(body, 'reason') ?? '', ownerId: owner, next: text(body, 'next') ?? '', blocker: text(body, 'blocker') ?? '',
+        waitForId: await validPerson(people, body.waitForId, '等誰'), criteria: text(body, 'criteria') ?? '' };
+    } else if (kind === 'status') {
+      const c = await load(String(body.cardId ?? ''));
+      const to = checkStatus(body.status);
+      if (canEdit(me, c)) throw new ApiError(400, 'USE_PATCH', '這張是你負責的卡片，請直接用 PATCH /api/cards/:id 修改。');
+      if (c.status === to) throw new ApiError(400, 'NO_CHANGE', `這張卡片已經是「${to}」了。`);
+      if (c.type === '決策' && to === '已完成') throw new ApiError(400, 'USE_DECIDE', '決策卡片要由決策者決定，不能建議直接完成。');
+      cardSeq = c.seq;
+      payload = { to, waitForId: await validPerson(people, body.waitForId, '等誰') };
+      const same = await db.get("SELECT * FROM suggestions WHERE from_id = ? AND state = 'pending' AND kind = 'status' AND card_seq = ? AND payload = ?", me.id, cardSeq, JSON.stringify(payload));
+      if (same) return { __status: 200, ...(await sugView(same, people)), duplicate: true };
+    } else throw invalid("kind 需為 'create' 或 'status'");
+    const at = nowIso();
+    await db.run('INSERT INTO suggestions (kind, from_id, card_seq, payload, basis_message_id, why, request_id, created_at) VALUES (?,?,?,?,?,?,?,?)',
+      kind, me.id, cardSeq, JSON.stringify(payload), body.basisMessageId ? String(body.basisMessageId) : null, why, requestId, at);
+    const row = await db.get('SELECT * FROM suggestions WHERE from_id = ? AND request_id = ?', me.id, requestId);
+    return { __status: 201, ...(await sugView(row, people)) };
+  });
+
+  route('GET', '/api/suggestions', async ({ ctx, me, url }) => {
+    const st = url.searchParams.get('state') || 'pending';
+    if (!['pending', 'applied', 'skipped'].includes(st)) throw invalid('state 需為 pending、applied 或 skipped');
+    const limit = parseLimit(url, 100, 200);
+    const rows = me.kind === 'human'
+      ? await db.all('SELECT * FROM suggestions WHERE state = ? ORDER BY id DESC LIMIT ?', st, limit)
+      : await db.all('SELECT * FROM suggestions WHERE state = ? AND from_id = ? ORDER BY id DESC LIMIT ?', st, me.id, limit);
+    const people = await peopleMap(ctx);
+    return { items: await Promise.all(rows.map(r => sugView(r, people))) };
+  });
+
+  const humanOnly = me => { if (me.kind !== 'human') throw new ApiError(403, 'FORBIDDEN', '只有人類成員能採用或略過建議。'); };
+  async function claim(r, me, at, resultSeq = null, state = 'applied') {
+    const res = await db.run("UPDATE suggestions SET state = ?, resolved_by = ?, resolved_at = ?, result_card_seq = ? WHERE id = ? AND state = 'pending'", state, me.id, at, resultSeq, r.id);
+    if (!res.changes) throw new ApiError(409, 'NOT_PENDING', '這則建議已經被處理過了。');
+  }
+
+  route('POST', '/api/suggestions/:id/apply', async ({ ctx, me, req, params }) => {
+    humanOnly(me);
+    const body = await readJson(req);
+    const r = await loadSug(params.id);
+    if (r.state !== 'pending') throw new ApiError(409, 'NOT_PENDING', '這則建議已經被處理過了。');
+    const people = await peopleMap(ctx), p = JSON.parse(r.payload || '{}'), at = nowIso();
+    const aiName = people.get(r.from_id)?.name || 'AI';
+    if (r.kind === 'status') {
+      const c = await db.get('SELECT * FROM cards WHERE seq = ?', r.card_seq);
+      if (!c) throw notFound();
+      if (c.status === p.to) { await claim(r, me, at, c.seq); return view(c, people); }
+      const ch = statusChange(c, p.to, me, at);
+      const sets = { ...ch.sets }, logs = ch.logs.map((t, i) => (i === 0 ? `採用 ${aiName} 的建議：${t}` : t));
+      if (p.waitForId && p.waitForId !== c.wait_for_id) { sets.wait_for_id = p.waitForId; logs.push(`等誰改為 ${people.get(p.waitForId)?.name}`); }
+      await save(c, sets, logs, me, at);
+      await claim(r, me, at, c.seq);
+      invalidatePeople();
+      return view(await db.get('SELECT * FROM cards WHERE seq = ?', c.seq), people);
+    }
+    // create：採用時可以先改欄位
+    const f = { ...p };
+    for (const k of ['title', 'reason', 'next', 'blocker', 'criteria']) { const v = text(body, k, { required: k === 'title' }); if (v !== undefined) f[k] = v; }
+    if (body.type !== undefined) { f.type = checkType(body.type); if (f.type === '決策') throw invalid('決策卡片請直接建立'); }
+    if (body.ownerId !== undefined) f.ownerId = await validPerson(people, body.ownerId, '負責人');
+    if (body.waitForId !== undefined) f.waitForId = await validPerson(people, body.waitForId, '等誰');
+    const status = f.type === '阻塞' ? '受阻' : '待處理';
+    const uid = randId('card');
+    await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, f.type, f.title, f.reason ?? '', f.ownerId ?? null, status, f.next ?? '', f.blocker ?? '', f.waitForId ?? null,
+      f.criteria ?? '', r.from_id, `sug_${r.id}`, at, at);
+    const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
+    await db.batch([
+      ...logStmt(c.seq, me, [`採用 ${aiName} 的建議建立卡片（類型：${f.type}）`], at),
+      ...(r.basis_message_id ? [['INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', [c.seq, r.basis_message_id]]] : []),
+    ]);
+    await claim(r, me, at, c.seq);
+    invalidatePeople();
+    return { __status: 201, ...view(c, people) };
+  });
+
+  route('POST', '/api/suggestions/:id/skip', async ({ ctx, me, params }) => {
+    humanOnly(me);
+    const r = await loadSug(params.id);
+    await claim(r, me, nowIso(), null, 'skipped');
+    return sugView(await loadSug(params.id), await peopleMap(ctx));
   });
 }

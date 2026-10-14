@@ -896,3 +896,25 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 :root[data-theme="dark"] .dcard, :root[data-theme="dark"] .ddecision { border-color: var(--mine-border); }
 :root[data-theme="dark"] .dresult { background: var(--ok-bg); color: var(--ok-text); }
 :root[data-theme="dark"] .wcount.ora { background: var(--mine-bg); color: var(--text); }
+
+/* ===== AI 建議（第三階段） ===== */
+.st-todo { background: #e0e7ff; color: #3730a3; }
+.wsugg { background: var(--surface); border: 1px solid #e9d5ff; border-radius: 12px; overflow: hidden; }
+.wsugg-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 16px; }
+.wsugg-head h3 { margin: 0; font-size: 16px; }
+.wdot.sg { background: #a855f7; }
+.wcount.pur { background: #f3e8ff; color: #7e22ce; }
+.sugg-row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--border); }
+.sugg-main { flex: 1 1 300px; min-width: 0; display: grid; gap: 3px; justify-items: start; overflow-wrap: anywhere; }
+.sugg-top { display: flex; gap: 6px; align-items: center; }
+.sgk { padding: 0 7px; border-radius: 5px; font-size: 12px; font-weight: 600; line-height: 20px; background: #f3e8ff; color: #7e22ce; }
+.sugg-actions { flex: none; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wsugg { border-color: var(--ai-border); }
+  :root:not([data-theme="light"]) .sgk, :root:not([data-theme="light"]) .wcount.pur { background: var(--ai-bg); color: var(--ai-text); }
+  :root:not([data-theme="light"]) .st-todo { background: var(--human-bg); color: var(--human-text); }
+}
+:root[data-theme="dark"] .wsugg { border-color: var(--ai-border); }
+:root[data-theme="dark"] .sgk, :root[data-theme="dark"] .wcount.pur { background: var(--ai-bg); color: var(--ai-text); }
+:root[data-theme="dark"] .st-todo { background: var(--human-bg); color: var(--human-text); }
+.page-work > * { flex: none; }

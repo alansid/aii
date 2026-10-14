@@ -979,17 +979,56 @@
     work.since = d.nextSince;
     work.loaded = true;
     work.lastSync = Date.now();
+    await loadSuggestions();
+  }
+  async function loadSuggestions() {
+    work.sugg = (await api('/api/suggestions?state=pending')).items;
   }
   // 增量同步：只讀上次之後有變動的卡片
   async function syncCards() {
     if (!work.loaded) return;
     work.lastSync = Date.now();
-    const d = await api('/api/cards?since=' + encodeURIComponent(work.since || ''));
-    if (!d.items.length) return;
+    const [d, sg] = await Promise.all([api('/api/cards?since=' + encodeURIComponent(work.since || '')), api('/api/suggestions?state=pending')]);
+    const suggChanged = JSON.stringify(sg.items.map(x => x.suggestionId)) !== JSON.stringify((work.sugg || []).map(x => x.suggestionId));
+    work.sugg = sg.items;
+    if (!d.items.length && !suggChanged) return;
     for (const c of d.items) work.cards.set(c.cardId, c);
-    work.since = d.nextSince;
+    if (d.items.length) work.since = d.nextSince;
     renderWork();
     if (work.openId && d.items.some(c => c.cardId === work.openId) && !work.editing) openCard(work.openId);
+  }
+
+  // AI 建議區塊
+  function suggHtml() {
+    const list = work.sugg || [];
+    if (!list.length) return '';
+    const what = g => (g.kind === 'create'
+      ? `建立${g.create.type}卡片「${esc(g.create.title)}」，負責人 ${esc(g.create.owner?.name || '未指派')}`
+      : `${esc(g.card?.cardId || '')} ${esc(g.card?.title || '')} 狀態改為「${esc(g.to)}」${g.waitFor ? `，等 ${esc(g.waitFor.name)}` : ''}`);
+    return `<section class="wsugg"><div class="wsugg-head"><span class="wdot sg"></span><h3>AI 建議</h3><span class="wcount pur">${list.length}</span><span class="muted small">由你採用後才會建立或更新卡片</span></div>
+      ${list.map(g => `<div class="sugg-row">
+        <div class="sugg-main"><div class="sugg-top"><span class="sgk">${g.kind === 'create' ? '建立卡片' : '更新狀態'}</span><span class="muted small">${esc(g.from?.name || '')}</span></div>
+          <b>${what(g)}</b><span class="small">${esc(g.why)}</span>
+          ${g.basisMessageId ? `<button type="button" class="link small" data-sugg-basis="${esc(g.basisMessageId)}">看依據訊息</button>` : ''}</div>
+        <div class="sugg-actions">
+          <button type="button" class="btn small primary" data-sugg-apply="${esc(g.suggestionId)}">採用</button>
+          ${g.kind === 'create' ? `<button type="button" class="btn small" data-sugg-edit="${esc(g.suggestionId)}">編輯後採用</button>` : ''}
+          <button type="button" class="link small" data-sugg-skip="${esc(g.suggestionId)}">略過</button></div>
+      </div>`).join('')}</section>`;
+  }
+  async function suggAction(id, action, body) {
+    try {
+      const r = await api(`/api/suggestions/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: body || {} });
+      if (action === 'apply') { work.cards.set(r.cardId, r); toast(`已採用，${r.cardId} ${r.status}`); }
+      else toast('已略過建議');
+      await loadSuggestions();
+      renderWork();
+      return r;
+    } catch (err) {
+      toast(err.message);
+      if (err.code === 'NOT_PENDING') { await loadSuggestions().catch(() => {}); renderWork(); }
+      return null;
+    }
   }
 
   function showPage(page) {
@@ -1071,6 +1110,7 @@
           </article>`).join('')}</div></section>` : '';
     return `
       ${decSection}
+      ${suggHtml()}
       <div class="wpanels">
         ${panel('等你處理', 'mine', waitMe, '目前沒有等你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`)}
         ${panel('受阻', 'blocked', blocked, '沒有受阻的卡片。', c => waitText(c) || '未填寫阻塞原因')}
@@ -1126,6 +1166,14 @@
     if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
     const f = t.closest('[data-filter]');
     if (f) { work.filter = f.dataset.filter; work.view = 'A'; return renderWork(); }
+    const sa = t.closest('[data-sugg-apply]');
+    if (sa) return void suggAction(sa.dataset.suggApply, 'apply');
+    const ss = t.closest('[data-sugg-skip]');
+    if (ss) return void suggAction(ss.dataset.suggSkip, 'skip');
+    const se = t.closest('[data-sugg-edit]');
+    if (se) return openNewCard((work.sugg || []).find(x => x.suggestionId === se.dataset.suggEdit));
+    const sb = t.closest('[data-sugg-basis]');
+    if (sb) { const id = sb.dataset.suggBasis; showPage('messages'); return void jumpTo(id); }
     const mc = t.closest('[data-mcol]');
     if (mc) { work.mCol = mc.dataset.mcol; return renderWork(); }
     if (t.closest('#toggle-archived')) { work.showArchived = !work.showArchived; return renderWork(); }
@@ -1335,11 +1383,12 @@
   }
 
   // 新增卡片
-  function openNewCard() {
+  function openNewCard(sg) {
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
     const opts = none => `<option value="">${none}</option>` + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
-    const body = openModal('新增卡片', `
+    const body = openModal(sg ? '編輯後採用建議' : '新增卡片', `
       <form id="card-new-form" class="stack">
+        ${sg ? `<div class="warn-box">${esc(sg.from?.name || 'AI')} 的建議：${esc(sg.why)}</div>` : ''}
         <div class="field"><span class="field-label" id="nt-label">類型</span>
           <div class="seg-scope full" role="group" aria-labelledby="nt-label">
             <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button>
@@ -1380,6 +1429,15 @@
       form.waitForId.closest('label').hidden = t === '決策'; // 決策卡固定等決策者
       for (const k of ['next', 'criteria']) form[k].closest('label').hidden = t === '決策';
     }));
+    if (sg) { // 預填建議內容；決策類型與狀態不適用
+      const c = sg.create;
+      body.querySelector('[data-nt="決策"]').hidden = true;
+      form.title.value = c.title; form.reason.value = c.reason || ''; form.next.value = c.next || ''; form.criteria.value = c.criteria || '';
+      if (c.owner) form.ownerId.value = c.owner.participantId;
+      if (c.waitFor) form.waitForId.value = c.waitFor.participantId;
+      form.status.closest('label').hidden = true; form.status.disabled = true;
+      if (c.type === '阻塞') body.querySelector('[data-nt="阻塞"]').click();
+    }
     const requestId = 'web_' + (crypto.randomUUID?.() || Date.now() + Math.random());
     form.addEventListener('submit', async e => {
       e.preventDefault();
@@ -1391,7 +1449,9 @@
       if (!data.ownerId) delete data.ownerId;
       if (!data.waitForId) delete data.waitForId;
       try {
-        const c = await api('/api/cards', { method: 'POST', body: { ...data, requestId } });
+        const c = sg ? await api(`/api/suggestions/${encodeURIComponent(sg.suggestionId)}/apply`, { method: 'POST', body: { title: data.title, reason: data.reason, ownerId: data.ownerId ?? null, next: data.next, criteria: data.criteria, type: data.type, waitForId: data.waitForId ?? null } })
+          : await api('/api/cards', { method: 'POST', body: { ...data, requestId } });
+        if (sg) await loadSuggestions();
         work.cards.set(c.cardId, c);
         closeModal();
         renderWork();
@@ -1417,7 +1477,9 @@
   $('#presence-pill').addEventListener('click', openMembers);
 
   // ---------- 團隊狀態 ----------
-  const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定' };
+  const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定', todo: '待處理' };
+  // 「等你決定」：訊息型的所有人都看；決策卡只給指定的決策者看
+  const myDecisions = t => t.decisions.filter(d => !d.cardId || d.deciderId === meId());
   const agoText = iso => {
     if (!iso) return '從未上線';
     const min = Math.floor((Date.now() - new Date(iso)) / 60000);
@@ -1473,7 +1535,8 @@
         <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
       </button>`;
     }).join('');
-    const dec = t.decisions.length ? `<button type="button" class="chip decide" data-team>等你決定 ${t.decisions.length}</button>` : '';
+    const mdec = myDecisions(t);
+    const dec = mdec.length ? `<button type="button" class="chip decide" data-team>等你決定 ${mdec.length}</button>` : '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;
     // 側欄：兩行清單（名稱／最後上線 · 環境），狀態靠右
@@ -1486,7 +1549,7 @@
         ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
       </button>`;
     }).join('');
-    $('#team-list').innerHTML = (t.decisions.length ? `<button type="button" class="decide-row" data-team><span>等你決定</span><b>${t.decisions.length}</b></button>` : '') + rows;
+    $('#team-list').innerHTML = (mdec.length ? `<button type="button" class="decide-row" data-team><span>等你決定</span><b>${mdec.length}</b></button>` : '') + rows;
   }
   for (const el of [$('#team-bar'), $('#team-list'), $('.side-title')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
 
@@ -1500,21 +1563,21 @@
       return `<div class="tm-row">
         <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small">${esc(mb.role || '')}${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
         <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
-        <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" data-jump-team="${esc(mb.status.messageId)}">${esc(mb.status.title || '（無標題）')}</button>` : '<span class="muted">—</span>'}</div>
+        <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
         <div class="tm-pend muted small">${mb.pendingCount ? `待處理 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '待處理 0'}</div>
         <div class="tm-token small ${tokenCls}">${mb.memberType === 'ai' ? `Token ${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' 已過期' : mb.tokenExpiringSoon ? ' 快到期' : ''}` : ''}</div>
       </div>`;
     }).join('');
     const body = openModal('團隊狀態', `
       <details class="help"><summary>狀態怎麼判斷？</summary>
-        <p>依每人最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」；指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」。</p>
+        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」；指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」。</p>
       </details>
-      <div class="group-title">等你決定 · ${t.decisions.length}</div>
-      ${t.decisions.length ? t.decisions.map(d => `
+      <div class="group-title">等你決定 · ${myDecisions(t).length}</div>
+      ${myDecisions(t).length ? myDecisions(t).map(d => `
         <div class="note-card yellow">
-          <div class="note-main"><button type="button" class="link strong" data-jump-team="${esc(d.messageId)}">${esc(d.title || '（無標題）')}</button>
+          <div class="note-main"><button type="button" class="link strong" ${d.cardId ? `data-open-card="${esc(d.cardId)}"` : `data-jump-team="${esc(d.messageId)}"`}>${esc(d.title || '（無標題）')}</button>
             <span class="muted small">${esc(d.author.name)} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
-          <button type="button" class="btn small" data-resolve="${esc(d.messageId)}" title="已經決定了，從清單移出">已處理</button>
+          ${d.cardId ? `<button type="button" class="btn small" data-open-card="${esc(d.cardId)}">去決定</button>` : `<button type="button" class="btn small" data-resolve="${esc(d.messageId)}" title="已經決定了，從清單移出">已處理</button>`}
         </div>`).join('') : '<p class="muted small">目前沒有待決定的事項。</p>'}
       ${t.unanswered.length ? `<div class="group-title">尚未回應的指派 · ${t.unanswered.length}</div>
         ${t.unanswered.map(u => `<div class="note-card red">
@@ -1523,6 +1586,8 @@
       <div class="group-title">成員</div>
       <div class="tm-list">${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
     body.addEventListener('click', async e => {
+      const oc = e.target.closest('[data-open-card]');
+      if (oc) { closeModal(); showPage('work'); openCard(oc.dataset.openCard); return; }
       const j = e.target.closest('[data-jump-team]');
       if (j) { closeModal(); jumpTo(j.dataset.jumpTeam); return; }
       const r = e.target.closest('[data-resolve]');

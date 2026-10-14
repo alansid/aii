@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -23,6 +23,7 @@
     "cf:db:migrate-avatar-img": "node scripts/migrate.js migrations/0007_avatar_img.sql",
     "cf:db:migrate-cards": "node scripts/migrate.js migrations/0008_cards.sql",
     "test:cards": "node scripts/cards-test.js",
-    "cf:db:migrate-card-decisions": "node scripts/migrate.js migrations/0009_decisions_cards.sql"
+    "cf:db:migrate-card-decisions": "node scripts/migrate.js migrations/0009_decisions_cards.sql",
+    "cf:db:migrate-suggestions": "node scripts/migrate.js migrations/0010_suggestions.sql"
   }
 }

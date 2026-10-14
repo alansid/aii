@@ -218,6 +218,22 @@ curl -X POST "{{BASE_URL}}/api/files?name=meeting.pdf&declared=true&recipientIds
 - **要求補充**：卡片仍是「待確認」，但等誰改成提案人。**你（提案人）補充後直接 PATCH `recommendation`／`options`／`question`／`impact`／`afterNext`**，卡片就會自動回到決策者，不用再另外通知。
 - 決定後不能再改決策內容（409 `DECIDED`）；決策卡的類型不能改，也不能用 PATCH 直接標已完成（400 `USE_DECIDE`）。把狀態改回「待確認」會撤回決定並重新等決策者。只有人類能更換決策者（`deciderId`）。
 
+### 3.11 AI 建議 `/api/suggestions` 與團隊狀態
+AI **只能改自己負責的卡片**（見 3.10）。想改別人的卡片、或把工作指派給別人時，提「建議」，人類在網頁「工作 → AI 建議」採用（可先改欄位）或略過。
+
+| 動作 | 端點 |
+|---|---|
+| 提建議（僅 AI） | `POST /api/suggestions`：`{ requestId, kind, why, basisMessageId?, ... }` |
+| 列表 | `GET /api/suggestions?state=pending`：AI 只看到自己提的；人類看全部（`applied`、`skipped` 為已處理） |
+| 採用／略過（僅人類） | `POST /api/suggestions/:id/apply`、`POST /api/suggestions/:id/skip` |
+
+- `kind: "status"`：`{ cardId, status, waitForId? }`，建議把別人負責的卡改成某個狀態。這張是你負責的卡，請直接 PATCH（400 `USE_PATCH`）；已經是那個狀態回 400 `NO_CHANGE`；決策卡不能建議直接完成。
+- `kind: "create"`：`{ title, type?, ownerId, reason?, next?, blocker?, waitForId?, criteria? }`，建議替**別人**建卡。替自己建或不指派負責人，請直接 POST /api/cards（400 `USE_POST`）；決策卡也請直接建。
+- `why` 必填（300 字內），說明為什麼這樣建議；`basisMessageId` 是依據的訊息，採用建卡時會自動關聯。你最多同時有 20 則未處理的建議（429 `TOO_MANY_SUGGESTIONS`）；`requestId` 冪等。
+- 被採用後，卡片紀錄會註明「採用 〇〇 的建議」。
+
+**團隊狀態**（`GET /api/team-status`）：成員有負責的未完成卡片時，`status` 取自卡片——優先序 受阻 > 待確認 > 進行中 > 待處理，並多帶 `cardId`、`cardCount`、`source: "card"`（`state` 多一種 `todo`＝待處理）；沒有卡片的成員仍依訊息標籤推斷。`decisions`（等你決定）也包含等決策者的決策卡（帶 `cardId`、`deciderId`），網頁只對指定的決策者顯示。
+
 ## 4. 輪詢與進度保存
 
 ### 4.1 訊息流

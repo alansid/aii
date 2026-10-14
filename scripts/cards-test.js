@@ -155,6 +155,61 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await call(percy.token, `/api/cards/${d3.cardId}/decide`, 'POST', { result: '同意' })).status, 200);
     assert.equal((await call(liu.token, '/api/cards/' + (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '普通工作' })).body.cardId + '/decide', 'POST', { result: '同意' })).status, 400, '非決策卡不能 decide');
 
+    // ===== 第三階段：AI 建議 =====
+    const sug = (tok, body) => call(tok, '/api/suggestions', 'POST', { requestId: rid(), ...body });
+    assert.equal((await sug(liu.token, { kind: 'create', title: 'x', ownerId: pg.participantId, why: 'y' })).status, 400, '人類不用建議');
+    assert.equal((await sug(qa.token, { kind: 'create', title: '給自己的', ownerId: qa.participantId, why: 'y' })).body.error.code, 'USE_POST', '替自己建卡要直接建');
+    assert.equal((await sug(qa.token, { kind: 'create', title: '沒指派', why: 'y' })).body.error.code, 'USE_POST');
+    assert.equal((await sug(qa.token, { kind: 'create', title: 'x', ownerId: pg.participantId })).status, 400, 'why 必填');
+    const sMsg = (await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: '週五 demo 前請列出未完成項目' })).body;
+    const sc = (await sug(qa.token, { kind: 'create', title: '週五 demo 未完成清單', ownerId: pg.participantId, next: '週四前彙整', why: '昱志要求週四前列出', basisMessageId: sMsg.messageId })).body;
+    assert.equal(sc.state, 'pending'); assert.equal(sc.create.owner.participantId, pg.participantId); assert.equal(sc.from.participantId, qa.participantId);
+    const mine = c1.cardId; // c1 由 pg 負責
+    assert.equal((await sug(pg.token, { kind: 'status', cardId: mine, status: '待確認', why: 'y' })).body.error.code, 'USE_PATCH', '自己的卡直接 PATCH');
+    const ss = (await sug(qa.token, { kind: 'status', cardId: mine, status: '待確認', waitForId: liuId, why: '修正完成，等你複驗' })).body;
+    assert.equal(ss.kind, 'status'); assert.equal(ss.to, '待確認'); assert.equal(ss.card.cardId, mine);
+    const ssDup = await sug(qa.token, { kind: 'status', cardId: mine, status: '待確認', waitForId: liuId, why: '重複提出' });
+    assert.equal(ssDup.status, 200); assert.equal(ssDup.body.suggestionId, ss.suggestionId, '相同建議不重複建立');
+    assert.equal((await sug(qa.token, { kind: 'status', cardId: mine, status: '進行中', why: 'y' })).body.error.code, 'NO_CHANGE', '已經是那個狀態');
+    assert.equal((await sug(qa.token, { kind: 'status', cardId: dDefault.cardId, status: '已完成', why: 'y' })).body.error.code, 'USE_DECIDE');
+    // 列表：人類看全部、AI 只看自己的；AI 不能採用或略過
+    assert.equal((await call(liu.token, '/api/suggestions')).body.items.length, 2);
+    assert.equal((await call(pg.token, '/api/suggestions')).body.items.length, 0, 'AI 只看到自己的建議');
+    assert.equal((await call(qa.token, `/api/suggestions/${ss.suggestionId}/apply`, 'POST', {})).status, 403, 'AI 不能採用');
+    assert.equal((await call(pg.token, `/api/suggestions/${ss.suggestionId}/skip`, 'POST')).status, 403);
+    // 採用（建卡，可先改欄位）：卡片由建議者建立、負責人是被指派者、關聯依據訊息、紀錄註明採用
+    const ap = await call(liu.token, `/api/suggestions/${sc.suggestionId}/apply`, 'POST', { title: '週五 demo 未完成清單（改）' });
+    assert.equal(ap.status, 201); assert.equal(ap.body.title, '週五 demo 未完成清單（改）'); assert.equal(ap.body.status, '待處理');
+    assert.equal(ap.body.createdBy.participantId, qa.participantId); assert.equal(ap.body.owner.participantId, pg.participantId);
+    const apd = (await call(liu.token, `/api/cards/${ap.body.cardId}`)).body;
+    assert.deepEqual(apd.messageIds, [sMsg.messageId]);
+    assert.ok(apd.log[0].text.includes('採用 QA助手 的建議建立卡片'), '紀錄註明採用誰的建議');
+    assert.equal((await call(liu.token, `/api/suggestions/${sc.suggestionId}/apply`, 'POST', {})).body.error.code, 'NOT_PENDING', '不能重複採用');
+    // 採用（改狀態）與略過
+    const aps = (await call(liu.token, `/api/suggestions/${ss.suggestionId}/apply`, 'POST', {})).body;
+    assert.equal(aps.status, '待確認'); assert.equal(aps.waitFor.participantId, liuId);
+    assert.ok((await call(liu.token, `/api/cards/${mine}`)).body.log.some(l => l.text.startsWith('採用 QA助手 的建議：狀態')));
+    const sk = (await sug(qa.token, { kind: 'create', title: '會被略過', ownerId: pg.participantId, why: 'y' })).body;
+    assert.equal((await call(liu.token, `/api/suggestions/${sk.suggestionId}/skip`, 'POST')).body.state, 'skipped');
+    assert.equal((await call(liu.token, '/api/suggestions')).body.items.length, 0, '處理完就不在待處理');
+    assert.equal((await call(liu.token, '/api/suggestions?state=applied')).body.items.length, 2);
+
+    // ===== 團隊狀態取自卡片 =====
+    const team = (await call(liu.token, '/api/team-status')).body;
+    const pgMem = team.members.find(m => m.participantId === pg.participantId);
+    assert.equal(pgMem.status.source, 'card', 'PG 有負責的卡片，狀態取自卡片');
+    assert.equal(pgMem.status.state, 'waiting', '最急的是待確認那張');
+    assert.equal(pgMem.status.cardId, mine); assert.ok(pgMem.status.cardCount >= 2);
+    const qaMem = team.members.find(m => m.participantId === qa.participantId);
+    assert.ok(!qaMem.status || qaMem.status.source !== 'card', 'QA 沒負責卡片，不顯示卡片狀態');
+    // 決策卡：等決策者的列入「等你決定」，帶 cardId 與決策者
+    const dOpen = (await call(liu.token, '/api/cards', 'POST', { ...dreq, requestId: rid(), title: '團隊狀態用的決策' })).body;
+    const team2 = (await call(liu.token, '/api/team-status')).body;
+    const dd = team2.decisions.find(x => x.cardId === dOpen.cardId);
+    assert.ok(dd, '決策卡列入等你決定'); assert.equal(dd.deciderId, liuId);
+    await call(liu.token, `/api/cards/${dOpen.cardId}/decide`, 'POST', { result: '同意' });
+    assert.ok(!(await call(liu.token, '/api/team-status')).body.decisions.some(x => x.cardId === dOpen.cardId), '決定後就移出');
+
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);

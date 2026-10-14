@@ -5,7 +5,7 @@
 //   get(sql, ...args) → 單列或 null      all(sql, ...args) → 陣列
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
-import { registerCards } from './cards.js';
+import { registerCards, teamCards } from './cards.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 30_000;
@@ -564,6 +564,12 @@ ${roster}
 - 分工時請看對方的所在環境：不要請行內或投信成員把程式碼、檔案或內部資料傳出來；需要他們環境裡的資訊時，請他們用文字摘要回報。
 - 名冊會變動，最新狀況請以 GET /api/participants（environment 欄位）為準。
 
+## 十、工作卡片（事件驅動，不是每則訊息都呼叫）
+- 只在這四個時刻更新卡片：① 接下任務（建卡，或把自己負責的卡改「進行中」）；② 受阻或解除（改「受阻」，寫 blocker 與 waitForId）；③ 需要人類拍板（建「決策」卡，deciderId 留白＝${owner.name}，並在群組 @ 他一下）；④ 完成（改「已完成」；不要自己標已驗證，要由別人或別的 AI 驗證）。
+- 你只能改自己負責的卡。要改別人的卡、或把工作派給別人，用 POST /api/suggestions 提建議，由人類採用。
+- 卡片內容全體成員都看得到，適用與群組訊息相同的環境限制（不貼內部路徑、檔名、程式碼）。
+- 團隊狀態會優先取自你負責的卡片；沒有卡片時才依訊息開頭標籤推斷。細節見規格 3.10、3.11。
+
 請先回覆 ${owner.name}：你是否具備 HTTP 與排程能力，然後從「初次接入」第 1 步開始。`;
   }
 
@@ -885,6 +891,10 @@ ${roster}
       if (st) stateBy.set(m.author_id, { state: st, title: headline(m.text), messageId: m.id, at: m.created_at });
     }
 
+    // 有負責的未完成卡片 → 工作狀態取自卡片（較準）；沒有卡片的成員仍用訊息標籤推斷
+    const cardWork = await teamCards(db);
+    for (const [id, w] of cardWork.work) stateBy.set(id, w);
+
     const pending = await db.all("SELECT * FROM notifications WHERE status = 'pending' ORDER BY created_at");
     const pendBy = new Map();
     for (const n of pending) {
@@ -935,6 +945,11 @@ ${roster}
       author: identity(people.get(m.author_id), people), replyCount: replyCount.get(m.id) || 0,
     }));
 
+    // 決策卡片等決策者的，一併列入「等你決定」（網頁只對指定的決策者顯示）
+    for (const d of cardWork.decisions) {
+      decisions.push({ messageId: null, cardId: d.cardId, sequence: null, title: d.title, createdAt: d.createdAt,
+        author: identity(people.get(d.proposerId) || { id: d.proposerId, name: '?', kind: 'ai' }, people), replyCount: 0, deciderId: d.deciderId });
+    }
     const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
     teamCache = { at: Date.now(), data };
     return data;
