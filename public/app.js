@@ -220,6 +220,7 @@
     refreshInboxCount();
     loadTeam();
     connectEvents();
+    showPage(store.get(PAGE_KEY) === 'work' ? 'work' : 'messages');
   }
 
   async function loadParticipants() {
@@ -272,6 +273,7 @@
         loadParticipants().catch(() => {});
         refreshInboxCount();
       }
+      if (!document.hidden && state.page === 'work' && Date.now() - work.lastSync > 30_000) syncCards().catch(() => {});
       if (!document.hidden && Date.now() - lastTeamPoll > 60_000) {
         lastTeamPoll = Date.now();
         loadTeam();
@@ -917,9 +919,379 @@
     } catch (err) { toast(err.message); }
   }
 
+  // ---------- 工作卡片（第一階段） ----------
+  const CARD_ST = ['待整理', '待處理', '進行中', '待確認', '受阻', '已完成', '已封存'];
+  const PAGE_KEY = 'aigile-switch-page';
+  const VIEW_KEY = 'aigile-switch-work-view';
+  const work = {
+    cards: new Map(), since: null, loaded: false, lastSync: 0,
+    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
+    showArchived: false, openId: null, detail: null, editing: false, dragId: null,
+  };
+  const isMeRef = r => r && r.participantId === meId();
+  const closedSt = s => s === '已完成' || s === '已封存';
+  const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
+  const typeTag = c => (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
+  const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
+  const markHtml = c => (c.verified ? '<span class="cmark ok">✓ 已驗證</span>' : c.done ? '<span class="cmark wait">待驗證</span>' : '');
+  const shortTime = iso => fmtTime(iso).replace(/^\d{4}\//, '').replace(/(\d\d:\d\d):\d\d$/, '$1');
+  function ownerHtml(c) {
+    if (!c.owner) return '<span class="cowner none">未指派</span>';
+    const p = state.participants.get(c.owner.participantId) || c.owner;
+    return `<span class="cowner">${avatar(p)}<span>${esc(c.owner.name)}</span></span>`;
+  }
+
+  async function loadCards() {
+    const d = await api('/api/cards?include=archived&limit=200');
+    work.cards = new Map(d.items.map(c => [c.cardId, c]));
+    work.since = d.nextSince;
+    work.loaded = true;
+    work.lastSync = Date.now();
+  }
+  // 增量同步：只讀上次之後有變動的卡片
+  async function syncCards() {
+    if (!work.loaded) return;
+    work.lastSync = Date.now();
+    const d = await api('/api/cards?since=' + encodeURIComponent(work.since || ''));
+    if (!d.items.length) return;
+    for (const c of d.items) work.cards.set(c.cardId, c);
+    work.since = d.nextSince;
+    renderWork();
+    if (work.openId && d.items.some(c => c.cardId === work.openId) && !work.editing) openCard(work.openId);
+  }
+
+  function showPage(page) {
+    state.page = page === 'work' ? 'work' : 'messages';
+    store.set(PAGE_KEY, state.page);
+    $('#page-messages').hidden = state.page !== 'messages';
+    $('#page-work').hidden = state.page !== 'work';
+    document.querySelectorAll('[data-nav]').forEach(b => {
+      if (b.dataset.nav === state.page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
+    if (state.page === 'work') {
+      (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
+    } else scrollBottom();
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-nav]');
+    if (!b) return;
+    closeSheet(false);
+    showPage(b.dataset.nav);
+    if (b.dataset.nav === 'messages') $('#input').focus();
+  });
+
+  function visibleCards() {
+    const q = work.q.trim().toLowerCase();
+    return [...work.cards.values()].filter(c =>
+      (!work.type || c.type === work.type)
+      && (!work.owner || c.owner?.participantId === work.owner)
+      && (!q || [c.title, c.next, c.cardId].some(v => (v || '').toLowerCase().includes(q))))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  function renderWork() {
+    const box = $('#page-work');
+    if (state.page !== 'work' || !work.loaded) return;
+    const all = visibleCards();
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const keep = document.activeElement?.id;
+    box.innerHTML = `
+      <div class="work-head">
+        <div class="work-title"><h2>工作</h2><span class="muted small">${all.filter(c => !closedSt(c.status)).length} 張未完成</span></div>
+        <div class="seg-scope" role="group" aria-label="檢視方式">
+          <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
+          <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
+        </div>
+        <button class="btn primary" type="button" id="card-new">＋ 新增卡片</button>
+      </div>
+      <div class="work-filters">
+        <input id="card-q" type="search" placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片" value="${esc(work.q)}">
+        <select id="card-owner" aria-label="負責人"><option value="">所有負責人</option>${people.map(p => `<option value="${esc(p.participantId)}" ${work.owner === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞'].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      </div>
+      ${work.view === 'A' ? overviewHtml(all) : boardHtml(all)}`;
+    if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  }
+
+  function overviewHtml(all) {
+    const waitMe = all.filter(c => isMeRef(c.waitFor) && !closedSt(c.status));
+    const blocked = all.filter(c => c.status === '受阻');
+    const done = all.filter(c => c.status === '已完成');
+    const panel = (title, cls, list, empty, meta) => `
+      <section class="wpanel ${cls}${list.length ? ' has' : ''}">
+        <div class="wpanel-head"><span class="wdot"></span><b>${title}</b><span class="wcount">${list.length}</span></div>
+        ${list.length ? list.slice(0, 3).map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span>${esc(c.title)}</span><span class="muted small">${esc(meta(c))}</span></button>`).join('')
+          : `<p class="muted small">${empty}</p>`}
+        ${list.length > 3 ? `<button type="button" class="link small" data-filter="${cls === 'done' ? '已完成' : cls === 'blocked' ? '受阻' : 'open'}">查看全部 ${list.length} 張</button>` : ''}
+      </section>`;
+    const chips = [['open', '未完成', all.filter(c => !closedSt(c.status)).length], ...CARD_ST.map(s => [s, s, all.filter(c => c.status === s).length])];
+    const listed = all.filter(c => (work.filter === 'open' ? !closedSt(c.status) : c.status === work.filter));
+    return `
+      <div class="wpanels">
+        ${panel('等你處理', 'mine', waitMe, '目前沒有等你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`)}
+        ${panel('受阻', 'blocked', blocked, '沒有受阻的卡片。', c => waitText(c) || '未填寫阻塞原因')}
+        ${panel('最近完成', 'done', done, '最近沒有完成的卡片。', c => `${c.verified ? '已驗證' : '待驗證'} · ${c.done?.by?.name || ''} · ${shortTime(c.done?.at || c.updatedAt)}`)}
+      </div>
+      <div class="wchips" role="group" aria-label="依狀態篩選">
+        ${chips.map(([v, label, n]) => `<button type="button" data-filter="${esc(v)}" aria-pressed="${work.filter === v}">${label}<span>${n}</span></button>`).join('')}
+      </div>
+      <div class="crows">
+        ${listed.length ? listed.map(c => `
+          <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}" data-card="${esc(c.cardId)}">
+            <span class="cid">${esc(c.cardId)}</span>
+            <span class="crow-main"><span class="crow-title">${typeTag(c)}${esc(c.title)}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
+            <span class="crow-st">${stPill(c.status)}${ownerHtml(c)}</span>
+            <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
+            <span class="crow-time muted small">${shortTime(c.updatedAt)}${markHtml(c)}</span>
+          </button>`).join('') : '<p class="muted">沒有符合條件的卡片。</p>'}
+      </div>`;
+  }
+
+  const wide = () => matchMedia('(min-width: 900px)').matches;
+  function boardHtml(all) {
+    const cols = wide() ? CARD_ST.filter(s => s !== '已封存' || work.showArchived) : [work.mCol];
+    const tile = c => `
+      <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
+        <div class="ctile-top"><span class="cid">${esc(c.cardId)}</span>${typeTag(c)}${markHtml(c)}</div>
+        <b class="ctile-title">${esc(c.title)}</b>
+        ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
+        ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
+        <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
+      </div>`;
+    return `
+      ${wide() ? `<div class="board-tools"><button type="button" class="link small" id="toggle-archived">${work.showArchived ? '隱藏已封存' : '顯示已封存'}</button><span class="muted small">拖曳卡片到其他欄可以改狀態</span></div>`
+        : `<div class="wchips" role="group" aria-label="狀態">${CARD_ST.map(s => `<button type="button" data-mcol="${esc(s)}" aria-pressed="${work.mCol === s}">${s}<span>${all.filter(c => c.status === s).length}</span></button>`).join('')}</div>`}
+      <div class="board">
+        ${cols.map(s => {
+          const list = all.filter(c => c.status === s);
+          return `<section class="bcol" data-col="${esc(s)}" aria-label="${esc(s)}">
+            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(s)}</b><span class="wcount">${list.length}</span></div>
+            <div class="bcol-list">${list.length ? list.map(tile).join('') : `<p class="muted small bempty">${wide() ? '拖曳卡片到這裡' : '這個狀態沒有卡片'}</p>`}</div>
+          </section>`;
+        }).join('')}
+      </div>`;
+  }
+
+  // 互動
+  const workBox = $('#page-work');
+  workBox.addEventListener('click', e => {
+    const t = e.target;
+    const v = t.closest('[data-view]');
+    if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
+    const f = t.closest('[data-filter]');
+    if (f) { work.filter = f.dataset.filter; work.view = 'A'; return renderWork(); }
+    const mc = t.closest('[data-mcol]');
+    if (mc) { work.mCol = mc.dataset.mcol; return renderWork(); }
+    if (t.closest('#toggle-archived')) { work.showArchived = !work.showArchived; return renderWork(); }
+    if (t.closest('#card-new')) return openNewCard();
+    const c = t.closest('[data-card]');
+    if (c) openCard(c.dataset.card);
+  });
+  workBox.addEventListener('keydown', e => {
+    const c = e.target.closest?.('.ctile');
+    if (c && e.key === 'Enter') openCard(c.dataset.card);
+  });
+  workBox.addEventListener('input', e => { if (e.target.id === 'card-q') { work.q = e.target.value; renderWork(); } });
+  workBox.addEventListener('change', e => {
+    if (e.target.id === 'card-owner') { work.owner = e.target.value; renderWork(); }
+    if (e.target.id === 'card-type') { work.type = e.target.value; renderWork(); }
+  });
+  // 看板拖曳（桌面）
+  workBox.addEventListener('dragstart', e => {
+    const c = e.target.closest?.('.ctile');
+    if (!c) return;
+    work.dragId = c.dataset.card;
+    e.dataTransfer.setData('text/plain', c.dataset.card);
+    e.dataTransfer.effectAllowed = 'move';
+    c.classList.add('dragging');
+  });
+  workBox.addEventListener('dragend', () => { work.dragId = null; workBox.querySelectorAll('.bcol.over').forEach(x => x.classList.remove('over')); });
+  workBox.addEventListener('dragover', e => {
+    const col = e.target.closest?.('.bcol');
+    if (!col || !work.dragId) return;
+    e.preventDefault();
+    workBox.querySelectorAll('.bcol.over').forEach(x => x !== col && x.classList.remove('over'));
+    col.classList.add('over');
+  });
+  workBox.addEventListener('drop', e => {
+    const col = e.target.closest?.('.bcol');
+    if (!col) return;
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/plain');
+    col.classList.remove('over');
+    const c = work.cards.get(id);
+    if (c && c.status !== col.dataset.col) patchCard(id, { status: col.dataset.col });
+  });
+
+  async function patchCard(id, body) {
+    const c = work.cards.get(id);
+    try {
+      const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: c?.version } });
+      work.cards.set(id, r);
+      renderWork();
+      if (work.openId === id) openCard(id);
+      return r;
+    } catch (err) {
+      toast(err.message);
+      if (err.code === 'CONFLICT') { await syncCards().catch(() => {}); if (work.openId === id) openCard(id); }
+      return null;
+    }
+  }
+
+  // 卡片詳情（桌面右側抽屜、手機底部滑出）
+  async function openCard(id) {
+    let d;
+    try { d = await api(`/api/cards/${encodeURIComponent(id)}`); } catch (err) { return toast(err.message); }
+    work.cards.set(id, { ...d, log: undefined, messageIds: undefined });
+    const reopen = work.openId === id && $('#card-drawer');
+    work.openId = id; work.detail = d;
+    if (!reopen) work.editing = false;
+    renderDrawer(!reopen);
+  }
+  function closeCard() {
+    $('#card-drawer')?.remove();
+    work.openId = null; work.detail = null; work.editing = false;
+  }
+  function renderDrawer(focus) {
+    const d = work.detail;
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const opts = (cur, none) => `<option value="">${none}</option>` + people.map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+    const mine = d.done && isMeRef(d.done.by);
+    const msgs = (d.messageIds || []).map(mid => {
+      const m = state.byId.get(mid);
+      return `<button type="button" class="dmsg" data-jump-msg="${esc(mid)}">${m ? `<b>${esc(m.author.name)}</b> <span class="muted small">${shortTime(m.createdAt)}</span><span class="dmsg-text">${esc(m.text.slice(0, 120))}</span>` : `<span class="muted small">較早的訊息 ${esc(shortId(mid))}</span>`}</button>`;
+    }).join('');
+    let host = $('#card-drawer');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'card-drawer';
+      host.className = 'drawer-root';
+      document.body.append(host);
+      host.addEventListener('click', drawerClick);
+      host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
+      host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
+    }
+    host.innerHTML = `
+      <div class="drawer-overlay" data-close-drawer></div>
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+        <div class="drawer-head">
+          <div class="drawer-titles"><span class="cid">${esc(d.cardId)}</span>${typeTag(d)}<h2 id="drawer-title">${esc(d.title)}</h2>
+            <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
+          <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
+        </div>
+        <div class="drawer-body">
+          <div class="drawer-status">
+            <label class="dst">狀態<select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+            ${!closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}
+            ${d.status === '已完成' && !d.verified ? `<button class="btn small primary" type="button" data-act="verify" ${mine ? 'disabled title="完成者不能自己驗證"' : ''}>標為已驗證</button>` : ''}
+          </div>
+          ${d.done || d.verified ? `<div class="dmarks">
+            ${d.done ? `<span class="cmark ok-bg">已完成 · ${esc(d.done.by?.name || '')} · ${shortTime(d.done.at)}</span>` : ''}
+            ${d.verified ? `<span class="cmark ver-bg">已驗證 · ${esc(d.verified.by?.name || '')} · ${shortTime(d.verified.at)}</span>` : ''}
+            ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
+          </div>` : ''}
+          ${work.editing ? `
+          <form id="card-edit" class="stack">
+            <label>標題<input name="title" required maxlength="100" value="${esc(d.title)}"></label>
+            <label>類型<select name="type">${['工作', '阻塞'].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+            <label>原因<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
+            <label>負責人<select name="ownerId">${opts(d.owner?.participantId, '未指派')}</select></label>
+            <label>下一步<textarea name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
+            <label>阻塞<input name="blocker" maxlength="300" value="${esc(d.blocker)}"></label>
+            <label>等誰<select name="waitForId">${opts(d.waitFor?.participantId, '不用等人')}</select></label>
+            <label>完成條件<textarea name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
+            <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
+          </form>` : `
+          <dl class="dfields">
+            <dt>原因</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
+            <dt>負責人</dt><dd>${ownerHtml(d)}</dd>
+            <dt>下一步</dt><dd class="${d.next ? '' : 'muted'}">${esc(d.next || '未填寫')}</dd>
+            <dt>阻塞與等誰</dt><dd class="${waitText(d) ? '' : 'muted'}">${esc(waitText(d) || '沒有阻塞')}</dd>
+            <dt>完成條件</dt><dd class="${d.criteria ? '' : 'muted'}">${esc(d.criteria || '未填寫')}</dd>
+          </dl>
+          <div><button class="btn small" type="button" data-act="edit">編輯</button></div>`}
+          <div class="group-title">相關訊息 · ${(d.messageIds || []).length}</div>
+          ${msgs || '<p class="muted small">還沒有關聯訊息。</p>'}
+          <div class="group-title">紀錄</div>
+          <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>
+        </div>
+      </aside>`;
+    host.querySelector('#card-edit')?.addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target));
+      for (const k of Object.keys(data)) data[k] = data[k].trim();
+      if (await patchCard(work.openId, data)) { work.editing = false; openCard(work.openId); toast('已儲存'); }
+    });
+    if (focus) host.querySelector('.modal-x').focus();
+  }
+  async function drawerClick(e) {
+    if (e.target.closest('[data-close-drawer]')) return closeCard();
+    const j = e.target.closest('[data-jump-msg]');
+    if (j) { const id = j.dataset.jumpMsg; closeCard(); showPage('messages'); return jumpTo(id); }
+    const a = e.target.closest('[data-act]');
+    if (!a) return;
+    const id = work.openId;
+    if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
+    else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
+    else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
+    else if (a.dataset.act === 'verify') {
+      try {
+        work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/verify`, { method: 'POST' }));
+        renderWork(); openCard(id); toast('已標為已驗證');
+      } catch (err) { toast(err.message); }
+    }
+  }
+
+  // 新增卡片
+  function openNewCard() {
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const opts = none => `<option value="">${none}</option>` + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
+    const body = openModal('新增卡片', `
+      <form id="card-new-form" class="stack">
+        <div class="field"><span class="field-label" id="nt-label">類型</span>
+          <div class="seg-scope full" role="group" aria-labelledby="nt-label">
+            <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button>
+          </div><input type="hidden" name="type" value="工作"></div>
+        <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
+        <label>原因<textarea name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
+        <div class="two-col">
+          <label>負責人<select name="ownerId">${opts('未指派')}</select></label>
+          <label>狀態<select name="status">${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
+        </div>
+        <label>下一步<textarea name="next" rows="2" maxlength="300"></textarea></label>
+        <label>完成條件<textarea name="criteria" rows="2" maxlength="500"></textarea></label>
+        <label>等誰<select name="waitForId">${opts('不用等人')}</select></label>
+        <p class="muted small">卡片內容所有成員都看得到，請勿填入內部路徑、程式碼或客戶個資。</p>
+        <p class="error" id="card-new-error" role="alert"></p>
+      </form>`, {
+      size: 'form',
+      foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="card-new-form">建立卡片</button>',
+    });
+    const form = body.querySelector('#card-new-form');
+    body.querySelectorAll('[data-nt]').forEach(b => b.addEventListener('click', () => {
+      form.type.value = b.dataset.nt;
+      body.querySelectorAll('[data-nt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      form.status.disabled = b.dataset.nt === '阻塞'; // 阻塞卡固定為受阻
+    }));
+    const requestId = 'web_' + (crypto.randomUUID?.() || Date.now() + Math.random());
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      for (const k of Object.keys(data)) data[k] = data[k].trim();
+      if (form.status.disabled) delete data.status;
+      try {
+        const c = await api('/api/cards', { method: 'POST', body: { ...data, requestId } });
+        work.cards.set(c.cardId, c);
+        closeModal();
+        renderWork();
+        toast(`已建立 ${c.cardId}`);
+        openCard(c.cardId);
+      } catch (err) { body.querySelector('#card-new-error').textContent = err.message; }
+    });
+  }
+
   const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
-  document.querySelector('[data-nav="messages"]').addEventListener('click', () => { scrollBottom(); $('#input').focus(); });
   // 手機選單（底部滑出）
   const sheet = $('#sheet');
   function openSheet() { sheet.hidden = false; $('#menu-btn').setAttribute('aria-expanded', 'true'); sheet.querySelector('.sheet-panel > button').focus(); }

@@ -55,6 +55,7 @@
       <div id="me-line" class="me-card"></div>
       <nav class="side-nav" aria-label="主要功能">
         <button type="button" data-nav="messages" aria-current="page"><span aria-hidden="true">💬</span>訊息</button>
+        <button type="button" data-nav="work"><span aria-hidden="true">📋</span>工作</button>
         <button type="button" data-open="inbox"><span aria-hidden="true">🔔</span>通知 <span class="badge inbox-badge" hidden></span></button>
         <button type="button" data-open="members"><span aria-hidden="true">👥</span>成員名單</button>
         <button type="button" data-open="my-ai"><span aria-hidden="true">🤖</span>我的 AI</button>
@@ -85,6 +86,7 @@
       <div id="token-alert" class="token-alert" role="status" hidden></div>
       <div id="team-bar" class="team-bar" aria-label="團隊狀態" hidden></div>
 
+      <div id="page-messages" class="page page-messages">
       <div id="filter-bar" class="filter-bar" aria-label="篩選訊息">
         <div class="seg-scope" role="group" aria-label="範圍">
           <button type="button" data-scope="all" aria-pressed="true">全部</button>
@@ -118,6 +120,8 @@
         </div>
         <p id="composer-hint" class="composer-hint">Enter 送出 · Shift+Enter 換行 · 輸入 @ 提及成員 · 上傳的文件 1 小時後自動刪除</p>
       </footer>
+      </div>
+      <div id="page-work" class="page page-work" hidden></div>
     </div>
 
     <!-- 手機選單：從底部滑出 -->
@@ -125,6 +129,8 @@
       <div class="sheet-panel" role="dialog" aria-modal="true" aria-label="選單">
         <div class="sheet-grab" aria-hidden="true"></div>
         <div id="sheet-me" class="sheet-me"></div>
+        <button type="button" data-nav="messages">訊息</button>
+        <button type="button" data-nav="work">工作</button>
         <button type="button" data-open="members">成員名單</button>
         <button type="button" data-open="my-ai">我的 AI</button>
         <button type="button" data-open="files">文件</button>

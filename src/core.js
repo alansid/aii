@@ -5,6 +5,7 @@
 //   get(sql, ...args) → 單列或 null      all(sql, ...args) → 陣列
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
+import { registerCards } from './cards.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 30_000;
@@ -940,6 +941,8 @@ ${roster}
   }
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
+
+  registerCards({ route, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople });
 
   route('GET', '/api/team-status', ({ ctx }) => teamStatus(ctx));
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {

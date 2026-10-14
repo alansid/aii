@@ -738,3 +738,130 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
   :root:not([data-theme="light"]) .av-drop { background: var(--surface-2); border-color: var(--border); }
 }
 :root[data-theme="dark"] .av-drop { background: var(--surface-2); border-color: var(--border); }
+
+/* ===== 工作卡片（第一階段） ===== */
+.page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.page[hidden] { display: none; }
+.page-work { overflow-y: auto; padding: 16px; gap: 14px; display: flex; flex-direction: column; }
+.work-head { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.work-title { display: flex; gap: 10px; align-items: baseline; flex: 1; min-width: 140px; }
+.work-title h2 { margin: 0; font-size: 20px; }
+.work-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.work-filters input { flex: 1 1 220px; min-width: 0; height: 36px; padding: 0 12px; }
+.work-filters select { width: auto; height: 36px; padding: 0 8px; font-size: 13.5px; }
+.cid { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12px; color: var(--muted); flex: none; }
+.cst { display: inline-block; padding: 0 8px; border-radius: 5px; font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; background: #eef1f5; color: #374151; }
+.cst[data-st="待處理"] { background: #e0e7ff; color: #3730a3; }
+.cst[data-st="進行中"] { background: #fef3c7; color: #92400e; }
+.cst[data-st="待確認"] { background: #ffedd5; color: #9a3412; }
+.cst[data-st="受阻"] { background: #fee2e2; color: #991b1b; }
+.cst[data-st="已完成"] { background: #dcfce7; color: #166534; }
+.cst[data-st="已封存"] { background: #e5e7eb; color: #6b7280; }
+.ctype { display: inline-block; padding: 0 7px; margin-right: 6px; border-radius: 5px; font-size: 12px; font-weight: 600; line-height: 20px; vertical-align: 1px; background: #eef1f5; color: #374151; }
+.ctype[data-ty="阻塞"] { background: #fee2e2; color: #991b1b; }
+.ctype[data-ty="決策"] { background: #ffedd5; color: #9a3412; }
+.cmark { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.cmark.ok { color: #166534; }
+.cmark.wait { color: #9a3412; }
+.cmark.ok-bg, .cmark.ver-bg { padding: 2px 8px; border-radius: 6px; }
+.cmark.ok-bg { background: #dcfce7; color: #166534; }
+.cmark.ver-bg { background: #dbeafe; color: #1d4ed8; }
+.cowner { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+.cowner .avatar { width: 22px; height: 22px; font-size: 10px; flex: none; }
+.cowner > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cowner.none { color: var(--muted); }
+.wdot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; flex: none; display: inline-block; }
+.wcount { font-size: 12px; font-weight: 700; padding: 0 7px; border-radius: 10px; background: var(--surface-2); color: var(--muted); }
+.wpanels { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.wpanel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: grid; gap: 6px; align-content: start; }
+.wpanel-head { display: flex; gap: 8px; align-items: center; }
+.wpanel.mine .wdot { background: #ea580c; } .wpanel.mine.has { border-color: #fbd3b0; }
+.wpanel.blocked .wdot { background: #dc2626; } .wpanel.blocked.has { border-color: #fecaca; }
+.wpanel.done .wdot { background: #16a34a; }
+.wpanel p { margin: 0; }
+.wpanel-item { display: grid; gap: 1px; text-align: left; padding: 6px 8px; margin: 0 -8px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+.wpanel-item:hover, .crow:hover { background: var(--surface-2); }
+.wchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wchips button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+.wchips button span { margin-left: 6px; color: var(--muted); }
+.wchips button[aria-pressed="true"] { background: #111827; border-color: #111827; color: #fff; font-weight: 600; }
+.wchips button[aria-pressed="true"] span { color: #d1d5db; }
+.crows { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.crows > p { padding: 16px; margin: 0; }
+.crow { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 190px) minmax(0, 170px) 96px; gap: 4px 12px; align-items: center; width: 100%; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.crow:last-child { border-bottom: 0; }
+.crow.me { background: #fffaf3; }
+.crow-main { display: grid; min-width: 0; }
+.crow-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crow-main .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crow-st { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
+.crow-wait.me, .cwait.me { color: #9a3412; }
+.crow-wait.bad, .cwait.bad { color: #991b1b; }
+.crow-time { display: grid; justify-items: end; }
+.board-tools { display: flex; gap: 12px; align-items: center; }
+.board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+.bcol { flex: 0 0 280px; background: #eef1f5; border: 2px solid transparent; border-radius: 12px; padding: 10px; display: grid; gap: 8px; align-content: start; }
+.bcol.over { background: #e8efff; border-color: #93b4f5; }
+.bcol-head { display: flex; gap: 8px; align-items: center; }
+.bcol-head .wdot[data-st="待處理"] { background: #6366f1; } .bcol-head .wdot[data-st="進行中"] { background: #f59e0b; }
+.bcol-head .wdot[data-st="待確認"] { background: #ea580c; } .bcol-head .wdot[data-st="受阻"] { background: #dc2626; } .bcol-head .wdot[data-st="已完成"] { background: #16a34a; }
+.bcol-list { display: grid; gap: 8px; }
+.bempty { text-align: center; padding: 12px 0; margin: 0; }
+.ctile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; cursor: pointer; }
+.ctile.me { border-color: #f5c79a; }
+.ctile.dragging { opacity: .45; }
+.ctile:focus-visible { outline: 2px solid var(--primary); }
+.ctile-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ctile-title { font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+.cwait { font-size: 12.5px; padding: 2px 8px; border-radius: 6px; background: #f1f4f9; justify-self: start; }
+.cwait.me { background: #ffedd5; } .cwait.bad { background: #fee2e2; }
+.ctile-foot { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 2px; }
+
+/* 詳情抽屜 */
+.drawer-root { position: fixed; inset: 0; z-index: 9; display: flex; justify-content: flex-end; }
+.drawer-overlay { position: absolute; inset: 0; background: rgba(15, 23, 42, .4); }
+.drawer { position: relative; width: min(560px, 100%); height: 100%; background: var(--surface); display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.drawer-head { display: flex; gap: 8px; align-items: flex-start; padding: 16px 16px 12px 20px; border-bottom: 1px solid var(--border); flex: none; }
+.drawer-titles { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.drawer-titles h2 { flex-basis: 100%; margin: 0; font-size: 17px; line-height: 1.4; overflow-wrap: anywhere; }
+.drawer-body { padding: 16px 20px 24px; overflow-y: auto; display: grid; gap: 12px; align-content: start; min-height: 0; }
+.drawer-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dst { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+.dst select { width: auto; height: 34px; padding: 0 8px; }
+.dmarks { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.dfields { margin: 0; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px 12px; }
+.dfields dt { color: var(--muted); font-size: 13px; }
+.dfields dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.dmsg { display: grid; gap: 2px; text-align: left; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
+.dmsg-text { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlog { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.dlog li { display: flex; gap: 10px; align-items: flex-start; }
+.dlog li > div { display: grid; min-width: 0; }
+.ldot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; background: #2563eb; }
+.ldot.api { background: #a855f7; }
+
+@media (max-width: 899px) {
+  .page-work { padding: 12px; }
+  .crow { grid-template-columns: auto minmax(0, 1fr); }
+  .crow .crow-main { grid-column: 1 / -1; order: 2; }
+  .crow .crow-st { grid-column: 1 / -1; order: 3; }
+  .crow .crow-wait, .crow .crow-time { grid-column: 1 / -1; order: 4; justify-items: start; }
+  .board { display: block; overflow: visible; }
+  .bcol { width: 100%; }
+  .drawer-root { align-items: flex-end; }
+  .drawer { width: 100%; height: 92vh; height: 92dvh; border-radius: 16px 16px 0 0; animation: sheet-up .18s ease-out; }
+  .dfields { grid-template-columns: 1fr; gap: 2px 0; }
+  .dfields dd { margin-bottom: 8px; }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .crow.me { background: var(--mine-bg); }
+  :root:not([data-theme="light"]) .bcol { background: var(--surface-2); }
+  :root:not([data-theme="light"]) .bcol.over { background: var(--human-bg); }
+  :root:not([data-theme="light"]) .cwait { background: var(--surface-2); }
+  :root:not([data-theme="light"]) .wchips button[aria-pressed="true"] { background: #e5e7eb; border-color: #e5e7eb; color: #111827; }
+}
+:root[data-theme="dark"] .crow.me { background: var(--mine-bg); }
+:root[data-theme="dark"] .bcol { background: var(--surface-2); }
+:root[data-theme="dark"] .bcol.over { background: var(--human-bg); }
+:root[data-theme="dark"] .cwait { background: var(--surface-2); }
+:root[data-theme="dark"] .wchips button[aria-pressed="true"] { background: #e5e7eb; border-color: #e5e7eb; color: #111827; }

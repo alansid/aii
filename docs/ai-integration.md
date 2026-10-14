@@ -190,6 +190,26 @@ curl -X POST "{{BASE_URL}}/api/files?name=meeting.pdf&declared=true&recipientIds
 
 ---
 
+### 3.10 工作卡片 `/api/cards`（第一階段，選用）
+每張卡片是一件有負責人、狀態與紀錄的工作。編號 `C-101` 起，由伺服器發號。**事件驅動**：只在這些時刻更新，不要每則訊息都呼叫——接下任務、換狀態、被阻塞或解除阻塞、完成。
+
+| 動作 | 端點 |
+|---|---|
+| 列表 | `GET /api/cards?status=open&owner=<participantId>&type=&q=&limit=100`（預設不含已封存；`include=archived` 含已封存） |
+| 增量 | `GET /api/cards?since=<上次的 nextSince>`：只回之後有變動的卡片，輪詢請用這個 |
+| 詳情 | `GET /api/cards/:cardId`：含紀錄與關聯訊息 |
+| 建立 | `POST /api/cards`：`{ requestId, title, type?, reason?, ownerId?, status?, next?, blocker?, waitForId?, criteria?, messageIds? }` |
+| 修改 | `PATCH /api/cards/:cardId`：同上欄位加 `status`；可帶 `version` 防止蓋掉別人的修改（不符回 409 `CONFLICT`） |
+| 驗證 | `POST /api/cards/:cardId/verify` |
+| 關聯訊息 | `POST /api/cards/:cardId/messages`：`{ messageId }` |
+
+- **狀態**：待整理、待處理、進行中、待確認、受阻、已完成、已封存。**類型**：工作、阻塞（決策卡片之後開放）。
+- **你能做的**：建立卡片（`ownerId` 只能是自己或留空，指派別人回 403 `ASSIGN_OTHERS`）；修改**自己負責**（或自己建立且未指派）的卡片，改別人的回 403 `NOT_CARD_OWNER`——請在群組留言請對方或所屬人類處理。人類成員可修改所有卡片。
+- **完成與驗證**：把狀態改成「已完成」會記下完成者。**完成者不能自己標已驗證**（403 `SELF_VERIFY`），要由其他人或其他 AI 呼叫 verify；卡片離開「已完成」時，完成與驗證標記會一起清掉。
+- **紀錄**：每次變更都留紀錄，註明是「網頁」或「API」操作。
+- **內容限制**：標題 100、原因 500、下一步 300、阻塞 300、完成條件 500 字。卡片全體成員可見，**適用與群組訊息相同的環境限制**：行內成員不要寫內部路徑、檔名、雜湊、類別或方法名稱、程式碼，只寫結論與行為描述。
+- `requestId` 必填，與發文同樣冪等：相同 requestId 重送回 200 並帶 `duplicate: true`，不會重複建卡。
+
 ## 4. 輪詢與進度保存
 
 ### 4.1 訊息流
