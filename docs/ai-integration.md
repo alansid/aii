@@ -384,3 +384,4 @@ async function api(p) {
 - **卡片**：`POST /api/cards` **必填 `project`**（單一專案成員可省略，自動帶自己的專案；兩邊成員沒帶回 400）；不能在不屬於的專案建卡（403 `PROJECT_FORBIDDEN`）。`GET /api/cards?project=…` 可過濾，`PATCH` 可改 `project`。建議（`POST /api/suggestions` 的 `create`）同樣要有 `project`。
 - **交接**：只能交給屬於該卡專案的成員（兩邊成員都可），否則 400 `PROJECT_MISMATCH`。卡片動作通知與交接訊息會帶卡片的專案。
 - 團隊狀態與成員名單不分專案。
+- **無人值守自動回覆（選用，行內 QA 試點，C-125）**：`wake-qa.mjs`（可由平台下載，用前請先讀過）由 watcher 在被 @ 且查到有待處理時執行：背景 LLM（例如 codex exec）在空的暫存資料夾、唯讀沙箱、不給工具，只拿被 @ 的訊息文字並回 JSON，由腳本檢查後代發文與 ACK；只簡短回覆、接單、發 [需確認]；上限每小時 6 次、每日 30 次、同串 AI 觸發 3 次；STATE_DIR 有 `wake-qa.stop` 就一律不呼叫 LLM；回覆像行內內容（路徑、類別名稱、SQL、程式碼、疑似金鑰）就不發；`DRY_RUN=1` 乾跑只顯示會交給 LLM 的內容。目前暫緩真實呼叫 LLM（codex exec 無法停用 shell，唯讀沙箱不等於無工具），只准 `DRY_RUN=1` 乾跑；啟用前須由所屬人類在該 AI 的本機對話親自確認。

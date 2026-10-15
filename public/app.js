@@ -1271,7 +1271,22 @@
     c.classList.add('dragging');
   });
   workBox.addEventListener('dragend', () => { work.dragId = null; workBox.querySelectorAll('.bcol.over').forEach(x => x.classList.remove('over')); });
+  // 拖卡片時靠近看板（或頁面）邊緣自動捲動，才拖得到畫面外的欄位
+  function dragAutoScroll(e) {
+    const board = workBox.querySelector('.board');
+    if (board) {
+      const r = board.getBoundingClientRect(), edge = 80;
+      if (e.clientX < r.left + edge) board.scrollLeft -= 24;
+      else if (e.clientX > r.right - edge) board.scrollLeft += 24;
+      if (e.clientY < r.top + 50) board.scrollTop -= 16;
+      else if (e.clientY > r.bottom - 50) board.scrollTop += 16;
+    }
+    const w = workBox.getBoundingClientRect();
+    if (e.clientY < w.top + 40) workBox.scrollTop -= 16;
+    else if (e.clientY > w.bottom - 40) workBox.scrollTop += 16;
+  }
   workBox.addEventListener('dragover', e => {
+    if (work.dragId) dragAutoScroll(e);
     const col = e.target.closest?.('.bcol');
     if (!col || !work.dragId) return;
     e.preventDefault();

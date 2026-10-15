@@ -977,3 +977,10 @@ body.drawer-docked #app { padding-right: 400px; }
 .proj-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
 .proj-row b { flex-basis: 100%; font-size: 13px; }
 .chk { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; cursor: pointer; font-size: 14px; }
+
+/* C-123 看板：桌面版固定在畫面內捲動，左右捲軸一直看得到；欄位內卡片多時上下捲 */
+@media (min-width: 900px) {
+  .board { max-height: calc(100vh - 220px); max-height: calc(100dvh - 220px); min-height: 280px; overflow: auto; padding: 0 0 12px; align-items: flex-start; scroll-padding: 12px; }
+  .board::-webkit-scrollbar { height: 12px; width: 12px; }
+  .board::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+}

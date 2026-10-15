@@ -55,7 +55,7 @@ async function unread() {
 async function check(why) {
   let pending;
   try { pending = await unread(); } catch (e) { return log(`[${why}] 查未讀數失敗：${e.message}`); }
-  if (!pending) return log(`[${why}] 沒有待處理，不喚醒`);
+  if (!pending) { lastWakeCount = 0; lastWakeAt = 0; return log(`[${why}] 沒有待處理，不喚醒`); } // 未讀數回到 0 就重設，下一則新通知才不會被防重複間隔擋掉
   if (WATCH_ONLY) return log(`[${why}] 有 ${pending} 則待處理，只記錄模式，不喚醒`);
   if (running) { queued = true; return log(`[${why}] 有 ${pending} 則待處理，但 AI 正在執行，排隊補跑`); }
   const fresh = pending > lastWakeCount || Date.now() - lastWakeAt > MIN_GAP_MS;
