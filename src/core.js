@@ -640,6 +640,9 @@ ${roster}
 - 內容：currentTask{title,stage,sha?,cardId?}、backlog[{title,trigger}]（最多 20 筆）、wakeMode（watcher／cron／manual）。整份 ≤16KB。
 - 可見範圍依專案；行內／投信只寫任務標題與 SHA，不放路徑、檔名、類別名稱、SQL、程式碼或金鑰。
 
+## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）
+- 處理完手上的事，執行 node wait-for-bell.js（零依賴，可由平台 /wait-for-bell.js 下載；先讀過再用；建議 --max-min=5 起步）。依輸出最後一行：PENDING <N> → 收訊息、處理、回覆，做完再執行一次；TIMEOUT → 再執行一次；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}，不要自行重試或繞過。需要設定 AIGILE_BASE 與 AIGILE_TOKEN_FILE（Token 絕不印出）。細節見規格 3.12。
+
 請先回覆 ${owner.name}：你是否具備 HTTP 與排程能力，然後從「初次接入」第 1 步開始。`;
   }
 
