@@ -222,7 +222,7 @@
     loadTeam();
     loadCards().then(() => { renderMessages(false); if (state.page === 'work') renderWork(); }).catch(() => {});
     connectEvents();
-    showPage(['work', 'inbox'].includes(store.get(PAGE_KEY)) ? store.get(PAGE_KEY) : 'messages');
+    showPage(['work', 'inbox', 'team'].includes(store.get(PAGE_KEY)) ? store.get(PAGE_KEY) : 'messages');
   }
 
   async function loadParticipants() {
@@ -827,7 +827,16 @@
         </div>
       </div>`;
   }
+  // 在「團隊」頁時，團隊狀態／成員名單／我的 AI 這三個畫面直接畫在頁面的分頁區，不再跳對話框（C-134 第二版）
+  const TEAM_PANES = ['團隊狀態', '成員名單', '我的 AI'];
   function openModal(title, bodyHtml, opts = {}) {
+    const pane = state.page === 'team' && TEAM_PANES.includes(title) ? $('#team-pane') : null;
+    if (pane) {
+      pane.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
+      const inner = pane.querySelector('.modal'), inBody = pane.querySelector('.modal-body');
+      inBody.modal = inner;
+      return inBody;
+    }
     const root = $('#modal-root');
     if (!root.firstElementChild) modalReturnFocus = document.activeElement;
     root.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
@@ -1273,19 +1282,65 @@
     }
   }
 
+  work.teamTab = 'status';
+  function renderTeamPage() {
+    const box = $('#page-work');
+    const tabs = [['status', '團隊狀態'], ['memory', 'AI 工作記憶'], ['members', '成員名單'], ['ai', '我的 AI']];
+    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>團隊</h2></div>
+      <div class="seg-scope" role="group" aria-label="團隊分頁">${tabs.map(([k, t]) => `<button type="button" data-team-tab="${k}" aria-pressed="${work.teamTab === k}">${t}</button>`).join('')}</div></div>
+      <div id="team-pane" class="inline-pane"></div>`;
+    ({ status: openTeam, memory: openTeamMemory, members: openMembers, ai: openMyAi })[work.teamTab]();
+    syncTeamNav();
+  }
+  // AI 工作記憶（獨立一個子項目）
+  async function openTeamMemory() {
+    await loadTeam();
+    const t = state.team;
+    if (!t) return toast('無法取得團隊狀態');
+    openModal('團隊狀態', `${aiStateHtml(t) || '<p class="muted">還沒有 AI。</p>'}`, { sub: 'AI 自己回報的目前任務與待辦，只在狀態改變時更新；依專案可見。' });
+    const pane = $('#team-pane'); if (pane) pane.querySelectorAll('.modal-head h2').forEach(h => { h.textContent = 'AI 工作記憶'; });
+  }
+  // 側欄與手機選單的「團隊」兩層選單：展開狀態記在瀏覽器，目前所在子項目有選取標示
+  const TEAM_NAV_KEY = 'aigile-switch-team-nav';
+  function syncTeamNav() {
+    const open = store.get(TEAM_NAV_KEY) === '1' || state.page === 'team';
+    document.querySelectorAll('[data-team-group]').forEach(g => {
+      g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(open));
+      g.querySelector('.chev').textContent = open ? '▾' : '▸';
+      g.querySelector('.nav-sub').hidden = !open;
+      g.querySelector('[data-team-toggle]').toggleAttribute('data-current', state.page === 'team');
+      g.querySelectorAll('[data-team-go]').forEach(b => { if (state.page === 'team' && b.dataset.teamGo === work.teamTab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    });
+  }
+  // 鍵盤：在子項目上用 ↑↓ 移動
+  document.addEventListener('keydown', e => {
+    if (!['ArrowUp', 'ArrowDown'].includes(e.key) || !e.target.closest?.('.nav-sub')) return;
+    e.preventDefault();
+    const items = [...e.target.closest('.nav-sub').querySelectorAll('button')], i = items.indexOf(e.target);
+    items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+  });
+  document.addEventListener('click', e => {
+    const tg = e.target.closest('[data-team-toggle]');
+    if (tg) { const open = tg.getAttribute('aria-expanded') === 'true'; store.set(TEAM_NAV_KEY, open ? '0' : '1'); document.querySelectorAll('[data-team-group]').forEach(g => { g.querySelector('.nav-sub').hidden = open; g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(!open)); g.querySelector('.chev').textContent = open ? '▸' : '▾'; }); return; }
+    const go = e.target.closest('[data-team-go]');
+    if (go) { closeSheet(false); work.teamTab = go.dataset.teamGo; store.set(TEAM_NAV_KEY, '1'); if (state.page === 'team') renderTeamPage(); else showPage('team'); }
+  });
   function openTodoPage() { closeSheet(false); showPage('inbox'); }
   document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
   function showPage(page) {
     if (work.openId) closeCard();
-    state.page = page === 'work' || page === 'inbox' ? page : 'messages';
+    state.page = ['work', 'inbox', 'team'].includes(page) ? page : 'messages';
     store.set(PAGE_KEY, state.page);
     $('#page-messages').hidden = state.page !== 'messages';
     $('#page-work').hidden = state.page === 'messages'; // 收件匣與工作共用同一個容器
     document.querySelectorAll('[data-nav]').forEach(b => {
       if (b.dataset.nav === state.page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
+    syncTeamNav();
     if (state.page === 'work') {
       (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
+    } else if (state.page === 'team') {
+      renderTeamPage();
     } else if (state.page === 'inbox') {
       Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
     } else scrollBottom();
@@ -1374,7 +1429,7 @@
   // 決策卡區塊（總覽與「待你處理」共用）
   function decisionSectionHtml(decideMe) {
     return decideMe.length ? `
-      <section class="wdecisions"><div class="wdec-head"><h3>待你決定</h3><span class="wcount ora">${decideMe.length}</span></div>
+      <section class="wdecisions"><div class="wdec-head"><h3>決策卡</h3><span class="wcount ora">${decideMe.length}</span></div>
         <div class="dgrid">${decideMe.map(c => `
           <article class="dcard">
             <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span><span class="cid">${esc(c.cardId)}</span><span class="grow"></span>
@@ -1474,6 +1529,9 @@
     if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
     const f = t.closest('[data-filter]');
     if (f) { work.filter = f.dataset.filter; work.view = 'A'; return renderWork(); }
+    if (t.closest('[data-goto-inbox]')) { showPage('inbox'); return; }
+    const tt = t.closest('[data-team-tab]');
+    if (tt) { work.teamTab = tt.dataset.teamTab; renderTeamPage(); return; }
     const ng = t.closest('[data-note-goto]');
     if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
     const na = t.closest('[data-note-ack]');
@@ -1483,7 +1541,7 @@
     if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
     const tr = t.closest('[data-todo-resolve]');
     if (tr) {
-      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); toast('已從「待你處理」移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
+      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); toast('已從收件匣移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
       return;
     }
     const bt = t.closest('[data-batch]');
@@ -2104,7 +2162,7 @@
   // 團隊：第一版先把四個既有畫面收進同一個入口（第二版再整合成一頁）
   function openTeamHub() {
     const body = openModal('團隊', `<div class="stack">
-      <button type="button" class="btn hub-btn" data-hub="team-status"><b>團隊狀態</b><span class="muted small">每位成員目前在做什麼、AI 工作記憶、等你決定</span></button>
+      <button type="button" class="btn hub-btn" data-hub="team-status"><b>團隊狀態</b><span class="muted small">每位成員目前在做什麼、誰在線、有沒有人卡住</span></button>
       <button type="button" class="btn hub-btn" data-hub="members"><b>成員名單</b><span class="muted small">誰在群組、誰在線</span></button>
       <button type="button" class="btn hub-btn" data-hub="my-ai"><b>我的 AI</b><span class="muted small">管理我名下的 AI、重發 Token</span></button></div>`, { size: 'narrow' });
     body.addEventListener('click', e => {
@@ -2258,18 +2316,11 @@
       <details class="help"><summary>狀態怎麼判斷？</summary>
         <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」。</p>
       </details>
-      <div class="group-title">等你決定 · ${myDecisions(t).length}</div>
-      ${myDecisions(t).length ? myDecisions(t).map(d => `
-        <div class="note-card yellow">
-          <div class="note-main"><button type="button" class="link strong" ${d.cardId ? `data-open-card="${esc(d.cardId)}"` : `data-jump-team="${esc(d.messageId)}"`}>${esc(d.title || '（無標題）')}</button>
-            <span class="muted small">${esc(d.author.name)} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
-          ${d.cardId ? `<button type="button" class="btn small" data-open-card="${esc(d.cardId)}">去決定</button>` : `<button type="button" class="btn small" data-resolve="${esc(d.messageId)}" title="已經決定了，從清單移出">已處理</button>`}
-        </div>`).join('') : '<p class="muted small">目前沒有待決定的事項。</p>'}
+      <p class="muted small">要你決定、確認或採用的事都在<button type="button" class="link" data-goto-inbox>收件匣</button>，這裡只看團隊狀況。</p>
       ${t.unanswered.length ? `<div class="group-title">尚未回應的指派 · ${t.unanswered.length}</div>
         ${t.unanswered.map(u => `<div class="note-card red">
           <div class="note-main"><span><b>${esc(u.name)}</b> <span class="red-text">· 已等 ${agoText(u.since).replace('前', '')}</span></span></div>
           <button type="button" class="link small" data-jump-team="${esc(u.messageId)}">查看訊息</button></div>`).join('')}` : ''}
-      ${aiStateHtml(t)}
       <div class="group-title">成員</div>
       <div class="tm-list">${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
     body.addEventListener('click', async e => {
@@ -2282,7 +2333,7 @@
         r.disabled = true;
         try {
           await api(`/api/decisions/${encodeURIComponent(r.dataset.resolve)}/resolve`, { method: 'POST' });
-          toast('已從「等你決定」移出');
+          toast('已從收件匣移出');
           openTeam();
         } catch (err) { r.disabled = false; toast(err.message); }
       }

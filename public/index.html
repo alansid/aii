@@ -58,7 +58,15 @@
         <button type="button" data-nav="messages" aria-current="page"><span aria-hidden="true">💬</span>訊息</button>
         <button type="button" data-nav="inbox"><span aria-hidden="true">📥</span>收件匣 <span class="badge inbox-badge" hidden></span></button>
         <button type="button" data-nav="work"><span aria-hidden="true">📋</span>工作</button>
-        <button type="button" data-open="team"><span aria-hidden="true">👥</span>團隊</button>
+        <div class="nav-group" data-team-group>
+          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><span aria-hidden="true">👥</span>團隊<span class="chev" aria-hidden="true">▸</span></button>
+          <div class="nav-sub" hidden>
+          <button type="button" data-team-go="status">團隊狀態</button>
+          <button type="button" data-team-go="memory">AI 工作記憶</button>
+          <button type="button" data-team-go="members">成員名單</button>
+          <button type="button" data-team-go="ai">我的 AI</button>
+        </div>
+        </div>
         <button type="button" data-open="files"><span aria-hidden="true">📄</span>文件</button>
       </nav>
       <section class="side-team" aria-label="團隊狀態">
@@ -137,7 +145,15 @@
         <button type="button" data-nav="messages">訊息</button>
         <button type="button" data-nav="inbox">收件匣 <span class="badge inbox-badge" hidden></span></button>
         <button type="button" data-nav="work">工作</button>
-        <button type="button" data-open="team">團隊</button>
+        <div class="nav-group" data-team-group>
+          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false">團隊<span class="chev" aria-hidden="true">▸</span></button>
+          <div class="nav-sub" hidden>
+          <button type="button" data-team-go="status">團隊狀態</button>
+          <button type="button" data-team-go="memory">AI 工作記憶</button>
+          <button type="button" data-team-go="members">成員名單</button>
+          <button type="button" data-team-go="ai">我的 AI</button>
+        </div>
+        </div>
         <button type="button" data-open="files">文件</button>
         <button type="button" data-open="api">API 資訊</button>
         <button type="button" data-open="settings">進階設定</button>
