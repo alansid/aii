@@ -117,7 +117,7 @@ const rid = () => 'req_c' + (++n);
 
     // 詳情：紀錄（含來源網頁／API）、關聯訊息
     const detail = (await call(liu.token, `/api/cards/${c1.cardId}`)).body;
-    assert.deepEqual(detail.messageIds, [msg.messageId]);
+    assert.equal(detail.messageIds[0], msg.messageId, "來源訊息排第一；之後的卡片動作通知也會關聯到卡片");
     const texts = detail.log.map(l => l.text);
     for (const t of ['建立卡片（類型：工作）', '狀態 待整理 → 進行中', '等誰改為 劉昱志', '標為已完成', '標為已驗證', '移除已驗證標記']) assert.ok(texts.includes(t), '紀錄：' + t);
     assert.ok(detail.log.some(l => l.via === 'API' && l.by.participantId === pg.participantId), 'AI 的操作標為 API');
@@ -219,7 +219,7 @@ const rid = () => 'req_c' + (++n);
     assert.equal(ap.status, 201); assert.equal(ap.body.title, '週五 demo 未完成清單（改）'); assert.equal(ap.body.status, '待處理');
     assert.equal(ap.body.createdBy.participantId, qa.participantId); assert.equal(ap.body.owner.participantId, pg.participantId);
     const apd = (await call(liu.token, `/api/cards/${ap.body.cardId}`)).body;
-    assert.deepEqual(apd.messageIds, [sMsg.messageId]);
+    assert.equal(apd.messageIds[0], sMsg.messageId); assert.equal(apd.messageIds.length, 2, "採用建議的通知也關聯到新卡");
     assert.ok(apd.log[0].text.includes('採用 QA助手 的建議建立卡片'), '紀錄註明採用誰的建議');
     assert.equal((await call(liu.token, `/api/suggestions/${sc.suggestionId}/apply`, 'POST', {})).body.error.code, 'NOT_PENDING', '不能重複採用');
     // 採用（改狀態）與略過
@@ -247,6 +247,20 @@ const rid = () => 'req_c' + (++n);
     await call(liu.token, `/api/cards/${dOpen.cardId}/decide`, 'POST', { result: '同意' });
     assert.ok(!(await call(liu.token, '/api/team-status')).body.decisions.some(x => x.cardId === dOpen.cardId), '決定後就移出');
 
+    // C-115 卡片動作發通知：決定、變更負責人／等待對象、採用建議，會 @ 相關成員（走既有通知與門鈴）
+    const pend = async tok => (await call(tok, '/api/notifications?status=pending&limit=100')).body.items.map(n => n.preview || '');
+    const nd = (await call(pg.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: '[平台] 通知測試決策', question: '要不要通知？' })).body;
+    await call(liu.token, `/api/cards/${nd.cardId}/decide`, 'POST', { result: '要求補充', note: '請補充影響範圍' });
+    assert.ok((await pend(pg.token)).some(t => t.startsWith('[通知] 【平台】' + nd.cardId) && t.includes('要求補充：請補充影響範圍')), '要求補充通知提案人，專案標記取自標題前綴');
+    const nc = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '通知測試工作' })).body;
+    await call(liu.token, `/api/cards/${nc.cardId}`, 'PATCH', { ownerId: qa.participantId });
+    await call(liu.token, `/api/cards/${nc.cardId}`, 'PATCH', { ownerId: qa.participantId }); // 沒變更，不重複發
+    const qn = (await pend(qa.token)).filter(t => t.includes(nc.cardId));
+    assert.equal(qn.length, 1, '變更負責人通知新負責人，且只發一則');
+    assert.ok(qn[0].startsWith('[通知] ' + nc.cardId + ' 通知測試工作：負責人改為'), '沒前綴就不加專案標記');
+    const selfCard = (await call(qa.token, '/api/cards', 'POST', { requestId: rid(), title: 'QA 自己改自己' })).body;
+    await call(qa.token, `/api/cards/${selfCard.cardId}`, "PATCH", { ownerId: qa.participantId, status: '進行中' });
+    assert.ok(!(await pend(qa.token)).some(t => t.includes(selfCard.cardId)), 'AI 自己改自己的卡不發通知（避免互相喚醒）');
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);

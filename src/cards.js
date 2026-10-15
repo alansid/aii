@@ -280,6 +280,14 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     if (Object.keys(sets).length) {
       invalidatePeople(); // 團隊狀態快取一起失效
       await save(c, sets, logs, me, nowIso());
+      const parts = [], to = [];
+      if (sets.owner_id) { parts.push(claiming ? `${people.get(sets.owner_id)?.name} 認領` : `負責人改為 ${people.get(sets.owner_id)?.name}`); to.push(sets.owner_id); }
+      if (sets.wait_for_id) {
+        const after = await load(params.id);
+        parts.push(c.type === '決策' ? `請 ${people.get(sets.wait_for_id)?.name} 決定` : `等 ${people.get(sets.wait_for_id)?.name}${after.blocker ? '：' + after.blocker : ''}`);
+        to.push(sets.wait_for_id);
+      }
+      if (parts.length && !claiming) await notifyCard(ctx, me, c, to, parts.join('；'), 'edit');
     }
     return view(await load(params.id), people);
   });
@@ -311,6 +319,10 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
         [`決定：${result}${note ? `（${note}）` : ''}`, `狀態 待確認 → 已完成`], me, at);
     }
     invalidatePeople();
+    const back2 = result === '要求補充'
+      ? (c.proposer_id && people.get(c.proposer_id)?.status === 'active' ? c.proposer_id : c.created_by)
+      : (c.proposer_id || c.created_by);
+    await notifyCard(ctx, me, c, [back2], result === '要求補充' ? `要求補充：${note}` : `決定「${result}」${note ? '：' + note : ''}`, 'decide');
     return view(await load(params.id), people);
   });
 
@@ -323,6 +335,21 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     await save(c, { verified_by: me.id, verified_at: at }, ['標為已驗證'], me, at);
     return view(await load(params.id), await peopleMap(ctx));
   });
+
+  // 卡片動作通知（C-115）：以動作者身分在群組發一則 [通知] 並 @ 相關成員（走既有 @ 通知與門鈴）。
+  // requestId 帶卡號＋事件＋卡片版本，同一動作不會重複發；動作者自己不通知；失敗不影響動作本身。
+  async function notifyCard(ctx, me, c, toIds, summary, key) {
+    const ids = [...new Set(toIds.filter(id => id && id !== me.id))];
+    if (!ids.length) return;
+    const cur = await load(cardNo(c.seq));
+    const tag = cur.title.startsWith('[平台]') ? '【平台】' : cur.title.startsWith('[銀行系統]') ? '【銀行系統】' : '';
+    const plain = cur.title.replace('[平台]', '').replace('[銀行系統]', '').trim();
+    const msg = `[通知] ${tag}${cardNo(c.seq)} ${plain}：${summary}`.slice(0, 1900);
+    try {
+      const r = await createMessage(ctx, me, { text: msg, requestId: `cardev_${c.uid}_${key}_${cur.version}`.slice(0, 128), recipientIds: ids });
+      await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, r.message.messageId);
+    } catch (err) { console.error('card notify failed:', err.message); }
+  }
 
   // 交接：負責人把自己的卡交給指定成員。接手者回到「待處理」；伺服器代交接者在群組發一則 [交接] 並 @ 對方（既有 @ 通知）
   route('POST', '/api/cards/:id/handover', async ({ ctx, me, req, params }) => {
@@ -471,6 +498,7 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
       await save(c, sets, logs, me, at);
       await claim(r, me, at, c.seq);
       invalidatePeople();
+      await notifyCard(ctx, me, c, [r.from_id, p.waitForId], `採用了 ${aiName} 的建議：狀態改為 ${p.to}`, `sug${r.id}`);
       return view(await db.get('SELECT * FROM cards WHERE seq = ?', c.seq), people);
     }
     // create：採用時可以先改欄位
@@ -491,6 +519,7 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     ]);
     await claim(r, me, at, c.seq);
     invalidatePeople();
+    await notifyCard(ctx, me, c, [r.from_id, f.ownerId, f.waitForId], `採用了 ${aiName} 的建議建立這張卡${f.ownerId ? '，負責人 ' + people.get(f.ownerId)?.name : ''}`, `sug${r.id}`);
     return { __status: 201, ...view(c, people) };
   });
 

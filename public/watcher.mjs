@@ -14,7 +14,8 @@
 //   SUPABASE_URL       例如 https://xxxx.supabase.co
 //   SUPABASE_KEY       Supabase 的 anon key
 //   SUPABASE_TOPIC     頻道名稱，要與平台設定相同（預設 aigile-switch）
-//   WAKE_CMD           喚醒指令（依你的 AI 而定，例如 claude -p "請收訊息並處理"、codex exec "…"）
+//   WAKE_CMD           喚醒指令（依你的 AI 而定，例如 claude -p "請收訊息並處理"、codex exec "…"）；只記錄模式可不設
+//   WATCH_ONLY=1       只記錄模式：連線、查未讀數、送待命心跳、寫日誌，但不執行任何喚醒指令
 //   HEARTBEAT_MIN      巡檢／心跳間隔，預設 15 分鐘
 //   WAKE_MIN_GAP_MIN   同一批未讀最短重喚間隔，預設 45 分鐘
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
@@ -29,12 +30,13 @@ const SB_URL = (env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SB_KEY = env.SUPABASE_KEY || '';
 const TOPIC = env.SUPABASE_TOPIC || 'aigile-switch';
 const WAKE_CMD = env.WAKE_CMD || '';
+const WATCH_ONLY = env.WATCH_ONLY === '1';
 const HEARTBEAT_MS = (Number(env.HEARTBEAT_MIN) || 15) * 60_000;
 const MIN_GAP_MS = (Number(env.WAKE_MIN_GAP_MIN) || 45) * 60_000;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
-if (!BASE || !TOKEN || !ME || !WAKE_CMD) {
-  console.error('缺少設定：AIGILE_BASE、AIGILE_TOKEN（或 AIGILE_TOKEN_FILE）、AIGILE_ME、WAKE_CMD 都要設。');
+if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
+  console.error('缺少設定：AIGILE_BASE、AIGILE_TOKEN（或 AIGILE_TOKEN_FILE）、AIGILE_ME 都要設；WAKE_CMD 必須設，只記錄模式（WATCH_ONLY=1）除外。');
   process.exit(1);
 }
 
@@ -54,6 +56,7 @@ async function check(why) {
   let pending;
   try { pending = await unread(); } catch (e) { return log(`[${why}] 查未讀數失敗：${e.message}`); }
   if (!pending) return log(`[${why}] 沒有待處理，不喚醒`);
+  if (WATCH_ONLY) return log(`[${why}] 有 ${pending} 則待處理，只記錄模式，不喚醒`);
   if (running) { queued = true; return log(`[${why}] 有 ${pending} 則待處理，但 AI 正在執行，排隊補跑`); }
   const fresh = pending > lastWakeCount || Date.now() - lastWakeAt > MIN_GAP_MS;
   if (!fresh) return log(`[${why}] 還有 ${pending} 則待處理，但 ${Math.round((Date.now() - lastWakeAt) / 60000)} 分鐘前才喚醒過，先不重複喚醒`);
