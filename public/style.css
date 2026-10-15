@@ -1085,3 +1085,11 @@ body.drawer-docked #app { padding-right: 400px; }
 .composer-row .tag-btn { padding: 0 14px; display: inline-flex; align-items: center; line-height: 1; }
 .composer-row .proj-sel { padding: 0 10px; }
 .composer-row { align-items: flex-end; }
+
+/* ===== C-132 [需確認] 快捷列 ===== */
+.auth-row.quick { display: grid; gap: 8px; }
+.q-opts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.q-opt { min-height: 44px; text-align: left; }
+.q-opt[aria-pressed="true"] { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
+.auth-row.quick .inl-actions .btn { min-height: 44px; }
+@media (max-width: 600px) { .q-opts { flex-direction: column; align-items: stretch; } .q-opt { width: 100%; } }

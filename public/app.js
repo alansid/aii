@@ -612,6 +612,11 @@
     }
   }
 
+  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (t) quickState(t.dataset.qText).text = t.value; });
+  $('#messages').addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
+    e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
+  });
   $('#messages').addEventListener('click', e => {
     if (e.target.closest('#load-older')) return loadOlder().catch(err => toast(err.message));
     const r = e.target.closest('[data-reply]');
@@ -1860,6 +1865,75 @@
       <div class="row"><button type="button" class="btn primary" data-auth-send="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>${p.error ? '重試' : '確認送出'}</button>
       <button type="button" class="btn" data-auth-cancel="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>取消</button></div></div>`;
   }
+  // ---------- C-132：[需確認] 快捷列——選項按鈕＋想法輸入框 ----------
+  const quickMap = new Map(); // 訊息編號 → { sel, text, noOpts, busy, error }
+  const quickState = id => { if (!quickMap.has(id)) quickMap.set(id, { sel: null, text: '', noOpts: false, busy: false, error: '' }); return quickMap.get(id); };
+  const OPT_LETTER = /^\s*(?:[（(]([A-F])[）)]|([A-F])\s*[.、:：）)])\s*(\S.*)$/;
+  const OPT_CIRCLE = /^\s*([①②③④⑤⑥])\s*(\S.*)$/;
+  // 連續 2～6 行、開頭是「A. ／A、／A： ／（A）」或「①②③」才算選項；一般 1. 2. 3. 不認
+  function parseOptions(text) {
+    const lines = String(text).split('\n');
+    let best = [];
+    for (let i = 0; i < lines.length; i++) {
+      const block = [];
+      for (let j = i; j < lines.length; j++) {
+        const a = OPT_LETTER.exec(lines[j]), c = OPT_CIRCLE.exec(lines[j]);
+        if (a) block.push({ key: a[1] || a[2], label: a[3] });
+        else if (c) block.push({ key: c[1], label: c[2] });
+        else break;
+      }
+      if (block.length >= 2 && block.length <= 6 && block.length > best.length) best = block;
+      i += Math.max(block.length - 1, 0);
+    }
+    const keys = best.map(o => o.key);
+    return new Set(keys).size === keys.length ? best : []; // 重複的字母＝不是選項
+  }
+  function quickHtml(m) {
+    const q = quickState(m.messageId);
+    const opts = q.noOpts ? [] : parseOptions(m.text);
+    const id = esc(m.messageId);
+    const sendLabel = opts.length ? (q.sel ? `選 ${esc(q.sel)} 並送出` : '先選一個選項') : '同意照辦';
+    return `<div class="auth-row quick" data-q-root="${id}">
+      ${opts.length ? `<div class="q-opts" role="group" aria-label="選項">${opts.map(o => `<button type="button" class="btn q-opt" data-q-opt="${esc(o.key)}" data-qm="${id}" aria-pressed="${q.sel === o.key}"><b>${esc(o.key)}</b> ${esc(o.label.slice(0, 8))}</button>`).join('')}
+        <button type="button" class="link small" data-q-notopt data-qm="${id}">不是選項？</button></div>` : ''}
+      <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <div class="inl-actions">
+        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || (opts.length && !q.sel) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
+        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button>
+      </div>
+      ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
+  }
+  async function quickSend(id, kind) {
+    const m = state.byId.get(id), q = quickState(id);
+    if (!m || q.busy) return;
+    const opts = q.noOpts ? [] : parseOptions(m.text);
+    if (kind === 'send' && opts.length && !q.sel) return;
+    const head = kind === 'hold' ? '暫緩處理' : opts.length ? `選 ${q.sel}` : '同意照辦';
+    const text = `[回覆] ${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
+    q.busy = true; q.error = ''; refreshMsg(id);
+    try {
+      const r = await api('/api/messages', { method: 'POST', body: { text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] } });
+      quickMap.delete(id);
+      onNewMessage(r); refreshMsg(id);
+      toast('已送出');
+      loadTeam().catch(() => {});
+    } catch (err) {
+      q.busy = false; q.error = err.message; refreshMsg(id);
+    }
+  }
+  function quickClick(e) {
+    const t = e.target;
+    const opt = t.closest?.('[data-q-opt]');
+    if (opt) { const q = quickState(opt.dataset.qm); q.sel = q.sel === opt.dataset.qOpt ? null : opt.dataset.qOpt; refreshMsg(opt.dataset.qm); return true; }
+    const no = t.closest?.('[data-q-notopt]');
+    if (no) { const q = quickState(no.dataset.qm); q.noOpts = true; q.sel = null; refreshMsg(no.dataset.qm); return true; }
+    const send = t.closest?.('[data-q-send]');
+    if (send) { if (!send.disabled) quickSend(send.dataset.qm, 'send'); return true; }
+    const hold = t.closest?.('[data-q-hold]');
+    if (hold) { if (!hold.disabled) quickSend(hold.dataset.qm, 'hold'); return true; }
+    return false;
+  }
+
   function authHtml(m) {
     if (!myAiMsg(m)) return '';
     const text = m.text, mineR = repliesOf(m.messageId).filter(isMine);
@@ -1876,14 +1950,15 @@
       rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
     }
     if (!shas.length && /^\s*\[需確認\]/.test(text)) {
-      const sent = mineR.find(r => /^\[回覆\] (同意 commit|同意照辦|暫緩處理)/.test(r.text));
+      const sent = mineR.find(r => /^\[回覆\] (同意 commit|同意照辦|暫緩處理|選 [A-F①-⑥])/.test(r.text));
       const answered = sent || repliesOf(m.messageId).some(r => !isMine(r) && poRole(r));
-      const hasCommit = /commit/i.test(text);
+      const isPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG'; // Commit 授權只給程式開發 AI 的 [需確認]
+      const hasCommit = isPG && /commit/i.test(text);
       if (sent) rows.push(`<div class="auth-row sent"><b>已回覆 · ${shortTime(sent.createdAt)}</b><span class="muted small">${esc(sent.text.slice(5, 40))}</span></div>`);
       else if (pend && pend.key === 'need') rows.push(authConfirm(m, pend));
       else if (!answered) rows.push(hasCommit
         ? `<div class="auth-row"><span class="auth-title">授權 Commit</span>${authBtn(m, 'commit', '同意 Commit')}</div>`
-        : `<div class="auth-row">${authBtn(m, 'ok', '同意照辦', '', true)}${authBtn(m, 'hold', '暫緩處理', '', true)}</div>`);
+        : quickHtml(m));
     }
     return rows.length ? `<div class="auth-box">${rows.join('')}</div>` : '';
   }
@@ -1893,6 +1968,7 @@
     document.getElementById('msg-' + id)?.querySelector('[data-auth-send]')?.focus();
   }
   function authClick(e) {
+    if (quickClick(e)) return true;
     const go = e.target.closest('[data-auth]');
     if (go) {
       const m = state.byId.get(go.dataset.amsg);
