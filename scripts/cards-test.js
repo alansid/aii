@@ -271,6 +271,14 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: 'x', cardId: 'C-99999' })).status, 404, '找不到卡片回 404');
     assert.equal((await call(liu.token, '/api/messages?limit=5')).body.items.length, before, '404 時沒有發出訊息');
     assert.equal((await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: 'x', cardId: 'abc' })).status, 404, 'cardId 格式錯誤');
+    // C-134：人類回覆某則訊息＝處理了它，他在那則訊息上的待處理通知自動標為已讀；AI 不會被自動 ACK
+    const ask = (await call(qa.token, '/api/messages', 'POST', { requestId: rid(), text: '[需確認] 自動已讀測試', recipientIds: [liuId] })).body;
+    const nPend = async () => (await call(liu.token, '/api/notifications?status=pending&limit=100')).body.items.filter(n => n.messageId === ask.messageId).length;
+    assert.equal(await nPend(), 1, '人類收到待處理通知');
+    await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: '[回覆] 可以', replyToMessageId: ask.messageId, recipientIds: [qa.participantId] });
+    assert.equal(await nPend(), 0, '人類回覆後該則通知自動已讀');
+    const aiNotif = (await call(qa.token, '/api/notifications?status=pending&limit=100')).body.items.filter(n => n.messageId !== ask.messageId);
+    assert.ok(aiNotif.some(n => (n.preview || '').startsWith('[回覆] 可以')), 'AI 收到的回覆通知仍是待處理（不替 AI 自動 ACK）');
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);

@@ -323,7 +323,11 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       throw e;
     }
     ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai'), createdAt);
-    if (replyTo && me.kind === 'human') teamCache = { at: 0, data: null }; // 人類回覆 [需確認] 後，待你處理清單立即更新
+    if (replyTo && me.kind === 'human') {
+      teamCache = { at: 0, data: null }; // 人類回覆 [需確認] 後，收件匣立即更新
+      // 人類回覆某則訊息＝處理了它：把他在那則訊息上的待處理通知標為已讀（AI 照規則自己 ACK，不替 AI 自動 ACK）
+      await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND message_id = ? AND status = 'pending'", createdAt, me.id, replyTo.id);
+    }
     return { message: await serializeMessage(ctx, await db.get('SELECT * FROM messages WHERE id = ?', id)), duplicate: false };
   }
 

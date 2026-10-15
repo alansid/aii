@@ -1104,3 +1104,9 @@ body.drawer-docked #app { padding-right: 400px; }
 .input-wrap { min-width: 0; }
 @media (max-width: 899px) { .messages { padding-left: 12px; padding-right: 12px; } .composer { padding-left: 12px; padding-right: 12px; } }
 #input { display: block; } /* inline-block 會在底下多出約 6px 的基線空隙，造成與按鈕底緣差 6px */
+
+/* ===== C-134 收件匣與側欄整理 ===== */
+.inbox-block-title { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: .02em; margin: 6px 2px -4px; }
+.ndot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--primary); }
+.hub-btn { display: grid; gap: 2px; text-align: left; justify-items: start; min-height: 56px; padding: 10px 14px; }
+.sheet-panel > button { min-height: 48px; }

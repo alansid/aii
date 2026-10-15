@@ -222,7 +222,7 @@
     loadTeam();
     loadCards().then(() => { renderMessages(false); if (state.page === 'work') renderWork(); }).catch(() => {});
     connectEvents();
-    showPage(store.get(PAGE_KEY) === 'work' ? 'work' : 'messages');
+    showPage(['work', 'inbox'].includes(store.get(PAGE_KEY)) ? store.get(PAGE_KEY) : 'messages');
   }
 
   async function loadParticipants() {
@@ -560,7 +560,6 @@
     };
   }
   $('#f-open').onclick = openFilterSheet;
-  $('#f-decide').onclick = () => openTodoPage();
   document.querySelectorAll('[data-scope]').forEach(b => { b.onclick = () => setFilter({ scope: b.dataset.scope }); });
   $('#f-member').onchange = e => setFilter({ member: e.target.value });
   $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
@@ -1274,19 +1273,21 @@
     }
   }
 
-  function openTodoPage() { closeSheet(false); work.view = 'T'; showPage('work'); }
+  function openTodoPage() { closeSheet(false); showPage('inbox'); }
   document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
   function showPage(page) {
     if (work.openId) closeCard();
-    state.page = page === 'work' ? 'work' : 'messages';
+    state.page = page === 'work' || page === 'inbox' ? page : 'messages';
     store.set(PAGE_KEY, state.page);
     $('#page-messages').hidden = state.page !== 'messages';
-    $('#page-work').hidden = state.page !== 'work';
+    $('#page-work').hidden = state.page === 'messages'; // 收件匣與工作共用同一個容器
     document.querySelectorAll('[data-nav]').forEach(b => {
       if (b.dataset.nav === state.page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
     if (state.page === 'work') {
       (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
+    } else if (state.page === 'inbox') {
+      Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
     } else scrollBottom();
   }
   document.addEventListener('click', e => {
@@ -1309,7 +1310,8 @@
 
   function renderWork() {
     const box = $('#page-work');
-    if (state.page !== 'work' || !work.loaded) return;
+    if (!['work', 'inbox'].includes(state.page) || !work.loaded) return;
+    if (state.page === 'inbox') { box.innerHTML = inboxHtml(); return; }
     const all = visibleCards();
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
     const keep = document.activeElement?.id;
@@ -1319,7 +1321,6 @@
         <div class="seg-scope" role="group" aria-label="檢視方式">
           <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
           <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
-          <button type="button" data-view="T" aria-pressed="${work.view === 'T'}">待你處理${todoCount() ? ` ${todoCount()}` : ''}</button>
         </div>
         <button class="btn primary" type="button" id="card-new">＋ 新增卡片</button>
       </div>
@@ -1328,7 +1329,7 @@
         <select id="card-owner" aria-label="負責人"><option value="">所有負責人</option>${people.map(p => `<option value="${esc(p.participantId)}" ${work.owner === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
         <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策'].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
-      ${work.view === 'A' ? overviewHtml(all) : work.view === 'T' ? todoHtml(all) : boardHtml(all)}`;
+      ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
     if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
@@ -1383,19 +1384,49 @@
             ${decisionActions(c)}
           </article>`).join('')}</div></section>` : '';
   }
+  // ---------- 收件匣（C-134）：要你做的＋給你知道的 ----------
+  work.notes = [];
+  async function loadNotes() { work.notes = (await api('/api/notifications?status=pending&limit=100')).items; }
+  const ackNotes = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
+  // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
+  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !dup.has(n.messageId)); };
+  function notesHtml() {
+    const list = noteList();
+    const reason = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
+    return `<section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>給你知道的</h3><span class="wcount">${list.length}</span><span class="grow"></span>
+        ${list.length ? '<button type="button" class="btn small" data-note-ackall>全部標為已讀</button>' : ''}</div>
+      ${list.length ? list.map(n => {
+        const who = state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
+        return `<div class="sugg-row"><span class="ndot" aria-label="未讀"></span>${avatar(who)}
+          <div class="sugg-main"><div class="sugg-top"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></div>
+            <span class="small">${esc(n.preview)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">查看</button>
+            <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">已讀</button></div></div>`;
+      }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}</section>`;
+  }
+  function inboxHtml() {
+    const all = [...work.cards.values()].filter(cardInView);
+    const open = todoCount();
+    return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你做` : '沒有要你做的事'}</span></div></div>
+      <div class="inbox-block-title">要你做的</div>
+      ${todoHtml(all)}
+      <div class="inbox-block-title">給你知道的</div>
+      ${notesHtml()}`;
+  }
+
   // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議（C-107）
   const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId);
   const todoCount = () => (state.team ? myDecisions(state.team).length : 0) + (work.sugg?.length || 0);
   function updateTodoBadge() {
     const n = todoCount();
-    document.querySelectorAll('.todo-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
-    const fd = $('#f-decide'); if (fd) { fd.hidden = !n; fd.textContent = `待你處理 ${n}`; }
+    document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
+    document.title = (n ? `(${n > 99 ? '99+' : n}) ` : '') + BASE_TITLE;
   }
   function todoHtml(all) {
     const decideMe = all.filter(decidingMe);
     const confirms = legacyConfirms();
     const sg = work.sugg || [];
-    if (!decideMe.length && !confirms.length && !sg.length) return '<section class="wpanel"><p class="muted">目前沒有需要你處理的事。</p></section>';
+    if (!decideMe.length && !confirms.length && !sg.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
     const confSection = confirms.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>[需確認] 訊息</h3><span class="wcount ora">${confirms.length}</span><span class="muted small">AI 發出、還沒人回覆的確認；授權列在訊息上</span></div>
         ${confirms.map(d => `<div class="sugg-row">
@@ -1440,9 +1471,14 @@
     if (decisionClick(e)) return;
     const t = e.target;
     const v = t.closest('[data-view]');
-    if (v) { work.view = v.dataset.view; if (work.view !== 'T') store.set(VIEW_KEY, work.view); return renderWork(); }
+    if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
     const f = t.closest('[data-filter]');
     if (f) { work.filter = f.dataset.filter; work.view = 'A'; return renderWork(); }
+    const ng = t.closest('[data-note-goto]');
+    if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
+    const na = t.closest('[data-note-ack]');
+    if (na) { try { await ackNotes([na.dataset.noteAck]); await loadNotes(); renderWork(); } catch (err) { toast(err.message); } return; }
+    if (t.closest('[data-note-ackall]')) { try { const ids = noteList().map(n => n.notificationId); for (let i = 0; i < ids.length; i += 100) await ackNotes(ids.slice(i, i + 100)); await loadNotes(); renderWork(); toast('已全部標為已讀'); } catch (err) { toast(err.message); } return; }
     const tj = t.closest('[data-todo-jump]');
     if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
     const tr = t.closest('[data-todo-resolve]');
@@ -2065,7 +2101,19 @@
     if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeTagMenu(); }
   }, true);
 
-  const openers = { members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
+  // 團隊：第一版先把四個既有畫面收進同一個入口（第二版再整合成一頁）
+  function openTeamHub() {
+    const body = openModal('團隊', `<div class="stack">
+      <button type="button" class="btn hub-btn" data-hub="team-status"><b>團隊狀態</b><span class="muted small">每位成員目前在做什麼、AI 工作記憶、等你決定</span></button>
+      <button type="button" class="btn hub-btn" data-hub="members"><b>成員名單</b><span class="muted small">誰在群組、誰在線</span></button>
+      <button type="button" class="btn hub-btn" data-hub="my-ai"><b>我的 AI</b><span class="muted small">管理我名下的 AI、重發 Token</span></button></div>`, { size: 'narrow' });
+    body.addEventListener('click', e => {
+      const b = e.target.closest('[data-hub]'); if (!b) return;
+      closeModal();
+      ({ 'team-status': openTeam, members: openMembers, 'my-ai': openMyAi })[b.dataset.hub]();
+    });
+  }
+  const openers = { team: openTeamHub, members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
   // 手機選單（底部滑出）
   const sheet = $('#sheet');
@@ -2144,7 +2192,9 @@
     document.querySelectorAll('.presence-alert').forEach(el => { el.hidden = !abnormal.length; el.title = abnormal.length ? '需要注意：' + abnormal.map(mb => `${mb.name}（${health(mb).text}）`).join('、') : ''; });
     const mdec = myDecisions(t);
     updateTodoBadge();
-    const dec = todoCount() ? `<button type="button" class="chip decide" data-todo>待你處理 ${todoCount()}</button>` : '';
+    // 收件匣開著時，團隊狀態更新（例如新的 [需確認]）也要反映；正在輸入時不重畫，避免失去焦點
+    if (state.page === 'inbox' && work.loaded && !document.activeElement?.matches?.('[data-inl-text]')) renderWork();
+    const dec = '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;
     // 側欄：兩行清單（名稱／最後上線 · 環境），狀態靠右
@@ -2157,7 +2207,7 @@
         ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
       </button>`;
     }).join('');
-    $('#team-list').innerHTML = (todoCount() ? `<button type="button" class="decide-row" data-todo><span>待你處理</span><b>${todoCount()}</b></button>` : '') + rows;
+    $('#team-list').innerHTML = '' + rows;
   }
   for (const el of [$('#team-bar'), $('#team-list'), $('.side-title')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
 
@@ -2539,14 +2589,11 @@
   }
 
   // 通知收件匣
+  // 收件匣：有新訊息通知時更新（徽章只算「要你做的」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
   async function refreshInboxCount() {
     try {
-      const { pending } = await api('/api/notifications/count');
-      document.title = (pending ? `(${pending > 99 ? '99+' : pending}) ` : '') + BASE_TITLE;
-      document.querySelectorAll('.inbox-badge').forEach(b => {
-        b.hidden = !pending;
-        b.textContent = pending > 99 ? '99+' : pending;
-      });
+      if (state.page === 'inbox') { await loadNotes(); renderWork(); }
+      updateTodoBadge();
     } catch {}
   }
 
