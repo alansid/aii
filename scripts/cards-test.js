@@ -263,6 +263,14 @@ const rid = () => 'req_c' + (++n);
     const selfCard = (await call(qa.token, '/api/cards', 'POST', { requestId: rid(), title: 'QA 自己改自己' })).body;
     await call(qa.token, `/api/cards/${selfCard.cardId}`, "PATCH", { ownerId: qa.participantId, status: '進行中' });
     assert.ok(!(await pend(qa.token)).some(t => t.includes(selfCard.cardId)), 'AI 自己改自己的卡不發通知（避免互相喚醒）');
+    // C-130：POST /api/messages 可帶 cardId，訊息一併關聯到該卡；找不到的卡回 404 且不發訊息
+    const cm = (await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: '[回覆] ' + nc.cardId + '：先照原計畫', cardId: nc.cardId, recipientIds: [qa.participantId] })).body;
+    assert.equal(cm.cardLinked, true, '訊息關聯到卡片');
+    assert.ok((await call(liu.token, `/api/cards/${nc.cardId}`)).body.messageIds.includes(cm.messageId), '卡片的相關訊息含這則');
+    const before = (await call(liu.token, '/api/messages?limit=5')).body.items.length;
+    assert.equal((await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: 'x', cardId: 'C-99999' })).status, 404, '找不到卡片回 404');
+    assert.equal((await call(liu.token, '/api/messages?limit=5')).body.items.length, before, '404 時沒有發出訊息');
+    assert.equal((await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: 'x', cardId: 'abc' })).status, 404, 'cardId 格式錯誤');
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);

@@ -1083,18 +1083,106 @@
   // 這張決策卡現在是在等「我」做決定
   const decidingMe = c => c.type === '決策' && c.status === '待確認' && !c.decision?.result && c.decision?.decider?.participantId === meId() && isMeRef(c.waitFor);
   work.note = null; // { id, kind: '不同意' | '要求補充', text }
-  function decisionActions(c) {
-    if (work.note && work.note.id === c.cardId) {
-      const n = work.note;
-      return `<label class="dnote">${n.kind === '不同意' ? '不同意的原因' : '需要補充什麼'}
-          <textarea rows="2" maxlength="500" data-note-text>${esc(n.text)}</textarea></label>
-        <div class="row end"><button type="button" class="btn small" data-note-cancel>取消</button>
-          <button type="button" class="btn small primary" data-note-submit="${esc(c.cardId)}" ${n.text.trim() ? '' : 'disabled'}>${n.kind === '不同意' ? '送出不同意' : '送出要求'}</button></div>`;
+  // ---------- C-130 行內輸入：待你處理清單與卡片抽屜共用同一個元件 ----------
+  // key 前綴：m:訊息編號（[需確認] 訊息）、c:卡號（決策卡）、s:建議編號、k:卡號（一般卡片）
+  work.drafts = {};      // key → 草稿，切換項目不遺失
+  work.openInl = null;   // 手機一次只展開一項
+  const narrowInl = () => matchMedia('(max-width: 600px)').matches;
+  const inlBtn = (key, act, label, { cls = '', need = false, primary = false, result = '' } = {}) =>
+    `<button type="button" class="btn small ${cls}" data-inl-act="${act}" data-inl="${esc(key)}" ${result ? `data-result="${esc(result)}"` : ''} data-need="${need ? 1 : 0}" ${primary ? 'data-primary="1"' : ''} ${need && !(work.drafts[key] || '').trim() ? 'disabled' : ''}>${label}</button>`;
+  function inlineHtml(key, kind, c) {
+    if (narrowInl() && work.openInl !== key) return `<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">回覆…</button>`;
+    let btns = '', hint = '想說什麼都可以寫在這裡（Ctrl+Enter 送出）';
+    if (kind === 'confirm' || kind === 'card') btns = inlBtn(key, 'send', '送出', { cls: 'primary', need: true, primary: true });
+    else if (kind === 'sugg') {
+      hint = '想說明或留言給提案的 AI（Ctrl+Enter 留言）';
+      btns = inlBtn(key, 'sugg-note', '只留言', { need: true, primary: true }) + inlBtn(key, 'sugg-skip', '略過並附原因', { need: true });
+    } else if (kind === 'decision') {
+      hint = '說明可選填；不同意或要求補充一定要寫（Ctrl+Enter 只送意見）';
+      btns = optionsOf(c).map((o, i) => inlBtn(key, 'decide', `決定「${esc(o)}」`, { cls: i === 0 ? 'ok' : '', result: o })).join('')
+        + inlBtn(key, 'opinion', '只送意見', { need: true, primary: true })
+        + inlBtn(key, 'decide', '不同意', { need: true, result: '不同意' })
+        + inlBtn(key, 'decide', '要求補充', { need: true, result: '要求補充' });
     }
-    return `<div class="dactions">
-      ${optionsOf(c).map((o, i) => `<button type="button" class="btn small ${i === 0 ? 'ok' : ''}" data-decide="${esc(c.cardId)}" data-result="${esc(o)}">${esc(o)}</button>`).join('')}
-      <button type="button" class="btn small" data-note-open="${esc(c.cardId)}" data-kind="不同意">不同意</button>
-      <button type="button" class="btn small" data-note-open="${esc(c.cardId)}" data-kind="要求補充">要求補充</button></div>`;
+    return `<div class="inl" data-inl-root="${esc(key)}">
+      <textarea class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
+      <div class="inl-actions">${btns}</div>
+      <p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
+  }
+  const decisionActions = c => inlineHtml('c:' + c.cardId, 'decision', c);
+
+  function inlineInput(e) {
+    const ta = e.target.closest?.('[data-inl-text]');
+    if (!ta) return false;
+    work.drafts[ta.dataset.inlText] = ta.value;
+    const root = ta.closest('.inl');
+    root.querySelectorAll('[data-need="1"]').forEach(b => { b.disabled = !ta.value.trim(); });
+    return true;
+  }
+  function inlineKey(e) {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-inl-text]')) return;
+    e.preventDefault();
+    const b = e.target.closest('.inl')?.querySelector('[data-primary="1"]');
+    if (b && !b.disabled) b.click();
+  }
+  function inlineClick(e) {
+    const open = e.target.closest?.('[data-inl-open]');
+    if (open) {
+      work.openInl = open.dataset.inlOpen;
+      renderWork(); if (work.openId) renderDrawer(false);
+      const ta = document.querySelector(`[data-inl-text="${CSS.escape(work.openInl)}"]`);
+      if (ta) { ta.focus(); ta.scrollIntoView({ block: 'center' }); }
+      return true;
+    }
+    const b = e.target.closest?.('[data-inl-act]');
+    if (!b) return false;
+    if (!b.disabled) inlineAct(b);
+    return true;
+  }
+  async function inlineAct(btn) {
+    const key = btn.dataset.inl, act = btn.dataset.inlAct, id = key.slice(2), root = btn.closest('.inl');
+    const text = (work.drafts[key] || '').trim();
+    const errEl = root.querySelector('[data-inl-err]');
+    const label = btn.textContent;
+    errEl.textContent = '';
+    root.querySelectorAll('button, textarea').forEach(x => { x.disabled = true; });
+    btn.textContent = '送出中…';
+    const post = body => api('/api/messages', { method: 'POST', body: { requestId: newRequestId(), ...body } });
+    const others = ids => [...new Set(ids)].filter(x => x && x !== meId());
+    try {
+      if (act === 'send' && key.startsWith('m:')) {
+        let m = state.byId.get(id); if (!m) m = await api(`/api/messages/${encodeURIComponent(id)}`);
+        await post({ text: `[回覆] ${text}`, replyToMessageId: id, recipientIds: others([m.author.participantId]) });
+      } else if (act === 'send') { // 一般卡片：給負責人（沒有就給等待對象）
+        const c = work.cards.get(id);
+        await post({ text: `[回覆] ${id}：${text}`, cardId: id, recipientIds: others([c?.owner?.participantId, c?.waitFor?.participantId].slice(0, c?.owner ? 1 : 2)) });
+      } else if (act === 'opinion') { // 決策卡只送意見：給提案人，卡片狀態不變
+        const c = work.cards.get(id);
+        await post({ text: `[回覆] ${id}（決策意見）：${text}`, cardId: id, recipientIds: others([c?.decision?.proposer?.participantId]) });
+      } else if (act === 'decide') {
+        const c = work.cards.get(id), result = btn.dataset.result;
+        if (['不同意', '要求補充'].includes(result) && !text) throw new Error('請先寫說明');
+        const r = await api(`/api/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { result, note: text, version: c?.version } });
+        work.cards.set(id, r);
+        toast(result === '要求補充' ? `已請 ${r.waitFor?.name || '提案人'} 補充` : `已記錄決定：${result}`);
+      } else if (act === 'sugg-note' || act === 'sugg-skip') {
+        const g = (work.sugg || []).find(x => x.suggestionId === id);
+        if (!g) throw new Error('這則建議已經被處理過了');
+        const what = g.kind === 'create' ? `建立卡片「${g.create.title}」` : `${g.card?.cardId || ''} 狀態改為「${g.to}」`;
+        if (act === 'sugg-skip') await api(`/api/suggestions/${encodeURIComponent(id)}/skip`, { method: 'POST', body: {} });
+        await post({ text: `[回覆] ${act === 'sugg-skip' ? '略過了你的建議' : '關於你的建議'}（${what}）：${text}`, ...(g.card?.cardId ? { cardId: g.card.cardId } : {}), recipientIds: others([g.from?.participantId]) });
+      }
+      delete work.drafts[key]; work.openInl = null;
+      if (act !== 'decide') toast('已送出');
+      await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]);
+      updateTodoBadge(); renderWork();
+      if (work.openId) openCard(work.openId);
+    } catch (err) {
+      root.querySelectorAll('button, textarea').forEach(x => { x.disabled = false; });
+      root.querySelectorAll('[data-need="1"]').forEach(x => { x.disabled = !(work.drafts[key] || '').trim(); });
+      btn.textContent = label;
+      errEl.textContent = '送出失敗：' + err.message + '（內容還在，可以再試一次）';
+    }
   }
   function decisionBox(c) {
     const d = c.decision;
@@ -1159,6 +1247,7 @@
           <button type="button" class="btn small primary" data-sugg-apply="${esc(g.suggestionId)}">採用</button>
           ${g.kind === 'create' ? `<button type="button" class="btn small" data-sugg-edit="${esc(g.suggestionId)}">編輯後採用</button>` : ''}
           <button type="button" class="link small" data-sugg-skip="${esc(g.suggestionId)}">略過</button></div>
+        ${inlineHtml('s:' + g.suggestionId, 'sugg', g)}
       </div>`).join('')}</section>`;
   }
   async function suggAction(id, action, body) {
@@ -1304,6 +1393,7 @@
           <div class="sugg-main"><b>${esc(d.title || '（無標題）')}</b><span class="muted small">${esc(d.author?.name || '')} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-todo-jump="${esc(d.messageId)}">到訊息處理</button>
             <button type="button" class="link small" data-todo-resolve="${esc(d.messageId)}" title="已經決定了，從這裡移出">已處理</button></div>
+          ${inlineHtml('m:' + d.messageId, 'confirm', d)}
         </div>`).join('')}</section>` : '';
     return decisionSectionHtml(decideMe) + confSection + suggHtml(true);
   }
@@ -1336,6 +1426,7 @@
   // 互動
   const workBox = $('#page-work');
   workBox.addEventListener('input', decisionInput);
+  workBox.addEventListener('keydown', inlineKey);
   workBox.addEventListener('click', async e => {
     if (decisionClick(e)) return;
     const t = e.target;
@@ -1450,6 +1541,7 @@
     }
   }
   function decisionClick(e) {
+    if (inlineClick(e)) return true;
     const t = e.target;
     const dc = t.closest('[data-decide]');
     if (dc) { decideCard(dc.dataset.decide, dc.dataset.result, ''); return true; }
@@ -1461,6 +1553,7 @@
     return false;
   }
   function decisionInput(e) {
+    if (inlineInput(e)) return;
     if (!e.target.matches?.('[data-note-text]') || !work.note) return;
     work.note.text = e.target.value;
     const btn = e.target.closest('.dcard, .drawer')?.querySelector('[data-note-submit]');
@@ -1557,6 +1650,7 @@
       document.body.append(host);
       host.addEventListener('click', e => { if (!decisionClick(e)) drawerClick(e); });
       host.addEventListener('input', decisionInput);
+      host.addEventListener('keydown', inlineKey);
       host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
       host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
     }
@@ -1616,6 +1710,7 @@
           <div><button class="btn small" type="button" data-act="edit">編輯</button></div>`}
           <div class="group-title">相關訊息 · ${(d.messageIds || []).length}</div>
           ${msgs || '<p class="muted small">還沒有關聯訊息。</p>'}
+          ${!(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
           <div class="group-title">紀錄</div>
           <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>
         </div>

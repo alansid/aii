@@ -323,6 +323,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       throw e;
     }
     ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai'), createdAt);
+    if (replyTo && me.kind === 'human') teamCache = { at: 0, data: null }; // 人類回覆 [需確認] 後，待你處理清單立即更新
     return { message: await serializeMessage(ctx, await db.get('SELECT * FROM messages WHERE id = ?', id)), duplicate: false };
   }
 
@@ -822,9 +823,22 @@ ${roster}
     if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
     return serializeMessage(ctx, m);
   });
+  // cardId（選填）：訊息發出時一併關聯到該卡（C-130 待你處理的行內輸入、卡片內回覆用）；一張卡最多 50 則，滿了就略過關聯
   route('POST', '/api/messages', async ({ req, me, ctx }) => {
-    const r = await createMessage(ctx, me, await readJson(req));
-    return { __status: r.duplicate ? 200 : 201, ...r.message };
+    const body = await readJson(req);
+    let cardSeq = null;
+    if (body.cardId !== undefined && body.cardId !== null && body.cardId !== '') {
+      const m = /^C-(\d+)$/.exec(String(body.cardId));
+      cardSeq = m ? Number(m[1]) - 100 : NaN;
+      if (!Number.isInteger(cardSeq) || cardSeq < 1 || !(await db.get('SELECT seq FROM cards WHERE seq = ?', cardSeq))) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
+    }
+    const r = await createMessage(ctx, me, body);
+    let cardLinked;
+    if (cardSeq) {
+      const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
+      if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
+    }
+    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }) };
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
