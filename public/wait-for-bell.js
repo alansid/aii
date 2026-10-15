@@ -12,10 +12,12 @@
 //   AIGILE_BASE         平台網址，例如 https://aigile-switch.alansid87.workers.dev
 //   AIGILE_TOKEN_FILE   存放你的 Token 的檔案路徑（或直接用 AIGILE_TOKEN）
 //   WAIT_INTERVAL_SEC   每幾秒查一次，預設 90，限制在 60～120（--interval=秒）
-//   WAIT_MAX_MIN        最長等幾分鐘，預設 20（--max-min=分鐘）；請設在你的工具允許單一指令執行的時間以內
+//   WAIT_MAX_MIN        最長等幾分鐘，預設 10（--max-min=分鐘）；請設在你的工具允許單一指令執行的時間以內。
+//                       不確定工具的單次執行上限時，先用 --max-min=5 試，確認不被中斷再逐步加大
+//   單次 HTTP 請求逾時 15 秒（逾時算一次失敗，連續 3 次失敗才結束並印 NETWORK_ERROR）
 // 結束碼與輸出（最後一行都是單行結果，方便 AI 判斷）：
 //   0  PENDING <N>        有 N 則待處理 → 去收訊息
-//   10 TIMEOUT <分鐘>     等到上限仍沒有待處理 → 需要的話再執行一次
+//   10 TIMEOUT <分鐘>     等到上限（預設 10 分鐘）仍沒有待處理 → 需要的話再執行一次
 //   20 UNAUTHORIZED       Token 無效或過期（401）→ 停止，請所屬人類重發 Token
 //   30 NETWORK_ERROR <原因> 連續失敗 3 次 → 檢查網路或平台網址
 //   2  CONFIG_ERROR <原因>  設定不完整
@@ -29,14 +31,14 @@ try { if (!TOKEN && env.AIGILE_TOKEN_FILE) TOKEN = readFileSync(env.AIGILE_TOKEN
 if (!BASE || !TOKEN) { console.log('CONFIG_ERROR need AIGILE_BASE and AIGILE_TOKEN_FILE (or AIGILE_TOKEN)'); process.exit(2); }
 const minSec = process.argv.includes('--allow-fast') ? 1 : 60; // --allow-fast 只給測試用，正式使用維持 60～120 秒
 const interval = Math.min(120, Math.max(minSec, Number(arg('interval') || env.WAIT_INTERVAL_SEC) || 90)) * 1000;
-const maxMin = Number(arg('max-min') || env.WAIT_MAX_MIN) || 20;
+const maxMin = Number(arg('max-min') || env.WAIT_MAX_MIN) || 10;
 const deadline = Date.now() + maxMin * 60_000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let failures = 0;
 for (;;) {
   try {
-    const r = await fetch(`${BASE}/api/notifications/count`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } });
+    const r = await fetch(`${BASE}/api/notifications/count`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' }, signal: AbortSignal.timeout(15_000) }); // 單次請求最多 15 秒，連線停滯不會拖過等待上限
     if (r.status === 401) { console.log('UNAUTHORIZED token invalid or expired (401): stop retrying and ask the owner to reissue the token'); process.exit(20); }
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const { pending } = await r.json();
