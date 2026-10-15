@@ -229,7 +229,7 @@
     const d = await api('/api/participants');
     state.participants = new Map(d.items.map(p => [p.participantId, p]));
     const online = d.items.filter(p => p.isOnline).length;
-    document.querySelectorAll('.presence-text').forEach(el => { el.textContent = `${d.items.length} 人在群 · 近期活躍 ${online}`; });
+    document.querySelectorAll('.presence-text').forEach(el => { el.textContent = `${d.items.length} 人在群 · 近期活躍 ${online}`; el.dataset.short = `${online} 人在線`; });
     drawTokenAlert(d.items);
     syncFilterBar();
     return d.items;
@@ -252,12 +252,14 @@
     if (!mine.length) return;
     const word = { expired: '已過期', '2h': '2 小時內到期', '24h': '24 小時內到期' };
     box.className = 'token-alert' + (mine.some(x => x.level !== '24h') ? ' urgent' : '');
+    box.dataset.open = box.dataset.open === 'all' ? 'all' : '';
     const key = mine.map(x => x.p.participantId + x.level).join();
     if (state.tokenAlertDismissed === key) { box.hidden = true; return; }
     box.innerHTML = `<span class="token-alert-text">你的 AI ${mine.map(x => `「${esc(x.p.name)}」Token ${word[x.level]}（${fmtTime(x.p.expiresAt)}）`).join('、')}，到期後 AI 會停止連線。</span>
       <button type="button" class="btn alert-btn">重發 Token</button>
       <button type="button" class="icon-btn alert-close" aria-label="關閉提醒">×</button>`;
     box.querySelector('.alert-btn').onclick = () => openMyAi();
+    box.querySelector('.token-alert-text').onclick = () => { box.dataset.open = box.dataset.open === 'all' ? '' : 'all'; }; // 手機版點一下展開全文
     box.querySelector('.alert-close').onclick = () => { state.tokenAlertDismissed = key; box.hidden = true; };
   }
 
@@ -487,6 +489,7 @@
     sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
     sel.value = f.member;
     $('#f-clear').hidden = !filtering();
+    const fs = $('#f-summary'); if (fs) fs.textContent = filterSummary();
   }
   function setFilter(patch) {
     Object.assign(state.filter, patch);
@@ -495,6 +498,34 @@
     syncFilterBar();
     renderMessages(true);
   }
+  // 手機版：把範圍、成員、標籤合成一個「篩選」底部面板
+  function filterSummary() {
+    const f = state.filter, p = f.member ? state.participants.get(f.member)?.name : '';
+    return [{ all: '全部', mine: '給我的', related: '與我相關' }[f.scope], p || '所有成員', f.tag || ''].filter(Boolean).join(' · ');
+  }
+  function openFilterSheet() {
+    const f = state.filter;
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled').sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
+    const body = openModal('篩選訊息', `
+      <div class="stack">
+        <div class="field"><span class="field-label" id="fs-scope">範圍</span>
+          <div class="seg-scope full" role="group" aria-labelledby="fs-scope">
+            ${[['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${f.scope === k}">${t}</button>`).join('')}
+          </div></div>
+        <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}" ${f.member === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+        <label>標籤<select id="fs-tag"><option value="">所有標籤</option>${tags.map(t => `<option ${f.tag === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除篩選</button><button class="btn primary" type="button" data-close>完成</button>' });
+    body.querySelectorAll('[data-fs-scope]').forEach(b => b.addEventListener('click', () => {
+      setFilter({ scope: b.dataset.fsScope });
+      body.querySelectorAll('[data-fs-scope]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    }));
+    body.querySelector('#fs-member').onchange = e => setFilter({ member: e.target.value });
+    body.querySelector('#fs-tag').onchange = e => setFilter({ tag: e.target.value });
+    body.modal.querySelector('#fs-clear').onclick = () => { setFilter({ scope: 'all', member: '', tag: '' }); closeModal(); };
+  }
+  $('#f-open').onclick = openFilterSheet;
+  $('#f-decide').onclick = () => openTeam();
   document.querySelectorAll('[data-scope]').forEach(b => { b.onclick = () => setFilter({ scope: b.dataset.scope }); });
   $('#f-member').onchange = e => setFilter({ member: e.target.value });
   $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
@@ -730,6 +761,10 @@
     }
   }
   input.addEventListener('input', () => { pendingRequestId = null; });
+  // 手機版：打字時收起頂欄大小、警示與篩選列，鍵盤出現時訊息區才有空間
+  const typingMq = matchMedia('(max-width: 600px)');
+  input.addEventListener('focus', () => { if (typingMq.matches) document.body.classList.add('typing'); });
+  input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) document.body.classList.remove('typing'); }, 120));
 
   // ---------- 對話框 ----------
   // 共用外框：桌面置中、手機從底部滑出。size：''（560）、'wide'（760）、'form'（640）、'narrow'（440）
@@ -1833,7 +1868,10 @@
         <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
       </button>`;
     }).join('');
+    const abnormal = t.members.filter(mb => ['yellow', 'red'].includes(health(mb).cls));
+    document.querySelectorAll('.presence-alert').forEach(el => { el.hidden = !abnormal.length; el.title = abnormal.length ? '需要注意：' + abnormal.map(mb => `${mb.name}（${health(mb).text}）`).join('、') : ''; });
     const mdec = myDecisions(t);
+    { const fd = $('#f-decide'); if (fd) { fd.hidden = !mdec.length; fd.textContent = `等你決定 ${mdec.length}`; } }
     const dec = mdec.length ? `<button type="button" class="chip decide" data-team>等你決定 ${mdec.length}</button>` : '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;

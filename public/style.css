@@ -984,3 +984,47 @@ body.drawer-docked #app { padding-right: 400px; }
   .board::-webkit-scrollbar { height: 12px; width: 12px; }
   .board::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
 }
+
+/* ===== C-126 手機訊息頁（≤600px）===== */
+.f-mobile { display: none; }
+.presence-alert { display: inline-block; width: 10px; height: 10px; margin-left: 6px; border-radius: 50%; background: #dc2626; box-shadow: 0 0 0 2px rgba(220, 38, 38, .25); }
+.presence-alert[hidden] { display: none; }
+@media (max-width: 600px) {
+  /* 頂欄 52px：群組名＋「N 人在線」＋通知＋選單 */
+  .mobile-top { min-height: 52px; box-sizing: border-box; padding: 0 8px 0 14px; }
+  .mobile-title { grid-auto-flow: column; justify-content: start; align-items: center; gap: 8px; }
+  .mobile-title .presence-text { font-size: 0; }
+  .mobile-title .presence-text::before { content: attr(data-short); font-size: 12px; }
+  .top-btn { min-height: 44px; }
+  /* 人員列：手機版不再橫向捲動（異常以紅點提示、成員名單看全部） */
+  .team-bar { display: none !important; }
+  /* Token 警示：預設一行；緊急不收合 */
+  .token-alert { min-height: 44px; box-sizing: border-box; padding: 0 12px; }
+  .token-alert .token-alert-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .token-alert[data-open="all"] .token-alert-text { white-space: normal; }
+  .token-alert.urgent { font-weight: 600; }
+  .token-alert .alert-btn { min-height: 44px; }
+  .token-alert .alert-close { min-width: 44px; min-height: 44px; }
+  /* 篩選合成一個按鈕，旁邊留目前條件 */
+  .filter-bar .seg-scope, .filter-bar #f-member, .filter-bar #f-tag, .filter-bar #f-clear, .filter-bar #f-count { display: none !important; }
+  .f-mobile { display: inline-flex; }
+  #f-decide[hidden] { display: none; }
+  #f-decide { min-height: 44px; padding: 0 12px; }
+  #f-open { min-height: 44px; padding: 0 14px; }
+  #f-summary { flex: 1; text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 輸入區兩列：輸入框獨佔一列、按鈕下排 */
+  .composer { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  .composer-row { flex-wrap: wrap; gap: 8px; align-items: center; }
+  .input-wrap { order: 0; flex: 1 0 100%; }
+  #input { min-height: 44px; font-size: 16px; }
+  .composer-row .attach, .composer-row .tag-btn, .composer-row .proj-sel { order: 1; min-height: 44px; }
+  .composer-row .send { order: 2; margin-left: auto; min-width: 72px; white-space: nowrap; }
+  .reply-bar { min-height: 44px; }
+  .reply-bar #reply-cancel { min-width: 44px; min-height: 44px; }
+  /* 訊息卡的動作鈕 ≥44px */
+  .msg-foot .reply-btn, .msg-foot .link { min-height: 44px; padding: 0 12px; display: inline-flex; align-items: center; }
+  /* 打字時收起上方，騰出空間 */
+  body.typing .mobile-top { min-height: 44px; }
+  body.typing .token-alert, body.typing .filter-bar, body.typing .composer-hint { display: none !important; }
+  .app { height: 100vh; height: 100dvh; }
+}

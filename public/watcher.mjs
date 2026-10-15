@@ -17,7 +17,6 @@
 //   WAKE_CMD           喚醒指令（依你的 AI 而定，例如 claude -p "請收訊息並處理"、codex exec "…"）；只記錄模式可不設
 //   WATCH_ONLY=1       只記錄模式：連線、查未讀數、送待命心跳、寫日誌，但不執行任何喚醒指令
 //   HEARTBEAT_MIN      巡檢／心跳間隔，預設 15 分鐘
-//   WAKE_MIN_GAP_MIN   同一批未讀最短重喚間隔，預設 45 分鐘
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -32,7 +31,6 @@ const TOPIC = env.SUPABASE_TOPIC || 'aigile-switch';
 const WAKE_CMD = env.WAKE_CMD || '';
 const WATCH_ONLY = env.WATCH_ONLY === '1';
 const HEARTBEAT_MS = (Number(env.HEARTBEAT_MIN) || 15) * 60_000;
-const MIN_GAP_MS = (Number(env.WAKE_MIN_GAP_MIN) || 45) * 60_000;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
@@ -40,7 +38,8 @@ if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
   process.exit(1);
 }
 
-let running = false, queued = false, lastWakeAt = 0, lastWakeCount = 0;
+let running = false, queued = false;
+const woken = new Set(); // 已經為它喚醒過的通知 ID：只要有「沒喚醒過的新通知」就喚醒，不靠未讀數或時間間隔判斷
 
 // 用自己的 Token 查未讀數（0 token）；同時就是待命心跳
 async function unread() {
@@ -52,19 +51,28 @@ async function unread() {
   return (await r.json()).pending;
 }
 
+async function pendingIds() {
+  const r = await fetch(`${BASE}/api/notifications?status=pending&limit=50`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } });
+  if (!r.ok) throw new Error(`通知清單 HTTP ${r.status}`);
+  return (await r.json()).items.map(n => n.notificationId);
+}
 async function check(why) {
   let pending;
   try { pending = await unread(); } catch (e) { return log(`[${why}] 查未讀數失敗：${e.message}`); }
-  if (!pending) { lastWakeCount = 0; lastWakeAt = 0; return log(`[${why}] 沒有待處理，不喚醒`); } // 未讀數回到 0 就重設，下一則新通知才不會被防重複間隔擋掉
+  if (!pending) { woken.clear(); return log(`[${why}] 沒有待處理，不喚醒`); }
   if (WATCH_ONLY) return log(`[${why}] 有 ${pending} 則待處理，只記錄模式，不喚醒`);
-  if (running) { queued = true; return log(`[${why}] 有 ${pending} 則待處理，但 AI 正在執行，排隊補跑`); }
-  const fresh = pending > lastWakeCount || Date.now() - lastWakeAt > MIN_GAP_MS;
-  if (!fresh) return log(`[${why}] 還有 ${pending} 則待處理，但 ${Math.round((Date.now() - lastWakeAt) / 60000)} 分鐘前才喚醒過，先不重複喚醒`);
+  let ids;
+  try { ids = await pendingIds(); } catch (e) { return log(`[${why}] 查通知清單失敗：${e.message}`); }
+  const fresh = ids.filter(id => !woken.has(id));
+  if (!fresh.length) return log(`[${why}] 還有 ${pending} 則待處理，但都已為它們喚醒過，不重複喚醒`);
+  if (running) { queued = true; return log(`[${why}] 有 ${fresh.length} 則新的待處理，但 AI 正在執行，排隊補跑`); }
+  fresh.forEach(id => woken.add(id));
+  for (const id of woken) if (!ids.includes(id)) woken.delete(id); // 已處理掉的不用再記
   wake(pending, why);
 }
 
 function wake(pending, why) {
-  running = true; lastWakeAt = Date.now(); lastWakeCount = pending;
+  running = true;
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
   const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', env: { ...env, AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
   child.on('error', e => log('喚醒指令啟動失敗：', e.message));

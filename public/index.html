@@ -79,7 +79,7 @@
       <header class="mobile-top">
         <div class="mobile-title">
           <h1>昱志血汗勞工</h1>
-          <button class="presence" type="button" data-open="members"><span class="dot on"></span><span class="presence-text">…</span></button>
+          <button class="presence" type="button" data-open="members"><span class="dot on"></span><span class="presence-text">…</span><span class="presence-alert" hidden aria-label="有成員需要注意"></span></button>
         </div>
         <button type="button" class="top-btn" data-open="inbox">通知 <span class="badge inbox-badge" hidden></span></button>
         <button type="button" class="top-btn" id="menu-btn" aria-haspopup="dialog" aria-controls="sheet">選單</button>
@@ -102,6 +102,9 @@
         </select>
         <button type="button" id="f-clear" class="btn mini" hidden>清除篩選</button>
         <span id="f-count" class="muted small"></span>
+        <button type="button" id="f-decide" class="chip decide f-mobile" hidden>等你決定</button>
+        <button type="button" id="f-open" class="btn f-mobile" aria-haspopup="dialog">篩選 ▾</button>
+        <span id="f-summary" class="muted small f-mobile"></span>
       </div>
       <main id="messages" class="messages" aria-live="polite"></main>
 
