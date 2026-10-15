@@ -298,6 +298,27 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await call(pg.token, `/api/cards/${df.cardId}/resume`, 'POST')).body.error.code, 'NOT_DEFERRED', '沒暫緩不能恢復');
     await call(liu.token, `/api/cards/${df.cardId}/decide`, 'POST', { result: '同意' });
     assert.equal((await call(liu.token, `/api/cards/${df.cardId}/defer`, 'POST', {})).body.error.code, 'DECIDED', '已決定不能暫緩');
+    // ===== C-143：AI 軟刪除 =====
+    const gone = await mk('待刪助手');
+    const poAi = (await call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PO', role: 'PO', name: '產品助手', duties: 'd', style: 's', autonomy: 'a', mustConfirm: 'm', handoff: 'h' })).body;
+    const gcard = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '待刪助手的卡', ownerId: gone.participantId, status: '進行中' })).body;
+    assert.equal(gcard.owner?.participantId, gone.participantId);
+    const gmsg = (await call(gone.token, '/api/messages', 'POST', { requestId: rid(), text: '[進度] 我在做事' })).body;
+    assert.equal((await call(gone.token, `/api/my-ais/${gone.participantId}/delete`, 'POST', { confirmName: '待刪助手' })).status, 403, 'AI 不能刪除');
+    assert.equal((await call(percy.token, `/api/my-ais/${gone.participantId}/delete`, 'POST', { confirmName: gone.name })).status, 404, '別人不能刪');
+    assert.equal((await call(liu.token, `/api/my-ais/${gone.participantId}/delete`, 'POST', { confirmName: '打錯' })).status, 400, '名稱不符');
+    const del = (await call(liu.token, `/api/my-ais/${gone.participantId}/delete`, 'POST', { confirmName: gone.name })).body;
+    assert.deepEqual(del.unassignedCards, [gcard.cardId]); assert.equal(del.notified, true);
+    assert.equal((await call(gone.token, '/api/me')).status, 401, 'Token 立即失效');
+    assert.ok(!(await call(liu.token, '/api/participants')).body.items.some(p => p.participantId === gone.participantId), '不在成員清單');
+    assert.ok(!(await call(liu.token, '/api/my-ais')).body.items.some(p => p.participantId === gone.participantId), '不在我的 AI');
+    assert.equal((await call(liu.token, `/api/my-ais/${gone.participantId}/enable`, 'POST')).status, 404, '不能再啟用');
+    assert.equal((await call(liu.token, `/api/my-ais/${gone.participantId}/delete`, 'POST', { confirmName: gone.name })).status, 404, '重複刪除');
+    const afterCard = (await call(liu.token, `/api/cards/${gcard.cardId}`)).body;
+    assert.equal(afterCard.owner, null, '卡片變未指派'); assert.equal(afterCard.status, '待處理');
+    const oldMsg = (await call(liu.token, `/api/messages/${gmsg.messageId}`)).body;
+    assert.equal(oldMsg.author.deleted, true); assert.ok(oldMsg.author.name.endsWith('（已刪除）'), '舊訊息保留並標已刪除');
+    assert.ok((await call(poAi.token, '/api/notifications?status=pending&limit=50')).body.items.some(n => (n.preview || '').includes('待刪助手') && n.preview.includes(gcard.cardId)), 'PO 收到哪些卡變未指派');
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);

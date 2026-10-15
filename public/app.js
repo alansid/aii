@@ -856,16 +856,16 @@
     modalReturnFocus = null;
   }
   // 確認彈窗：疊在目前彈窗上；回傳 true／false
-  function confirmDialog({ title, message, confirmText = '確認', danger = false }) {
+  function confirmDialog({ title, message, confirmText = '確認', danger = false, expectText = '' }) {
     return new Promise(resolve => {
       const prev = document.activeElement;
       const host = document.createElement('div');
       host.className = 'confirm-root';
       host.innerHTML = modalFrame({
         title, size: 'narrow',
-        body: `<div class="confirm-msg${danger ? ' danger' : ''}">${message}</div>`,
+        body: `<div class="confirm-msg${danger ? ' danger' : ''}">${message}</div>${expectText ? `<label class="field">請輸入「${esc(expectText)}」確認<input type="text" data-expect autocomplete="off"></label>` : ''}`,
         foot: `<button class="btn" type="button" data-close>取消</button>
-               <button class="btn ${danger ? 'danger' : 'primary'}" type="button" data-ok>${esc(confirmText)}</button>`,
+               <button class="btn ${danger ? 'danger' : 'primary'}" type="button" data-ok ${expectText ? 'disabled' : ''}>${esc(confirmText)}</button>`,
       });
       document.body.append(host);
       const overlay = host.firstElementChild;
@@ -875,7 +875,8 @@
         if (e.target === overlay || e.target.closest('[data-close]')) done(false);
       });
       overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
-      overlay.querySelector('[data-ok]').focus();
+      const ex = overlay.querySelector('[data-expect]');
+      if (ex) { ex.addEventListener('input', () => { overlay.querySelector('[data-ok]').disabled = ex.value.trim() !== expectText; }); ex.focus(); } else overlay.querySelector('[data-ok]').focus();
     });
   }
   document.addEventListener('keydown', e => {
@@ -2490,6 +2491,13 @@
             message: `停用後 <b>${esc(ai.name)}</b> 的 Token 會立即失效，它將無法再讀寫群組，之後可以重新啟用。` })) return;
           await api(`/api/my-ais/${ai.participantId}/disable`, { method: 'POST' });
           await draw();
+        } else if (b.dataset.act === 'delete') {
+          if (!await confirmDialog({ title: '永久刪除 AI 助手？', confirmText: '永久刪除', danger: true, expectText: ai.name,
+            message: `<b>${esc(ai.name)}</b> 的 Token 會立即失效，從成員名單、@ 選單、團隊狀態消失，<b>不可復原</b>。它發過的訊息與卡片紀錄會保留並標「（已刪除）」；它負責且未完成的卡片會變成未指派。` })) return;
+          const r = await api(`/api/my-ais/${ai.participantId}/delete`, { method: 'POST', body: { confirmName: ai.name } });
+          toast(r.unassignedCards.length ? `已刪除；${r.unassignedCards.join('、')} 變成未指派` : '已刪除');
+          loadParticipants().catch(() => {});
+          await draw();
         } else if (b.dataset.act === 'enable') {
           await api(`/api/my-ais/${ai.participantId}/enable`, { method: 'POST' });
           await draw();
@@ -2559,11 +2567,20 @@
             <button class="btn small danger-outline" type="button" data-act="disable" data-id="${id}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
           </div>
           <p class="muted small">接入設定與 Token 都是此 AI 的存取憑證，請只貼到自己的 AI 對話。</p>` : ''}
+          <div class="row actions"><button class="btn small danger-outline" type="button" data-act="delete" data-id="${id}" title="永久刪除：不可復原，歷史訊息保留並標已刪除">刪除</button></div>
           <p class="muted small">版本 v${ai.version} · 更新時間 ${fmtTime(ai.updatedAt)}</p>
         </div>` : ''}
       </div>`;
   }
 
+  // 角色範本：常用的排前面，其餘收進「其他角色」群組（只是選單分組，角色定義不變；既有成員的角色照常顯示已選）
+  const COMMON_ROLES = ['PO', 'SM', 'BA', 'UX', 'PG', 'QA', 'custom'];
+  function roleOptionsHtml(roles) {
+    const opt = r => `<option value="${r.key}">${esc(r.option)}</option>`;
+    const common = COMMON_ROLES.map(k => roles.find(r => r.key === k)).filter(Boolean);
+    const other = roles.filter(r => !COMMON_ROLES.includes(r.key));
+    return common.map(opt).join('') + (other.length ? `<optgroup label="其他角色">${other.map(opt).join('')}</optgroup>` : '');
+  }
   async function openAiForm(ai) {
     const { items: roles, fields, environments = [] } = await loadRoles();
     const editing = !!ai;
@@ -2573,7 +2590,7 @@
     const body = openModal(editing ? '編輯 AI 助手' : '新增 AI 助手', `
       <form id="ai-form" class="stack">
         <label>角色範本
-          <select name="roleKey">${roles.map(r => `<option value="${r.key}">${esc(r.option)}</option>`).join('')}</select>
+          <select name="roleKey">${roleOptionsHtml(roles)}</select>
           <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
         </label>
         <div class="two-col">

@@ -43,7 +43,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
   };
   const ref = (people, id) => {
     const p = id && people.get(id);
-    return p ? { participantId: p.id, name: p.name, memberType: p.kind } : null;
+    return p ? { participantId: p.id, name: p.status === 'deleted' ? p.name + '（已刪除）' : p.name, memberType: p.kind, ...(p.status === 'deleted' ? { deleted: true } : {}) } : null;
   };
   const mark = (people, by, at) => (by ? { by: ref(people, by), at } : null);
 

@@ -117,7 +117,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     return { sql: `(${col} = ?${withNull ? ` OR ${col} IS NULL` : ''})`, args: list };
   }
   function identity(p, people) {
-    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null, projects: projectsOf(p) };
+    const out = { participantId: p.id, name: p.status === 'deleted' ? p.name + '（已刪除）' : p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null, projects: projectsOf(p) };
+    if (p.status === 'deleted') out.deleted = true; // C-143：已刪除成員的舊訊息仍顯示原名稱，前端加註（已刪除）
     if (p.kind === 'ai') {
       out.ownerParticipantId = p.owner_id;
       out.ownerName = people.get(p.owner_id)?.name ?? null;
@@ -445,7 +446,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   async function myAi(me, id) {
     const ai = await db.get('SELECT * FROM participants WHERE id = ?', id);
-    if (!ai || ai.kind !== 'ai' || ai.owner_id !== me.id) throw new ApiError(404, 'NOT_FOUND', '找不到此 AI 助手');
+    if (!ai || ai.kind !== 'ai' || ai.owner_id !== me.id || ai.status === 'deleted') throw new ApiError(404, 'NOT_FOUND', '找不到此 AI 助手');
     return ai;
   }
   const aiView = (ai, people) => ({
@@ -858,7 +859,7 @@ ${roster}
   route('GET', '/api/my-ais', async ({ me, ctx }) => {
     requireHuman(me);
     const people = await peopleMap(ctx);
-    const items = [...people.values()].filter(p => p.kind === 'ai' && p.owner_id === me.id)
+    const items = [...people.values()].filter(p => p.kind === 'ai' && p.owner_id === me.id && p.status !== 'deleted')
       .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(p => aiView(p, people));
     return { items };
   });
@@ -866,6 +867,37 @@ ${roster}
   route('PATCH', '/api/my-ais/:id', async ({ me, req, params, ctx }) => { requireHuman(me); return updateAi(ctx, me, params.id, await readJson(req)); });
   route('POST', '/api/my-ais/:id/reissue', ({ me, params, ctx }) => { requireHuman(me); return reissueToken(ctx, me, params.id); });
   route('POST', '/api/my-ais/:id/disable', ({ me, params, ctx }) => { requireHuman(me); return setAiStatus(ctx, me, params.id, 'disabled'); });
+  // 刪除（C-143）：軟刪除，只改狀態；舊訊息、卡片紀錄、檔案都保留。Token 立即失效、不可再啟用
+  route('POST', '/api/my-ais/:id/delete', async ({ me, req, params, ctx }) => {
+    requireHuman(me);
+    const body = await readJson(req);
+    const ai = await myAi(me, params.id);
+    if (String(body.confirmName ?? '').trim() !== ai.name) throw invalid('confirmName 必須和 AI 名稱完全相同');
+    const at = nowIso();
+    const cards = await db.all("SELECT seq, title FROM cards WHERE owner_id = ? AND status NOT IN ('已完成','已封存') ORDER BY seq", ai.id);
+    const stmts = [
+      ["UPDATE participants SET status = 'deleted', token = ?, token_expires_at = 0, updated_at = ? WHERE id = ?", ['deleted_' + ai.id, at, ai.id]],
+      ["UPDATE notifications SET status = 'acked', acked_at = ? WHERE recipient_id = ? AND status = 'pending'", [at, ai.id]],
+      ['DELETE FROM ai_state WHERE participant_id = ?', [ai.id]],
+    ];
+    for (const c of cards) {
+      stmts.push(["UPDATE cards SET owner_id = NULL, status = '待處理', wait_for_id = CASE WHEN wait_for_id = ? THEN NULL ELSE wait_for_id END, updated_at = ?, version = version + 1 WHERE seq = ?", [ai.id, at, c.seq]]);
+      stmts.push(['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, '網頁', `負責 AI「${ai.name}」已刪除，改為未指派（狀態改為待處理）`]]);
+    }
+    await db.batch(stmts);
+    invalidatePeople();
+    let noticed = false;
+    if (cards.length) {
+      const people = await peopleMap({});
+      const pos = [...people.values()].filter(p => p.status === 'active' && p.kind === 'ai' && p.role_key === 'PO').map(p => p.id);
+      const list = cards.map(c => 'C-' + (c.seq + 100)).join('、');
+      try {
+        await createMessage(ctx, me, { text: `[通知] 【全部專案】AI「${ai.name}」已被刪除，它負責的 ${cards.length} 張卡變成未指派（待處理）：${list}。請重新安排或由成員認領。`, requestId: 'aidel_' + ai.id, recipientIds: pos });
+        noticed = true;
+      } catch (err) { console.error('ai delete notify failed:', err.message); }
+    }
+    return { deleted: true, name: ai.name, unassignedCards: cards.map(c => 'C-' + (c.seq + 100)), notified: noticed };
+  });
   route('POST', '/api/my-ais/:id/enable', ({ me, params, ctx }) => { requireHuman(me); return setAiStatus(ctx, me, params.id, 'active'); });
   route('GET', '/api/my-ais/:id/onboarding', async ({ me, params, base }) => {
     requireHuman(me);
