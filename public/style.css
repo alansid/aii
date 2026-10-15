@@ -1203,3 +1203,10 @@ body.drawer-docked #app { padding-right: 400px; }
 .chk { flex: none; white-space: nowrap; min-height: 44px; padding: 0 4px; gap: 6px; }
 .chk input { width: 18px; height: 18px; }
 @media (max-width: 520px) { .proj-row b { flex-basis: 100%; padding-top: 6px; min-height: 0; } .proj-row .chk { min-height: 44px; } }
+
+/* ===== C-144 過期建議與可能過時 ===== */
+.cmark.stale { background: #fef3c7; color: #92400e; border-radius: 10px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
+.sugg-row.expired { opacity: .85; }
+.stale-note { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 8px 10px; border-radius: 8px; background: #fef3c7; color: #92400e; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cmark.stale, :root:not([data-theme="light"]) .stale-note { background: #451a03; color: #fde68a; } }
+:root[data-theme="dark"] .cmark.stale, :root[data-theme="dark"] .stale-note { background: #451a03; color: #fde68a; }

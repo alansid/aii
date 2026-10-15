@@ -33,7 +33,8 @@ export async function teamCards(db) {
   return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id })) };
 }
 
-export function registerCards({ route, createMessage, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople }) {
+export function registerCards({ route, createMessage, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+  const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // C-144：卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   const parseNo = id => {
     const m = /^C-(\d+)$/.exec(id);
@@ -134,6 +135,21 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     if (logs.length) await db.batch(logStmt(c.seq, me, logs, at));
   }
 
+  // 可能過時（C-144）：未結案、updated_at 超過門檻，且關聯訊息在 updated_at 之後 1 分鐘以上又有新動態（[通知] 系統訊息不算）
+  async function staleHints() {
+    const rows = await db.all(`SELECT c.seq AS seq, c.updated_at AS updated_at, MAX(m.created_at) AS latest,
+      (SELECT m2.id FROM card_msgs cm2 JOIN messages m2 ON m2.id = cm2.message_id WHERE cm2.card_seq = c.seq AND m2.text NOT LIKE '[通知]%' ORDER BY m2.created_at DESC LIMIT 1) AS latest_id FROM cards c
+      JOIN card_msgs cm ON cm.card_seq = c.seq JOIN messages m ON m.id = cm.message_id
+      WHERE c.status NOT IN ${OPEN_STATUSES_SQL} AND m.text NOT LIKE '[通知]%' GROUP BY c.seq`);
+    const now = Date.now(), out = new Map();
+    for (const r of rows) {
+      const upd = Date.parse(r.updated_at), lat = Date.parse(r.latest);
+      if (now - upd > STALE_CARD_MS && lat - upd > Math.min(60_000, STALE_CARD_MS)) out.set(r.seq, { lastUpdatedAt: r.updated_at, latestMessageAt: r.latest, latestMessageId: r.latest_id });
+    }
+    return out;
+  }
+  const withStale = (v, c, stale) => (stale.has(c.seq) ? { ...v, staleHint: stale.get(c.seq) } : v);
+
   route('GET', '/api/cards', async ({ ctx, me, url }) => {
     const q = url.searchParams, limit = parseLimit(url, 100, 200);
     const where = [], args = [];
@@ -152,7 +168,14 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit);
     const people = await peopleMap(ctx);
-    return { items: items.map(c => view(c, people)), hasMore, nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
+    const stale = await staleHints();
+    let out = items;
+    if (q.get('since')) { // 增量同步：過時狀態會隨時間改變、卡片本身沒更新，所以把目前過時的卡也一併帶回
+      const have = new Set(items.map(c => c.seq));
+      const extra = [...stale.keys()].filter(seq => !have.has(seq));
+      if (extra.length) out = [...items, ...(await db.all(`SELECT * FROM cards WHERE seq IN (SELECT value FROM json_each(?))${pf ? ' AND ' + pf.sql : ''}`, JSON.stringify(extra), ...(pf ? pf.args : [])))];
+    }
+    return { items: out.map(c => withStale(view(c, people), c, stale)), hasMore, nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
   });
 
   route('GET', '/api/cards/:id', async ({ ctx, params }) => {
@@ -163,7 +186,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
       db.all('SELECT message_id FROM card_msgs WHERE card_seq = ? ORDER BY rowid', c.seq),
     ]);
     return {
-      ...view(c, people), messageIds: msgs.map(m => m.message_id),
+      ...withStale(view(c, people), c, await staleHints()), messageIds: msgs.map(m => m.message_id),
       log: log.map(l => ({ at: l.at, by: ref(people, l.by_id), via: l.via, text: l.text })),
     };
   });
@@ -458,11 +481,13 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     if (!r) throw new ApiError(404, 'NOT_FOUND', '找不到這則建議');
     return r;
   }
+  // 針對某張卡的建議：卡片在建議之後有任何存檔就算過期，只能略過（C-144）
+  const isExpired = (r, card) => r.state === 'pending' && !!card && card.updated_at > r.created_at;
   async function sugView(r, people) {
     const p = JSON.parse(r.payload || '{}');
-    const card = r.card_seq ? await db.get('SELECT seq, title, status FROM cards WHERE seq = ?', r.card_seq) : null;
+    const card = r.card_seq ? await db.get('SELECT seq, title, status, updated_at FROM cards WHERE seq = ?', r.card_seq) : null;
     return {
-      suggestionId: sugNo(r.id), kind: r.kind, state: r.state, from: ref(people, r.from_id), why: r.why, basisMessageId: r.basis_message_id, createdAt: r.created_at,
+      suggestionId: sugNo(r.id), kind: r.kind, state: r.state, expired: isExpired(r, card), from: ref(people, r.from_id), why: r.why, basisMessageId: r.basis_message_id, createdAt: r.created_at,
       card: card ? { cardId: cardNo(card.seq), title: card.title, status: card.status } : null,
       to: p.to ?? null, waitFor: ref(people, p.waitForId),
       create: r.kind === 'create' ? { type: p.type, title: p.title, reason: p.reason, owner: ref(people, p.ownerId), next: p.next, blocker: p.blocker, waitFor: ref(people, p.waitForId), criteria: p.criteria } : null,
@@ -549,6 +574,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     if (r.kind === 'status') {
       const c = await db.get('SELECT * FROM cards WHERE seq = ?', r.card_seq);
       if (!c) throw notFound();
+      if (c.updated_at > r.created_at) throw new ApiError(409, 'EXPIRED', '這張卡在建議之後已有變動，建議已過期，只能略過。');
       if (c.status === p.to) { await claim(r, me, at, c.seq); return view(c, people); }
       const ch = statusChange(c, p.to, me, at);
       const sets = { ...ch.sets }, logs = ch.logs.map((t, i) => (i === 0 ? `採用 ${aiName} 的建議：${t}` : t));

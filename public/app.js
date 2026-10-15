@@ -1089,7 +1089,8 @@
   const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
   const typeTag = c => projTag(c.project) + (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
   const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
-  const markHtml = c => (c.verified ? '<span class="cmark ok">✓ 已驗證</span>' : c.done ? '<span class="cmark wait">待驗證</span>' : '');
+  const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
+  const markHtml = c => (c.verified ? '<span class="cmark ok">✓ 已驗證</span>' : c.done ? '<span class="cmark wait">待驗證</span>' : '') + staleTag(c);
   const shortTime = iso => fmtTime(iso).replace(/^\d{4}\//, '').replace(/(\d\d:\d\d):\d\d$/, '$1');
   function ownerHtml(c) {
     if (!c.owner) return '<span class="cowner none">未指派</span>';
@@ -1271,13 +1272,13 @@
       : `${esc(g.card?.cardId || '')} ${esc(g.card?.title || '')} 狀態改為「${esc(g.to)}」${g.waitFor ? `，等 ${esc(g.waitFor.name)}` : ''}`);
     return `<section class="wsugg"><div class="wsugg-head"><span class="wdot sg"></span><h3>AI 建議</h3><span class="wcount pur">${list.length}</span><span class="muted small">由你採用後才會建立或更新卡片</span></div>
       ${batchBar}
-      ${list.map(g => `<div class="sugg-row">
+      ${list.map(g => `<div class="sugg-row${g.expired ? ' expired' : ''}">
         ${batch ? `<label class="sugg-check"><input type="checkbox" data-sugg-check="${esc(g.suggestionId)}" ${work.sel.has(g.suggestionId) ? 'checked' : ''} aria-label="勾選這則建議"></label>` : ''}
-        <div class="sugg-main"><div class="sugg-top"><span class="sgk">${g.kind === 'create' ? '建立卡片' : '更新狀態'}</span><span class="muted small">${esc(g.from?.name || '')}</span></div>
+        <div class="sugg-main"><div class="sugg-top"><span class="sgk">${g.kind === 'create' ? '建立卡片' : '更新狀態'}</span>${g.expired ? '<span class="cmark stale" title="這張卡在建議之後已有變動，只能略過">已過期</span>' : ''}<span class="muted small">${esc(g.from?.name || '')}</span></div>
           <b>${what(g)}</b><span class="small">${esc(g.why)}</span>
           ${g.basisMessageId ? `<button type="button" class="link small" data-sugg-basis="${esc(g.basisMessageId)}">看依據訊息</button>` : ''}</div>
         <div class="sugg-actions">
-          <button type="button" class="btn small primary" data-sugg-apply="${esc(g.suggestionId)}">採用</button>
+          ${g.expired ? '' : `<button type="button" class="btn small primary" data-sugg-apply="${esc(g.suggestionId)}">採用</button>`}
           ${g.kind === 'create' ? `<button type="button" class="btn small" data-sugg-edit="${esc(g.suggestionId)}">編輯後採用</button>` : ''}
           <button type="button" class="link small" data-sugg-skip="${esc(g.suggestionId)}">略過</button></div>
         ${inlineHtml('s:' + g.suggestionId, 'sugg', g)}
@@ -1584,7 +1585,8 @@
       try {
         const r = await api('/api/suggestions/batch', { method: 'POST', body: { ids, action } });
         work.sel.clear();
-        toast(`已${action === 'apply' ? '採用' : '略過'} ${r.done} 則${r.failed ? `，${r.failed} 則失敗（可能已被處理）` : ''}`);
+        const nExp = r.results.filter(x => x.error === 'EXPIRED').length;
+        toast(`已${action === 'apply' ? '採用' : '略過'} ${r.done} 則${nExp ? `，${nExp} 則已過期（卡片有變動）被跳過，請改為略過` : ''}${r.failed - nExp > 0 ? `，${r.failed - nExp} 則失敗（可能已被處理）` : ''}`);
         await loadCards(); renderWork();
       } catch (err) { toast(err.message); }
       return;
@@ -1765,6 +1767,11 @@
       } catch (err) { body.querySelector('#handover-error').textContent = err.message; }
     });
   }
+  // 「可能過時」：抽屜裡一鍵跳到最新相關訊息（抽屜不在工作頁容器內，所以掛在 document）
+  document.addEventListener('click', e => {
+    const sj = e.target.closest?.('[data-stale-jump]');
+    if (sj) { const id = sj.dataset.staleJump; closeCard(); showPage('messages'); jumpTo(id); }
+  });
   function closeCard() {
     $('#card-drawer')?.remove();
     document.body.classList.remove('drawer-docked');
@@ -1818,6 +1825,7 @@
             ${d.verified ? `<span class="cmark ver-bg">已驗證 · ${esc(d.verified.by?.name || '')} · ${shortTime(d.verified.at)}</span>` : ''}
             ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
           </div>` : ''}
+          ${d.staleHint ? `<div class="stale-note" role="status"><b>可能過時</b><span class="small">卡片最後更新 ${esc(shortTime(d.staleHint.lastUpdatedAt))}，但之後 ${esc(shortTime(d.staleHint.latestMessageAt))} 有新的相關訊息。</span>${d.staleHint.latestMessageId ? `<button type="button" class="link small" data-stale-jump="${esc(d.staleHint.latestMessageId)}">看最新訊息</button>` : ''}</div>` : ''}
           ${handoverChain(d)}
           ${d.type === '決策' && d.decision ? `<section class="ddecision"><h3>決策</h3><p class="dq">${esc(d.decision.question)}</p>${decisionBox(d)}${decisionStatus(d)}</section>` : ''}
           ${work.editing ? `

@@ -81,6 +81,21 @@ const rid = () => 'req_s' + (++n);
     for (const c of cards) assert.equal((await call(liu.token, `/api/cards/${c.cardId}`)).body.status, '進行中', '略過不改卡片');
     assert.equal((await call(pg.token, '/api/suggestions?state=skipped')).body.items.length, 3, '建議狀態為已略過');
 
+    // ===== C-144：過期建議 =====
+    const ex1 = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '過期測試甲', status: '待處理' })).body;
+    const ex2 = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '過期測試乙', status: '待處理' })).body;
+    const sx1 = (await call(pg.token, '/api/suggestions', 'POST', { requestId: rid(), kind: 'status', cardId: ex1.cardId, status: '進行中', why: '我開工' })).body.suggestionId;
+    const sx2 = (await call(pg.token, '/api/suggestions', 'POST', { requestId: rid(), kind: 'status', cardId: ex2.cardId, status: '進行中', why: '我開工' })).body.suggestionId;
+    assert.equal((await call(liu.token, '/api/suggestions')).body.items.find(x => x.suggestionId === sx1).expired, false, '卡片沒變動就不過期');
+    await new Promise(r2 => setTimeout(r2, 15));
+    await call(liu.token, `/api/cards/${ex1.cardId}`, 'PATCH', { next: '人類改了下一步' });
+    assert.equal((await call(liu.token, '/api/suggestions')).body.items.find(x => x.suggestionId === sx1).expired, true, '卡片有變動後建議過期');
+    assert.equal((await call(pg.token, '/api/suggestions')).body.items.find(x => x.suggestionId === sx1).expired, true, 'AI 也看得到過期');
+    assert.equal((await call(liu.token, `/api/suggestions/${sx1}/apply`, 'POST', {})).body.error.code, 'EXPIRED', '過期不能採用');
+    assert.equal((await call(liu.token, `/api/cards/${ex1.cardId}`)).body.status, '待處理', '過期建議不改卡片');
+    const bx = (await B(liu.token, { action: 'apply', ids: [sx1, sx2] })).body;
+    assert.equal(bx.results.find(x => x.id === sx1).error, 'EXPIRED', '批次：過期那筆回報 EXPIRED'); assert.equal(bx.results.find(x => x.id === sx2).ok, true, '批次：其餘照常採用');
+    assert.equal((await call(liu.token, `/api/suggestions/${sx1}/skip`, 'POST')).status, 200, '過期的可以略過');
     console.log('suggestions: all checks passed');
   } catch (e) {
     console.error(e);

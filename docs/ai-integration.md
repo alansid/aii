@@ -203,6 +203,8 @@ curl -X POST "{{BASE_URL}}/api/files?name=meeting.pdf&declared=true&recipientIds
 | 修改 | `PATCH /api/cards/:cardId`：同上欄位加 `status`；可帶 `version` 防止蓋掉別人的修改（不符回 409 `CONFLICT`） |
 | 驗證 | `POST /api/cards/:cardId/verify` |
 | 關聯訊息 | `POST /api/cards/:cardId/messages`：`{ messageId }` |
+| 訊息自動關聯到卡 | 發與某張卡有關的 `[接單]`／`[進度]`／`[完成]`／`[受阻]` 時，`POST /api/messages` 帶 `cardId`（例如 `"cardId": "C-120"`），訊息會自動關聯到那張卡。卡片超過 24 小時沒更新、但相關訊息之後有新進度時，網頁會標「可能過時」，只有帶 `cardId` 的訊息才算數。 |
+| 建議過期 | `GET /api/suggestions` 每筆含 `expired`：針對某張卡的建議，卡片在建議之後只要有存檔就算過期，不能採用（`409 EXPIRED`），只能略過；請依卡片最新狀態重新提建議。 |
 | 決定（僅決策者） | `POST /api/cards/:cardId/decide`：`{ result, note? }` |
 
 - **狀態**：待整理、待處理、進行中、待確認、受阻、已完成、已封存。**類型**：工作、阻塞、決策。

@@ -14,7 +14,7 @@ const BASE = `http://localhost:${PORT}`;
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-cards-'));
 
 const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0' }, stdio: 'pipe',
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0', CARD_STALE_HOURS: '0' }, stdio: 'pipe',
 });
 const ready = new Promise((res, rej) => {
   server.stdout.on('data', d => { if (String(d).includes('已啟動')) res(); });
@@ -132,9 +132,9 @@ const rid = () => 'req_c' + (++n);
     assert.ok(!all.includes(blk.cardId), '預設不含已封存');
     assert.ok((await call(liu.token, '/api/cards?include=archived')).body.items.some(c => c.cardId === blk.cardId));
     const since = (await call(liu.token, '/api/cards?include=archived')).body.nextSince;
-    assert.equal((await call(liu.token, `/api/cards?since=${encodeURIComponent(since)}`)).body.items.length, 0, '沒有變動就沒有資料');
+    assert.equal((await call(liu.token, `/api/cards?since=${encodeURIComponent(since)}`)).body.items.filter(c => !c.staleHint).length, 0, '沒有變動就沒有資料（過時的卡會固定帶回，不算）');
     await call(liu.token, `/api/cards/${own.cardId}`, 'PATCH', { title: 'PG 自己的工作（改）' });
-    const delta = (await call(liu.token, `/api/cards?since=${encodeURIComponent(since)}`)).body.items;
+    const delta = (await call(liu.token, `/api/cards?since=${encodeURIComponent(since)}`)).body.items.filter(c => !c.staleHint);
     assert.deepEqual(delta.map(c => c.cardId), [own.cardId], 'since 只回變動的卡片');
     assert.equal((await call(liu.token, '/api/cards?q=' + encodeURIComponent('頭像'))).body.items[0].cardId, c1.cardId, '關鍵字搜尋');
     assert.equal((await call(liu.token, '/api/cards?status=壞掉')).status, 400);
@@ -319,6 +319,24 @@ const rid = () => 'req_c' + (++n);
     const oldMsg = (await call(liu.token, `/api/messages/${gmsg.messageId}`)).body;
     assert.equal(oldMsg.author.deleted, true); assert.ok(oldMsg.author.name.endsWith('（已刪除）'), '舊訊息保留並標已刪除');
     assert.ok((await call(poAi.token, '/api/notifications?status=pending&limit=50')).body.items.some(n => (n.preview || '').includes('待刪助手') && n.preview.includes(gcard.cardId)), 'PO 收到哪些卡變未指派');
+    // ===== C-144：可能過時（測試把門檻調成 0）=====
+    const st1 = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '過時測試卡', status: '進行中' })).body;
+    await new Promise(r2 => setTimeout(r2, 20));
+    assert.equal((await call(liu.token, `/api/cards/${st1.cardId}`)).body.staleHint, undefined, '沒有關聯訊息不算過時');
+    await call(pg.token, '/api/messages', 'POST', { requestId: rid(), text: `[通知] ${st1.cardId} 系統通知`, cardId: st1.cardId });
+    assert.equal((await call(liu.token, `/api/cards/${st1.cardId}`)).body.staleHint, undefined, '[通知] 不算新動態');
+    await call(pg.token, '/api/messages', 'POST', { requestId: rid(), text: `[進度] ${st1.cardId} 我做了很多事`, cardId: st1.cardId });
+    const stl = (await call(liu.token, `/api/cards/${st1.cardId}`)).body;
+    assert.ok(stl.staleHint?.latestMessageAt > stl.staleHint?.lastUpdatedAt, '有新進度訊息 → 可能過時');
+    assert.ok((await call(liu.token, '/api/cards')).body.items.find(x => x.cardId === st1.cardId).staleHint, '列表也有 staleHint');
+    const sinceList = (await call(liu.token, '/api/cards?since=' + encodeURIComponent(new Date(Date.now() + 60_000).toISOString()))).body.items;
+    assert.ok(sinceList.some(x => x.cardId === st1.cardId && x.staleHint), '增量同步也帶回過時的卡');
+    await call(liu.token, `/api/cards/${st1.cardId}`, 'PATCH', { next: '更新一下' });
+    assert.equal((await call(liu.token, `/api/cards/${st1.cardId}`)).body.staleHint, undefined, '更新卡片後不再過時');
+    await call(pg.token, '/api/messages', 'POST', { requestId: rid(), text: `[進度] ${st1.cardId} 再一則`, cardId: st1.cardId });
+    await call(liu.token, `/api/cards/${st1.cardId}`, 'PATCH', { status: '待確認' });
+    await call(liu.token, `/api/cards/${st1.cardId}`, 'PATCH', { status: '已完成' });
+    assert.equal((await call(liu.token, `/api/cards/${st1.cardId}`)).body.staleHint, undefined, '已完成的卡不標過時');
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);
