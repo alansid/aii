@@ -1178,3 +1178,12 @@ body.drawer-docked #app { padding-right: 400px; }
 /* 「團隊」的展開箭頭原本被 .side-nav button > span[aria-hidden] 隱藏（昱志截圖看不出可展開的原因） */
 .side-nav .nav-parent > span.chev { display: inline-block; }
 .sidebar .side-foot .logout-btn { color: var(--sb-danger) !important; } /* 對比 ≥4.5:1（淺 #b91c1c、深 #fca5a5） */
+
+/* ===== C-141 側欄精簡：團隊旁的注意小紅點 ===== */
+.nav-parent[data-alert]::before { content: ''; order: 2; width: 8px; height: 8px; border-radius: 50%; background: var(--sb-danger, #b91c1c); flex: none; }
+.nav-parent[data-alert] .chev { order: 3; margin-left: 8px; }
+.nav-parent[data-alert]::before { margin-left: auto; }
+
+/* ===== C-141 ②：側欄「設定」兩層選單 ===== */
+.nav-sub .nav-logout { color: var(--sb-danger, #b91c1c); border-top: 1px solid var(--sb-line, #cdd5e1); border-radius: 0; margin-top: 4px; }
+.sidebar .side-nav { overflow-y: auto; }

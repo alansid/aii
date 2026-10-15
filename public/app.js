@@ -1334,6 +1334,20 @@
     const items = [...e.target.closest('.nav-sub').querySelectorAll('button')], i = items.indexOf(e.target);
     items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
   });
+  // 側欄與手機選單的「設定」兩層選單（C-141）：進階設定／API 資訊／QR Code／登出，展開狀態記在瀏覽器
+  const SET_NAV_KEY = 'aigile-switch-set-nav';
+  function syncSetNav(open) {
+    document.querySelectorAll('[data-set-group]').forEach(g => {
+      g.querySelector('[data-set-toggle]').setAttribute('aria-expanded', String(open));
+      g.querySelector('.chev').textContent = open ? '▾' : '▸';
+      g.querySelector('.nav-sub').hidden = !open;
+    });
+  }
+  syncSetNav(store.get(SET_NAV_KEY) === '1');
+  document.addEventListener('click', e => {
+    const st = e.target.closest('[data-set-toggle]');
+    if (st) { const open = st.getAttribute('aria-expanded') !== 'true'; store.set(SET_NAV_KEY, open ? '1' : '0'); syncSetNav(open); }
+  });
   document.addEventListener('click', e => {
     const tg = e.target.closest('[data-team-toggle]');
     if (tg) { const open = tg.getAttribute('aria-expanded') === 'true'; store.set(TEAM_NAV_KEY, open ? '0' : '1'); document.querySelectorAll('[data-team-group]').forEach(g => { g.querySelector('.nav-sub').hidden = open; g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(!open)); g.querySelector('.chev').textContent = open ? '▸' : '▾'; }); return; }
@@ -2282,7 +2296,7 @@
   function renderTeamBar() {
     const t = state.team;
     const bar = $('#team-bar');
-    if (!t) { bar.hidden = true; $('#team-list').innerHTML = ''; return; }
+    if (!t) { bar.hidden = true; return; }
     const chips = t.members.map(mb => {
       const h = health(mb);
       const st = mb.status ? STATE_LABEL[mb.status.state] : '';
@@ -2302,19 +2316,10 @@
     const dec = '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;
-    // 側欄：兩行清單（名稱／最後上線 · 環境），狀態靠右
-    const rows = t.members.map(mb => {
-      const h = health(mb);
-      const st = mb.status ? STATE_LABEL[mb.status.state] : '';
-      const sub = [mb.memberType === 'ai' || !mb.isOnline ? (h.cls === 'green' || h.cls === 'grey' ? agoText(mb.lastSeenAt) : h.text) : '在線', mb.environment].filter(Boolean).join(' · ');
-      return `<button type="button" class="team-row h-${h.cls}" data-team title="${esc(mb.status ? `${st}：${mb.status.title}` : mb.name)}">
-        <span class="dot"></span><span class="team-row-main"><b>${esc(mb.name)}</b><span>${esc(sub)}</span></span>
-        ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
-      </button>`;
-    }).join('');
-    $('#team-list').innerHTML = '' + rows;
+    // 側欄已無團隊狀態區（C-141）：有人卡住／可能斷線時，「團隊」選單旁亮小紅點
+    document.querySelectorAll('.nav-parent').forEach(el => el.toggleAttribute('data-alert', abnormal.length > 0));
   }
-  for (const el of [$('#team-bar'), $('#team-list'), $('.side-title')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
+  for (const el of [$('#team-bar')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
 
   // AI 工作記憶（C-108）：AI 自己回報的目前任務與待辦；只在狀態改變時更新，依專案可見
   const stagePill = st => {

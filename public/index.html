@@ -69,16 +69,15 @@
         </div>
         </div>
         <button type="button" data-open="files"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
-      </nav>
-      <section class="side-team" aria-label="團隊狀態">
-        <div class="side-title"><span>團隊狀態</span><button type="button" class="link small" data-team>詳細</button></div>
-        <div id="team-list" class="team-list"></div>
-      </section>
-      <nav class="side-foot" aria-label="其他">
-        <button type="button" data-open="api">API 資訊</button>
-        <button type="button" data-open="settings">進階設定</button>
-        <button type="button" data-open="qr">QR Code</button>
-        <button type="button" class="logout-btn">登出</button>
+        <div class="nav-group" data-set-group>
+          <button type="button" class="nav-parent" data-set-toggle aria-expanded="false"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="2.6"/><path d="M10 2v2.6M10 15.4V18M2 10h2.6M15.4 10H18M4.3 4.3l1.8 1.8M13.9 13.9l1.8 1.8M4.3 15.7l1.8-1.8M13.9 6.1l1.8-1.8"/></svg>設定<span class="chev" aria-hidden="true">▸</span></button>
+          <div class="nav-sub" hidden>
+          <button type="button" data-open="settings">進階設定</button>
+          <button type="button" data-open="api">API 資訊</button>
+          <button type="button" data-open="qr">QR Code</button>
+          <button type="button" class="logout-btn nav-logout">登出</button>
+        </div>
+        </div>
       </nav>
     </aside>
 
@@ -156,10 +155,15 @@
         </div>
         </div>
         <button type="button" data-open="files"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
-        <button type="button" data-open="api">API 資訊</button>
-        <button type="button" data-open="settings">進階設定</button>
-        <button type="button" data-open="qr">QR Code</button>
-        <button type="button" class="logout-btn danger-text">登出</button>
+        <div class="nav-group" data-set-group>
+          <button type="button" class="nav-parent" data-set-toggle aria-expanded="false"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="2.6"/><path d="M10 2v2.6M10 15.4V18M2 10h2.6M15.4 10H18M4.3 4.3l1.8 1.8M13.9 13.9l1.8 1.8M4.3 15.7l1.8-1.8M13.9 6.1l1.8-1.8"/></svg>設定<span class="chev" aria-hidden="true">▸</span></button>
+          <div class="nav-sub" hidden>
+          <button type="button" data-open="settings">進階設定</button>
+          <button type="button" data-open="api">API 資訊</button>
+          <button type="button" data-open="qr">QR Code</button>
+          <button type="button" class="logout-btn nav-logout">登出</button>
+        </div>
+        </div>
       </div>
     </div>
   </section>
