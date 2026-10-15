@@ -250,17 +250,35 @@
       .map(p => ({ p, level: tokenLevel(p.expiresAt) })).filter(x => x.level);
     box.hidden = !mine.length;
     if (!mine.length) return;
-    const word = { expired: '已過期', '2h': '2 小時內到期', '24h': '24 小時內到期' };
-    box.className = 'token-alert' + (mine.some(x => x.level !== '24h') ? ' urgent' : '');
-    box.dataset.open = box.dataset.open === 'all' ? 'all' : '';
+    const critical = mine.filter(x => x.level === 'expired' || x.level === '2h')
+      .sort((a, b) => Date.parse(a.p.expiresAt) - Date.parse(b.p.expiresAt)); // 已過期的排最前面，其次是最快到期的
+    if (critical.length) {
+      // 緊急：深紅底白字兩行，不可關閉，處理後才消失；多位同時發生只顯示最急的一位並標「共 N 位」
+      const c = critical[0], left = Date.parse(c.p.expiresAt) - Date.now();
+      const line1 = c.level === 'expired' ? `${esc(c.p.name)} 的 Token 已過期，請重發`
+        : `${esc(c.p.name)} 的 Token 剩 ${Math.floor(left / 3600_000)} 小時 ${Math.floor((left % 3600_000) / 60_000)} 分到期`;
+      box.className = 'token-alert critical';
+      box.dataset.open = '';
+      box.innerHTML = `<div class="token-alert-text"><div class="ta-line1">${line1}</div><div class="ta-line2">${c.level === 'expired' ? 'AI 已停止連線' : '到期後 AI 會停止連線'}${critical.length > 1 ? ' · 共 ' + critical.length + ' 位' : ''}</div></div>
+        <button type="button" class="btn alert-btn">重發 Token</button>`;
+      box.querySelector('.alert-btn').onclick = () => openMyAi();
+      return;
+    }
+    // 一般（24 小時內到期）：一行＋「處理 ›」，點開看全文與動作，可按「稍後」收起
     const key = mine.map(x => x.p.participantId + x.level).join();
     if (state.tokenAlertDismissed === key) { box.hidden = true; return; }
-    box.innerHTML = `<span class="token-alert-text">你的 AI ${mine.map(x => `「${esc(x.p.name)}」Token ${word[x.level]}（${fmtTime(x.p.expiresAt)}）`).join('、')}，到期後 AI 會停止連線。</span>
-      <button type="button" class="btn alert-btn">重發 Token</button>
-      <button type="button" class="icon-btn alert-close" aria-label="關閉提醒">×</button>`;
-    box.querySelector('.alert-btn').onclick = () => openMyAi();
-    box.querySelector('.token-alert-text').onclick = () => { box.dataset.open = box.dataset.open === 'all' ? '' : 'all'; }; // 手機版點一下展開全文
-    box.querySelector('.alert-close').onclick = () => { state.tokenAlertDismissed = key; box.hidden = true; };
+    const text = `你的 AI ${mine.map(x => `「${esc(x.p.name)}」Token 24 小時內到期（${fmtTime(x.p.expiresAt)}）`).join('、')}，到期後 AI 會停止連線。`;
+    box.className = 'token-alert';
+    const open = box.dataset.open === 'all';
+    box.innerHTML = open
+      ? `<div class="ta-card"><div>${text}</div><div class="ta-actions"><button type="button" class="btn alert-btn primary">重發 Token</button><button type="button" class="btn alert-later">稍後</button></div></div>`
+      : `<button type="button" class="ta-one"><span class="token-alert-text">${text}</span><span class="ta-go">處理 ›</span></button>`;
+    if (open) {
+      box.querySelector('.alert-btn').onclick = () => openMyAi();
+      box.querySelector('.alert-later').onclick = () => { state.tokenAlertDismissed = key; box.dataset.open = ''; box.hidden = true; };
+    } else {
+      box.querySelector('.ta-one').onclick = () => { box.dataset.open = 'all'; drawTokenAlert(items); };
+    }
   }
 
   // 輪詢：前景每 3 秒拉新訊息，背景分頁放慢到 15 秒；成員與通知數每 15 秒更新
@@ -465,6 +483,7 @@
     store.set(PROJ_KEY, b.dataset.proj);
     projTouched = false;
     drawProjSwitch();
+    syncFilterBar();
     renderMessages(true);
     if (state.page === 'work') renderWork();
   });
@@ -489,8 +508,9 @@
     sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
     sel.value = f.member;
     $('#f-clear').hidden = !filtering();
-    const fs = $('#f-summary'); if (fs) fs.textContent = filterSummary();
+    const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
   }
+  const filterCount = () => (state.filter.scope !== 'all' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0) + (!singleProject() && projectView() !== 'all' ? 1 : 0);
   function setFilter(patch) {
     Object.assign(state.filter, patch);
     state.onlyMine = state.filter.scope === 'related';
@@ -507,22 +527,37 @@
     const f = state.filter;
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled').sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
-    const body = openModal('篩選訊息', `
+    const draft = { scope: f.scope, member: f.member, tag: f.tag, project: projectView() };
+    const showProj = !singleProject();
+    const body = openModal('篩選', `
       <div class="stack">
         <div class="field"><span class="field-label" id="fs-scope">範圍</span>
-          <div class="seg-scope full" role="group" aria-labelledby="fs-scope">
-            ${[['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${f.scope === k}">${t}</button>`).join('')}
-          </div></div>
-        <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}" ${f.member === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
-        <label>標籤<select id="fs-tag"><option value="">所有標籤</option>${tags.map(t => `<option ${f.tag === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
-      </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除篩選</button><button class="btn primary" type="button" data-close>完成</button>' });
-    body.querySelectorAll('[data-fs-scope]').forEach(b => b.addEventListener('click', () => {
-      setFilter({ scope: b.dataset.fsScope });
-      body.querySelectorAll('[data-fs-scope]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
-    }));
-    body.querySelector('#fs-member').onchange = e => setFilter({ member: e.target.value });
-    body.querySelector('#fs-tag').onchange = e => setFilter({ tag: e.target.value });
-    body.modal.querySelector('#fs-clear').onclick = () => { setFilter({ scope: 'all', member: '', tag: '' }); closeModal(); };
+          <div class="seg-scope full" role="group" aria-labelledby="fs-scope" id="fs-scope-g"></div></div>
+        ${showProj ? `<div class="field"><span class="field-label" id="fs-proj">專案</span>
+          <div class="seg-scope full" role="group" aria-labelledby="fs-proj" id="fs-proj-g"></div></div>` : ''}
+        <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('')}</select></label>
+        <label>標籤<select id="fs-tag"><option value="">所有標籤</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
+      </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除</button><button class="btn primary grow" type="button" id="fs-apply">套用</button>' });
+    const draw = () => {
+      body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
+      const pg = body.querySelector('#fs-proj-g');
+      if (pg) pg.innerHTML = [['all', '全部'], ...PROJECTS.map(p => [p, p])].map(([k, t]) => `<button type="button" data-fs-proj="${k}" aria-pressed="${draft.project === k}">${t}</button>`).join('');
+      body.querySelector('#fs-member').value = draft.member;
+      body.querySelector('#fs-tag').value = draft.tag;
+    };
+    draw();
+    body.addEventListener('click', e => {
+      const sc = e.target.closest('[data-fs-scope]'); if (sc) { draft.scope = sc.dataset.fsScope; draw(); }
+      const pr = e.target.closest('[data-fs-proj]'); if (pr) { draft.project = pr.dataset.fsProj; draw(); }
+    });
+    body.querySelector('#fs-member').onchange = e => { draft.member = e.target.value; };
+    body.querySelector('#fs-tag').onchange = e => { draft.tag = e.target.value; };
+    body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '', project: showProj ? 'all' : projectView() }); draw(); };
+    body.modal.querySelector('#fs-apply').onclick = () => {
+      closeModal();
+      if (showProj && draft.project !== projectView()) { store.set(PROJ_KEY, draft.project); projTouched = false; drawProjSwitch(); if (state.page === 'work') renderWork(); }
+      setFilter({ scope: draft.scope, member: draft.member, tag: draft.tag });
+    };
   }
   $('#f-open').onclick = openFilterSheet;
   $('#f-decide').onclick = () => openTodoPage();
@@ -1951,6 +1986,34 @@
   }
   for (const el of [$('#team-bar'), $('#team-list'), $('.side-title')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
 
+  // AI 工作記憶（C-108）：AI 自己回報的目前任務與待辦；只在狀態改變時更新，依專案可見
+  const stagePill = st => {
+    const k = /受阻|卡住/.test(st) ? 'red' : /待確認|等/.test(st) ? 'amber' : 'blue';
+    return `<span class="spill spill-${k}">${esc(st)}</span>`;
+  };
+  function aiStateHtml(t) {
+    const ais = t.members.filter(m => m.memberType === 'ai');
+    if (!ais.length) return '';
+    const WAKE = { watcher: 'watcher（被 @ 才醒）', cron: '定時輪詢', manual: '手動' };
+    const rows = ais.map(m => {
+      const s = m.aiState;
+      const head = `<b>${esc(m.name)}</b> <span class="muted small">${esc([m.role, m.environment].filter(Boolean).join(' · '))}</span>`;
+      if (!s) return `<div class="astate empty"><div>${head}<br><span class="small muted">○ 尚未同步</span></div><div class="muted small">此 AI 尚未回報工作狀態。可在群組請它同步，或看它負責的卡片。</div></div>`;
+      const ct = s.currentTask;
+      const sync = `${m.stale ? '◐ 可能離線' : '● 在線'} · ${agoText(s.updatedAt)}同步`;
+      return `<details class="astate${ct ? ' on' : ''}"><summary>
+        <div>${head}<br><span class="small ${m.stale ? 'warn-text' : 'ok-text'}">${sync}</span></div>
+        <div>${ct ? `${ct.stage ? stagePill(ct.stage) : ''} <span>${esc(ct.title)}</span>${ct.cardId ? ` <button type="button" class="link small" data-open-card="${esc(ct.cardId)}">${esc(ct.cardId)}</button>` : ''}` : '<span class="muted">目前沒有進行中的任務</span>'}${m.stale ? '<br><span class="small warn-text">以下是最後同步的狀態，可能已變動。</span>' : ''}</div>
+        <span class="muted small">待辦 ${s.backlog?.length || 0}</span></summary>
+        <div class="astate-detail">
+          <div class="small"><b>待辦（${s.backlog?.length || 0}）</b></div>
+          ${(s.backlog || []).map(b => `<div class="astate-item">${esc(b.title)}${b.trigger ? `<br><span class="muted small">觸發：${esc(b.trigger)}</span>` : ''}</div>`).join('') || '<p class="muted small">沒有待辦。</p>'}
+          <p class="muted small">最後同步 ${shortTime(s.updatedAt)}${s.wakeMode ? ` · 喚醒方式：${esc(WAKE[s.wakeMode] || s.wakeMode)}` : ''} · 僅在狀態改變時更新。行內／投信 AI 只寫任務標題與 SHA。</p>
+        </div></details>`;
+    }).join('');
+    return `<div class="group-title">AI 工作記憶 · ${ais.filter(m => m.aiState).length}／${ais.length} 已同步</div><div class="astates">${rows}</div>`;
+  }
+
   async function openTeam() {
     await loadTeam();
     const t = state.team;
@@ -1981,6 +2044,7 @@
         ${t.unanswered.map(u => `<div class="note-card red">
           <div class="note-main"><span><b>${esc(u.name)}</b> <span class="red-text">· 已等 ${agoText(u.since).replace('前', '')}</span></span></div>
           <button type="button" class="link small" data-jump-team="${esc(u.messageId)}">查看訊息</button></div>`).join('')}` : ''}
+      ${aiStateHtml(t)}
       <div class="group-title">成員</div>
       <div class="tm-list">${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
     body.addEventListener('click', async e => {

@@ -1035,3 +1035,31 @@ body.drawer-docked #app { padding-right: 400px; }
 .sugg-check input { width: 20px; height: 20px; }
 .sugg-row { align-items: center; }
 @media (max-width: 600px) { .batch-bar .btn { min-height: 44px; } }
+
+/* ===== C-108 AI 工作記憶 ===== */
+.astates { display: grid; gap: 8px; margin-bottom: 14px; }
+.astate { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.astate.on { border: 2px solid var(--primary); }
+.astate.empty { display: grid; grid-template-columns: 200px 1fr; gap: 12px; align-items: center; padding: 10px 14px; border-style: dashed; }
+.astate > summary { display: grid; grid-template-columns: 200px 1fr auto; gap: 12px; align-items: center; padding: 10px 14px; cursor: pointer; list-style: none; min-height: 44px; }
+.astate > summary::-webkit-details-marker { display: none; }
+.astate-detail { padding: 4px 14px 12px; display: grid; gap: 6px; }
+.astate-item { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.spill { display: inline-block; padding: 1px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+.spill-blue { background: #dbeafe; color: #1e40af; } .spill-red { background: #fee2e2; color: #991b1b; } .spill-amber { background: #fef3c7; color: #92400e; }
+.warn-text { color: #92400e; } .ok-text { color: #166534; }
+@media (max-width: 600px) { .astate > summary, .astate.empty { grid-template-columns: 1fr; gap: 4px; } }
+
+/* ===== C-126 補圖：Token 警示三種狀態、篩選面板 ===== */
+.token-alert.critical { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #991b1b !important; color: #fff !important; border-bottom: 0 !important; font-weight: 400; }
+.token-alert.critical .ta-line1 { font-size: 14px; font-weight: 700; }
+.token-alert.critical .ta-line2 { font-size: 12px; opacity: .95; }
+.token-alert.critical .token-alert-text { white-space: normal !important; cursor: default; }
+.token-alert.critical .alert-btn { min-height: 44px; background: #fff !important; color: #991b1b !important; font-weight: 700; border: 0; white-space: nowrap; }
+.token-alert .ta-one { all: unset; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 44px; }
+.token-alert .ta-one .token-alert-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.token-alert .ta-go { font-weight: 500; white-space: nowrap; }
+.token-alert .ta-card { width: 100%; display: grid; gap: 8px; padding: 10px 0; }
+.token-alert .ta-actions { display: flex; gap: 8px; }
+.token-alert .ta-actions .btn { min-height: 44px; }
+#fs-apply { flex: 1; }

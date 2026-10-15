@@ -630,6 +630,11 @@ ${roster}
 - 團隊狀態會優先取自你負責的卡片；沒有卡片時才依訊息開頭標籤推斷。細節見規格 3.10、3.11。
 - 專案：卡片與訊息有 project（平台／銀行系統）。建卡要帶 project（單一專案的你可省略）；訊息預設你的專案、回覆繼承；輪詢可加 project=mine 只讀自己專案與「全部專案」的訊息。細節見規格 3.13。
 
+## 十二、工作記憶（改變時才寫）
+- 把「目前任務」與「待辦」存到平台，換電腦或關機後可讀回：PUT /api/me/state、GET /api/me/state（規格 3.14）。只在狀態改變時才 PUT（內容相同伺服器不會重寫），不要定時重送。
+- 內容：currentTask{title,stage,sha?,cardId?}、backlog[{title,trigger}]（最多 20 筆）、wakeMode（watcher／cron／manual）。整份 ≤16KB。
+- 可見範圍依專案；行內／投信只寫任務標題與 SHA，不放路徑、檔名、類別名稱、SQL、程式碼或金鑰。
+
 請先回覆 ${owner.name}：你是否具備 HTTP 與排程能力，然後從「初次接入」第 1 步開始。`;
   }
 
@@ -717,6 +722,90 @@ ${roster}
     invalidatePeople();
     await db.run('UPDATE participants SET projects = ?, updated_at = ? WHERE id = ?', list.join(','), nowIso(), target.id);
     return identity({ ...target, projects: list.join(',') }, await peopleMap(ctx));
+  });
+  // ---------- AI 工作記憶（C-108）：換電腦或關機後可從雲端讀回；依專案可見 ----------
+  const STATE_MAX_BYTES = 16 * 1024;
+  const STATE_WAKE = ['watcher', 'cron', 'manual'];
+  // 行內／投信 AI 只准寫標題與 SHA：字串像路徑、檔名、類別名稱、SQL、程式碼或疑似金鑰就擋（擋不住所有情況，仍靠 AI 自律）
+  const LOOKS_INTERNAL = [/[A-Za-z]:\\/, /(^|\s)\/(home|Users|opt|var|usr|etc)\//, /\.(java|cs|sql|xml|config|properties|ps1|sh|py|js|ts|dll|jar)\b/i,
+    /\b(SELECT|INSERT|UPDATE|DELETE)\b[\s\S]{0,40}\b(FROM|INTO|SET)\b/i, /```/, /\b(class|interface|namespace|package)\s+[A-Z]\w+/, /eyJ[A-Za-z0-9_-]{20,}/, /[A-Za-z0-9_-]{40,}/];
+  function strField(v, name, max, { required = false } = {}) {
+    if (v === undefined || v === null || v === '') { if (required) throw invalid(`${name} 為必填`); return undefined; }
+    const t = String(v).trim();
+    if (!t && required) throw invalid(`${name} 為必填`);
+    if (t.length > max) throw invalid(`${name} 上限 ${max} 字`);
+    return t;
+  }
+  function onlyKeys(obj, keys, where) {
+    for (const k of Object.keys(obj)) if (!keys.includes(k)) throw invalid(`${where} 不接受欄位 ${k}`);
+  }
+  function normalizeState(raw, me) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid('state 需為 JSON 物件');
+    onlyKeys(raw, ['currentTask', 'backlog', 'wakeMode', 'updatedAt'], 'state');
+    const out = {};
+    if (raw.currentTask !== undefined && raw.currentTask !== null) {
+      const t = raw.currentTask;
+      if (typeof t !== 'object' || Array.isArray(t)) throw invalid('currentTask 需為物件');
+      onlyKeys(t, ['title', 'stage', 'sha', 'cardId'], 'currentTask');
+      const ct = { title: strField(t.title, 'currentTask.title', 100, { required: true }) };
+      const stage = strField(t.stage, 'currentTask.stage', 30); if (stage) ct.stage = stage;
+      const sha = strField(t.sha, 'currentTask.sha', 40); if (sha) { if (!/^[0-9a-f]{40}$/.test(sha)) throw invalid('currentTask.sha 需為完整 40 碼'); ct.sha = sha; }
+      const cardId = strField(t.cardId, 'currentTask.cardId', 12); if (cardId) { if (!/^C-\d+$/.test(cardId)) throw invalid('currentTask.cardId 需為 C-數字'); ct.cardId = cardId; }
+      out.currentTask = ct;
+    } else out.currentTask = null;
+    if (raw.backlog !== undefined) {
+      if (!Array.isArray(raw.backlog)) throw invalid('backlog 需為陣列');
+      if (raw.backlog.length > 20) throw invalid('backlog 最多 20 筆');
+      out.backlog = raw.backlog.map((b, i) => {
+        if (!b || typeof b !== 'object' || Array.isArray(b)) throw invalid(`backlog[${i}] 需為物件`);
+        onlyKeys(b, ['title', 'trigger'], `backlog[${i}]`);
+        const item = { title: strField(b.title, `backlog[${i}].title`, 100, { required: true }) };
+        const trig = strField(b.trigger, `backlog[${i}].trigger`, 100); if (trig) item.trigger = trig;
+        return item;
+      });
+    } else out.backlog = [];
+    if (raw.wakeMode !== undefined && raw.wakeMode !== null) {
+      if (!STATE_WAKE.includes(raw.wakeMode)) throw invalid(`wakeMode 需為：${STATE_WAKE.join('、')}`);
+      out.wakeMode = raw.wakeMode;
+    }
+    if (['行內', '投信'].includes(me.env)) {
+      const strings = [out.currentTask?.title, out.currentTask?.stage, ...out.backlog.flatMap(b => [b.title, b.trigger])].filter(Boolean);
+      const bad = strings.find(x => LOOKS_INTERNAL.some(re => re.test(x)));
+      if (bad) throw new ApiError(400, 'INTERNAL_CONTENT', `你的環境是${me.env}：工作記憶只能寫標題與 SHA，不要寫路徑、檔名、類別名稱、SQL、程式碼或金鑰。疑似違規：${bad.slice(0, 30)}`);
+    }
+    return out;
+  }
+  // 誰看得到誰的工作記憶：兩邊至少有一個共同專案（兩邊成員都看得到）
+  const canSeeState = (viewer, target) => projectsOf(target).some(p => projectsOf(viewer).includes(p));
+  async function readState(id) {
+    const r = await db.get('SELECT state, updated_at FROM ai_state WHERE participant_id = ?', id);
+    return r ? { state: JSON.parse(r.state), updatedAt: r.updated_at } : null;
+  }
+  route('PUT', '/api/me/state', async ({ me, req }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '工作記憶是 AI 寫自己的；人類請用網頁查看。');
+    const text = await req.text();
+    if (new TextEncoder().encode(text).length > STATE_MAX_BYTES) throw invalid('state 超過 16KB');
+    let raw; try { raw = JSON.parse(text); } catch { throw invalid('JSON 格式錯誤'); }
+    const state = normalizeState(raw, me);
+    const json = JSON.stringify(state);
+    if (new TextEncoder().encode(json).length > STATE_MAX_BYTES) throw invalid('state 超過 16KB');
+    const cur = await db.get('SELECT state, updated_at FROM ai_state WHERE participant_id = ?', me.id);
+    if (cur && cur.state === json) return { state, updatedAt: cur.updated_at, unchanged: true }; // 沒變就不寫資料庫
+    const at = nowIso();
+    await db.run('INSERT INTO ai_state (participant_id, state, updated_at) VALUES (?,?,?) ON CONFLICT(participant_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at', me.id, json, at);
+    teamCache = { at: 0, data: null }; // 團隊狀態快取一起失效
+    return { state, updatedAt: at, unchanged: false };
+  });
+  route('GET', '/api/me/state', async ({ me }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 有自己的工作記憶。');
+    return (await readState(me.id)) || { state: null, updatedAt: null };
+  });
+  route('GET', '/api/participants/:id/state', async ({ ctx, me, params }) => {
+    const people = await peopleMap(ctx);
+    const target = people.get(params.id);
+    if (!target || target.kind !== 'ai' || target.status !== 'active') throw new ApiError(404, 'NOT_FOUND', '找不到這位 AI');
+    if (!canSeeState(me, target)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '這位 AI 不屬於你的專案，看不到它的工作記憶。');
+    return (await readState(target.id)) || { state: null, updatedAt: null };
   });
   route('GET', '/api/participants', async ({ ctx }) => {
     const people = await peopleMap(ctx);
@@ -977,10 +1066,12 @@ ${roster}
       pendBy.set(n.recipient_id, x);
     }
 
+    const aiStates = new Map((await db.all('SELECT participant_id, state, updated_at FROM ai_state')).map(r => [r.participant_id, { ...JSON.parse(r.state), updatedAt: r.updated_at }]));
     const members = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system')
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(p => ({
         ...identity(p, people),
+        aiState: aiStates.get(p.id) || null,
         lastSeenAt: iso(p.last_seen_at),
         isOnline: isOnline(p, now),
         // 有 watcher 心跳的 AI（24 小時內有過）超過 60 分鐘沒任何呼叫才算可能斷線；其他 AI 維持原門檻
@@ -1035,7 +1126,11 @@ ${roster}
 
   registerCards({ route, createMessage, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople });
 
-  route('GET', '/api/team-status', ({ ctx }) => teamStatus(ctx));
+  route('GET', '/api/team-status', async ({ ctx, me }) => {
+    const d = await teamStatus(ctx);
+    const people = await peopleMap(ctx);
+    return { ...d, members: d.members.map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)) }; // 工作記憶依專案可見
+  });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);
     const m = await db.get('SELECT id, text FROM messages WHERE id = ?', params.id);

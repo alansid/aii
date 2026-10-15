@@ -172,3 +172,10 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 CREATE INDEX IF NOT EXISTS idx_suggestions_state ON suggestions (state, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestions_request ON suggestions (from_id, request_id);
+
+-- AI 工作記憶（C-108）：每個 AI 一列，JSON 文字，內容相同就不重寫
+CREATE TABLE IF NOT EXISTS ai_state (
+  participant_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
