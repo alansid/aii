@@ -1720,6 +1720,7 @@
     if (mb.memberType === 'ai' && mb.stale) return { cls: 'yellow', text: mb.lastSeenAt ? '可能斷線' : '尚未連線' };
     if (mb.tokenExpiringSoon) return { cls: 'yellow', text: 'Token 快到期' };
     if (mb.memberType === 'human' && !mb.isOnline) return { cls: 'grey', text: '離線' };
+    if (mb.memberType === 'ai' && mb.standby) return { cls: 'green', text: '待命中' };
     return { cls: 'green', text: '正常' };
   }
 
@@ -1796,7 +1797,7 @@
     }).join('');
     const body = openModal('團隊狀態', `
       <details class="help"><summary>狀態怎麼判斷？</summary>
-        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」；指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」。</p>
+        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」。</p>
       </details>
       <div class="group-title">等你決定 · ${myDecisions(t).length}</div>
       ${myDecisions(t).length ? myDecisions(t).map(d => `

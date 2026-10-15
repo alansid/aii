@@ -40,6 +40,7 @@ function migrate(db) {
     env: "TEXT NOT NULL DEFAULT ''",
     avatar: "TEXT NOT NULL DEFAULT ''",
     avatar_v: 'INTEGER NOT NULL DEFAULT 0',
+    standby_at: 'INTEGER NOT NULL DEFAULT 0',
   });
   add('cards', {
     decider_id: "TEXT",

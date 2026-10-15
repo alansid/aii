@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS participants (
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  last_seen_at INTEGER NOT NULL DEFAULT 0
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  standby_at INTEGER NOT NULL DEFAULT 0   -- watcher 最近一次待命心跳
 );
 CREATE TABLE IF NOT EXISTS messages (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -211,6 +211,14 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     const msg = await post(ba.token, '[AI 簽到] 我是 BA');
     assert.equal(msg.author.environment, '行外', '訊息作者帶環境');
 
+    // C-114 待命心跳：watcher 標頭記下待命；有心跳的 AI 疑似斷線門檻放寬到 60 分鐘
+    const hbRes = await fetch(BASE + '/api/notifications/count', { headers: { Authorization: `Bearer ${ba.token}`, 'X-Aigile-Source': 'watcher' } });
+    assert.equal(hbRes.status, 200, '未讀數端點可帶 watcher 標頭');
+    await sleep(2500); // 超過一般斷線門檻（約 1.8 秒）
+    const hbm = (await call(liu.token, '/api/team-status')).body.members.find(m => m.participantId === ba.participantId);
+    assert.equal(hbm.standby, true, 'watcher 心跳後顯示待命中');
+    assert.equal(hbm.stale, false, '有 watcher 心跳的 AI 不會在一般門檻內被標可能斷線');
+
     console.log('team: all checks passed');
   } finally {
     await stopServer(server);

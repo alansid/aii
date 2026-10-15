@@ -1,0 +1,111 @@
+#!/usr/bin/env node
+// Aigile-Switch watcher：零 Token 待機，被指定時才喚醒 AI。零依賴，需要 Node 22+（內建 WebSocket）。
+//
+// 運作：
+//   1. 連 Supabase Realtime 的頻道待機，收到「門鈴」（只含 AI 的 ID 與時間，不含內文）。
+//   2. 門鈴不可信：命中自己之後，一律先用「自己的 Token」查未讀通知數；有待處理才執行喚醒指令。
+//   3. 每 15 分鐘做一次保底巡檢（同一個未讀數呼叫，也是待命心跳，標頭 X-Aigile-Source: watcher）。
+//   4. 連線失敗會記錄原因並每 15 秒重試；期間仍會每 15 分鐘巡檢，不會靜默失效。
+//
+// 設定（環境變數，金鑰與 Token 不要進 git、不要貼群組）：
+//   AIGILE_BASE        平台網址，例如 https://aigile-switch.alansid87.workers.dev
+//   AIGILE_TOKEN       這個 AI 自己的 Token（或用 AIGILE_TOKEN_FILE 指向存 Token 的檔案）
+//   AIGILE_ME          這個 AI 的 participantId（GET /api/me 可查）
+//   SUPABASE_URL       例如 https://xxxx.supabase.co
+//   SUPABASE_KEY       Supabase 的 anon key
+//   SUPABASE_TOPIC     頻道名稱，要與平台設定相同（預設 aigile-switch）
+//   WAKE_CMD           喚醒指令（依你的 AI 而定，例如 claude -p "請收訊息並處理"、codex exec "…"）
+//   HEARTBEAT_MIN      巡檢／心跳間隔，預設 15 分鐘
+//   WAKE_MIN_GAP_MIN   同一批未讀最短重喚間隔，預設 45 分鐘
+// 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
+const env = process.env;
+const BASE = (env.AIGILE_BASE || '').replace(/\/+$/, '');
+const TOKEN = env.AIGILE_TOKEN || (env.AIGILE_TOKEN_FILE ? readFileSync(env.AIGILE_TOKEN_FILE, 'utf8').trim() : '');
+const ME = env.AIGILE_ME || '';
+const SB_URL = (env.SUPABASE_URL || '').replace(/\/+$/, '');
+const SB_KEY = env.SUPABASE_KEY || '';
+const TOPIC = env.SUPABASE_TOPIC || 'aigile-switch';
+const WAKE_CMD = env.WAKE_CMD || '';
+const HEARTBEAT_MS = (Number(env.HEARTBEAT_MIN) || 15) * 60_000;
+const MIN_GAP_MS = (Number(env.WAKE_MIN_GAP_MIN) || 45) * 60_000;
+
+const log = (...a) => console.log(new Date().toISOString(), ...a);
+if (!BASE || !TOKEN || !ME || !WAKE_CMD) {
+  console.error('缺少設定：AIGILE_BASE、AIGILE_TOKEN（或 AIGILE_TOKEN_FILE）、AIGILE_ME、WAKE_CMD 都要設。');
+  process.exit(1);
+}
+
+let running = false, queued = false, lastWakeAt = 0, lastWakeCount = 0;
+
+// 用自己的 Token 查未讀數（0 token）；同時就是待命心跳
+async function unread() {
+  const r = await fetch(`${BASE}/api/notifications/count`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`未讀數 HTTP ${r.status} ${body.slice(0, 120)}`);
+  }
+  return (await r.json()).pending;
+}
+
+async function check(why) {
+  let pending;
+  try { pending = await unread(); } catch (e) { return log(`[${why}] 查未讀數失敗：${e.message}`); }
+  if (!pending) return log(`[${why}] 沒有待處理，不喚醒`);
+  if (running) { queued = true; return log(`[${why}] 有 ${pending} 則待處理，但 AI 正在執行，排隊補跑`); }
+  const fresh = pending > lastWakeCount || Date.now() - lastWakeAt > MIN_GAP_MS;
+  if (!fresh) return log(`[${why}] 還有 ${pending} 則待處理，但 ${Math.round((Date.now() - lastWakeAt) / 60000)} 分鐘前才喚醒過，先不重複喚醒`);
+  wake(pending, why);
+}
+
+function wake(pending, why) {
+  running = true; lastWakeAt = Date.now(); lastWakeCount = pending;
+  log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
+  const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', env: { ...env, AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
+  child.on('error', e => log('喚醒指令啟動失敗：', e.message));
+  child.on('exit', code => {
+    running = false;
+    log(`喚醒指令結束（exit ${code}）`);
+    if (queued) { queued = false; check('排隊補跑'); }
+  });
+}
+
+// ---------- Supabase Realtime（Phoenix 協定）----------
+let ws = null, hb = null, retry = null, refN = 0;
+function connect() {
+  if (!SB_URL || !SB_KEY) return log('未設定 SUPABASE_URL／SUPABASE_KEY，只做每 15 分鐘巡檢');
+  const url = `${SB_URL.replace(/^http/, 'ws')}/realtime/v1/websocket?apikey=${encodeURIComponent(SB_KEY)}&vsn=1.0.0`;
+  try { ws = new WebSocket(url); } catch (e) { return fail(`建立連線失敗：${e.message}`); }
+  ws.onopen = () => {
+    log('已連上即時通道，加入頻道', TOPIC);
+    const ref = String(++refN);
+    ws.send(JSON.stringify({ topic: `realtime:${TOPIC}`, event: 'phx_join', ref, join_ref: ref,
+      payload: { config: { broadcast: { self: false, ack: false }, presence: { key: '' }, private: false } } }));
+    clearInterval(hb);
+    hb = setInterval(() => ws?.readyState === 1 && ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: String(++refN) })), 25_000);
+    check('連線後巡檢');
+  };
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.event === 'phx_reply' && m.payload?.status === 'error') return log('加入頻道被拒：', JSON.stringify(m.payload.response).slice(0, 200));
+    if (m.event === 'broadcast' && m.payload?.event === 'doorbell') {
+      const ids = m.payload.payload?.ids;
+      if (Array.isArray(ids) && ids.includes(ME)) { log('收到門鈴，命中自己'); check('門鈴'); }
+    }
+  };
+  ws.onerror = e => log('即時通道錯誤：', e.message || e.type);
+  ws.onclose = ev => fail(`即時通道關閉（code ${ev.code} ${ev.reason || ''}）`);
+}
+function fail(reason) {
+  clearInterval(hb); ws = null;
+  log(`${reason}；15 秒後重連，期間每 ${HEARTBEAT_MS / 60000} 分鐘保底巡檢`);
+  clearTimeout(retry);
+  retry = setTimeout(connect, 15_000);
+}
+
+connect();
+setInterval(() => check('保底巡檢'), HEARTBEAT_MS);
+check('啟動');
+process.on('SIGINT', () => { ws?.close(); process.exit(0); });

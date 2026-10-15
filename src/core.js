@@ -59,6 +59,19 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
 export function createApp({ db, docText, config = {}, storage = null }) {
   const ROOM_CODE = config.roomCode || '';
+  // 即時喚醒門鈴（Supabase Realtime Broadcast）：沒設 URL／金鑰就完全不動作。只送 AI 的 ID 與時間，不帶人名與內文
+  const SB_URL = String(config.supabaseUrl || '').replace(/[/]+$/, '');
+  const SB_KEY = config.supabaseKey || '';
+  const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
+  const defer = config.defer || (p => p);
+  function ringDoorbell(ids, at) {
+    if (!SB_URL || !SB_KEY || !ids.length) return;
+    defer(fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
+      method: 'POST',
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ topic: SB_TOPIC, event: 'doorbell', payload: { ids, at }, private: false }] }),
+    }).catch(e => console.error('doorbell failed:', e.message)));
+  }
   const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 168) * 3600_000; // 預設 7 天
   const HUMAN_TOKEN_TTL_MS = (Number(config.humanTokenTtlHours) || 720) * 3600_000;
   const FILE_TTL_MS = (Number(config.fileTtlHours) || 1) * 3600_000; // 預設保存 1 小時
@@ -197,6 +210,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       const cached = peopleCache.map?.get(p.id);
       if (cached) { cached.last_seen_at = now; cached.token_expires_at = p.token_expires_at; }
     }
+    // watcher 的待命心跳：標頭表明來源，伺服器記下時間（每分鐘最多寫一次）
+    if (p.kind === 'ai' && req.headers.get('x-aigile-source') === 'watcher' && now - (p.standby_at || 0) > 60_000) {
+      await db.run('UPDATE participants SET standby_at = ?, last_seen_at = ? WHERE id = ?', now, now, p.id);
+      p.standby_at = now; p.last_seen_at = now;
+      const cached = peopleCache.map?.get(p.id);
+      if (cached) { cached.standby_at = now; cached.last_seen_at = now; }
+    }
     return p;
   }
   const requireHuman = me => {
@@ -269,6 +289,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       if (again) return { message: await serializeMessage(ctx, again), duplicate: true };
       throw e;
     }
+    ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai'), createdAt);
     return { message: await serializeMessage(ctx, await db.get('SELECT * FROM messages WHERE id = ?', id)), duplicate: false };
   }
 
@@ -825,6 +846,7 @@ ${roster}
   route('DELETE', '/api/files/:id', ({ me, params }) => deleteFile(me, params.id));
 
   // ---------- 團隊狀態（平台改善：看得出每個人在做什麼、有沒有連上） ----------
+  const STANDBY_STALE_MS = 60 * 60_000;
   const STALE_MS = (Number(config.staleMinutes) || 20) * 60_000;       // AI 超過這段時間沒出現 → 可能斷線
   const UNANSWERED_MS = (Number(config.unansweredMinutes) || 20) * 60_000; // 指派超過這段時間沒讀取 → 尚未回應
   const TOKEN_WARN_MS = 2 * 3600_000;
@@ -910,7 +932,9 @@ ${roster}
         ...identity(p, people),
         lastSeenAt: iso(p.last_seen_at),
         isOnline: isOnline(p, now),
-        stale: p.kind === 'ai' && (!p.last_seen_at || now - p.last_seen_at > STALE_MS),
+        // 有 watcher 心跳的 AI（24 小時內有過）超過 60 分鐘沒任何呼叫才算可能斷線；其他 AI 維持原門檻
+        stale: p.kind === 'ai' && (!p.last_seen_at || now - p.last_seen_at > (p.standby_at && now - p.standby_at < 24 * 3600_000 ? STANDBY_STALE_MS : STALE_MS)),
+        standby: p.kind === 'ai' && !!p.standby_at && now - p.standby_at <= 20 * 60_000,
         status: stateBy.get(p.id) || null,
         tokenExpiresAt: iso(p.token_expires_at),
         tokenExpired: p.kind === 'ai' && p.token_expires_at <= now,
