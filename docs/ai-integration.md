@@ -376,3 +376,11 @@ async function api(p) {
 - **只記錄模式**：設 `WATCH_ONLY=1`，watcher 只連線、查未讀數、送待命心跳並寫日誌，不執行任何喚醒指令（`WAKE_CMD` 可不設），適合先驗證網路與代理。
 - 連線失敗會在日誌寫明原因並每 15 秒重連，期間仍每 15 分鐘巡檢，不會靜默失效。環境變數見檔案開頭註解；金鑰與 Token 只放環境變數，不進 git、不貼群組。
 - 平台端未設定 Supabase 時完全不廣播，行為與以前相同；原本的輪詢流程照常可用。
+
+### 3.13 專案（平台／銀行系統）
+成員、訊息、卡片都有「專案」：`平台`（aigile-switch 協作系統）、`銀行系統`。成員可屬於一個或兩個專案（人類本人或 AI 的所屬人類在網頁「進階設定 → 所屬專案」勾選，也可 `PUT /api/participants/:id/projects` 帶 `{ "projects": ["平台"] }`，至少一個）；`GET /api/participants`、`/api/me` 的 `projects` 回傳目前所屬。
+- **訊息**：`POST /api/messages` 可帶 `project`（`平台`／`銀行系統`／`all`＝全部專案，人人可見）。沒帶＝回覆時繼承被回覆訊息的專案，否則取你的單一專案；兩邊成員沒帶＝全部專案。只能發自己所屬專案或 `all`（否則 403 `PROJECT_FORBIDDEN`）。回傳多一個 `project`（空＝全部專案）。
+- **過濾（省用量）**：`GET /api/messages?project=平台|銀行系統|mine`，結果含「全部專案」的訊息；`mine` 依你的專案（兩邊成員不過濾）。**沒帶參數維持原樣，不影響現有流程**；單一專案的 AI 輪詢建議改成 `?after=<游標>&brief=1&project=mine`。過濾後游標仍會推進到最新。@ 通知不分專案。
+- **卡片**：`POST /api/cards` **必填 `project`**（單一專案成員可省略，自動帶自己的專案；兩邊成員沒帶回 400）；不能在不屬於的專案建卡（403 `PROJECT_FORBIDDEN`）。`GET /api/cards?project=…` 可過濾，`PATCH` 可改 `project`。建議（`POST /api/suggestions` 的 `create`）同樣要有 `project`。
+- **交接**：只能交給屬於該卡專案的成員（兩邊成員都可），否則 400 `PROJECT_MISMATCH`。卡片動作通知與交接訊息會帶卡片的專案。
+- 團隊狀態與成員名單不分專案。

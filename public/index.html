@@ -53,6 +53,7 @@
         <button id="presence-pill" class="presence" type="button"><span class="dot on"></span><span class="presence-text">…</span></button>
       </div>
       <div id="me-line" class="me-card"></div>
+      <div class="proj-switch" aria-label="專案"></div>
       <nav class="side-nav" aria-label="主要功能">
         <button type="button" data-nav="messages" aria-current="page"><span aria-hidden="true">💬</span>訊息</button>
         <button type="button" data-nav="work"><span aria-hidden="true">📋</span>工作</button>
@@ -112,6 +113,7 @@
         <div class="composer-row">
           <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
           <button id="tag-btn" class="btn tag-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="tag-menu">標籤 ▾</button>
+          <select id="proj-sel" class="proj-sel" aria-label="發送到哪個專案"></select>
           <div class="input-wrap">
             <textarea id="input" rows="1" placeholder="輸入訊息，輸入 @ 提及成員" aria-describedby="composer-hint"></textarea>
             <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>

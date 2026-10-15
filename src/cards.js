@@ -33,7 +33,7 @@ export async function teamCards(db) {
   return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id })) };
 }
 
-export function registerCards({ route, createMessage, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople }) {
+export function registerCards({ route, createMessage, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople }) {
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   const parseNo = id => {
     const m = /^C-(\d+)$/.exec(id);
@@ -48,7 +48,7 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
   const mark = (people, by, at) => (by ? { by: ref(people, by), at } : null);
 
   const view = (c, people) => ({
-    cardId: cardNo(c.seq), type: c.type, title: c.title, reason: c.reason, status: c.status,
+    cardId: cardNo(c.seq), type: c.type, project: c.project, title: c.title, reason: c.reason, status: c.status,
     owner: ref(people, c.owner_id), next: c.next, blocker: c.blocker, waitFor: ref(people, c.wait_for_id), criteria: c.criteria,
     createdBy: ref(people, c.created_by), createdAt: c.created_at, updatedAt: c.updated_at, version: c.version,
     done: mark(people, c.done_by, c.done_at), verified: mark(people, c.verified_by, c.verified_at),
@@ -134,7 +134,7 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     if (logs.length) await db.batch(logStmt(c.seq, me, logs, at));
   }
 
-  route('GET', '/api/cards', async ({ ctx, url }) => {
+  route('GET', '/api/cards', async ({ ctx, me, url }) => {
     const q = url.searchParams, limit = parseLimit(url, 100, 200);
     const where = [], args = [];
     const status = q.get('status');
@@ -144,6 +144,8 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     if (q.get('owner')) { where.push('owner_id = ?'); args.push(q.get('owner')); }
     if (q.get('type')) { where.push('type = ?'); args.push(checkType(q.get('type'))); }
     if (q.get('since')) { where.push('updated_at > ?'); args.push(String(q.get('since'))); }
+    const pf = projectFilter(q.get('project'), me, 'project', false);
+    if (pf) { where.push(pf.sql); args.push(...pf.args); }
     const kw = (q.get('q') || '').trim();
     if (kw) { where.push("(title LIKE ? ESCAPE '\\' OR next LIKE ? ESCAPE '\\')"); const like = `%${kw.replace(/[%_\\]/g, m => '\\' + m)}%`; args.push(like, like); }
     const rows = await db.all(`SELECT * FROM cards ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC, seq DESC LIMIT ?`, ...args, limit + 1);
@@ -200,6 +202,14 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     } else if (body.deciderId !== undefined || body.question !== undefined || body.options !== undefined) {
       throw invalid('只有決策卡片可以填決策者、問題或選項');
     }
+    const mine = projectsOf(me);
+    let project = body.project;
+    if (project === undefined || project === null || project === '') {
+      if (mine.length !== 1) throw invalid(`project 為必填：${PROJECTS.join('、')}`);
+      project = mine[0];
+    }
+    if (!PROJECTS.includes(project)) throw invalid(`project 需為：${PROJECTS.join('、')}`);
+    if (!mine.includes(project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，不能在這個專案建卡。');
     const messageIds = Array.isArray(body.messageIds) ? [...new Set(body.messageIds.map(String))].slice(0, 10) : [];
     if (messageIds.length) {
       const found = await db.all('SELECT id FROM messages WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(messageIds));
@@ -207,10 +217,10 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     }
     const at = nowIso(), uid = randId('card');
     await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at,
-      decider_id, proposer_id, question, recommendation, options, impact, after_next)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, type, title, text(body, 'reason') ?? '', owner, status, text(body, 'next') ?? '', text(body, 'blocker') ?? '',
+      decider_id, proposer_id, question, recommendation, options, impact, after_next, project)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, type, title, text(body, 'reason') ?? '', owner, status, text(body, 'next') ?? '', text(body, 'blocker') ?? '',
       waitFor, text(body, 'criteria') ?? '', me.id, requestId, at, at,
-      dec.decider_id, dec.proposer_id, dec.question, dec.recommendation, dec.options, dec.impact, dec.after_next);
+      dec.decider_id, dec.proposer_id, dec.question, dec.recommendation, dec.options, dec.impact, dec.after_next, project);
     const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
     await db.batch([
       ...logStmt(c.seq, me, [`建立卡片（類型：${type}）`, ...(type === '決策' ? [`等 ${people.get(dec.decider_id)?.name} 決定`] : [])], at),
@@ -232,6 +242,11 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     for (const key of ['title', 'reason', 'next', 'blocker', 'criteria']) {
       const v = text(body, key, { required: key === 'title' });
       if (v !== undefined && v !== c[key]) { sets[key] = v; logs.push(`${FIELD_LABEL[key]}已修改`); }
+    }
+    if (body.project !== undefined && body.project !== c.project) {
+      if (!PROJECTS.includes(body.project)) throw invalid(`project 需為：${PROJECTS.join('、')}`);
+      if (me.kind === 'ai' && !projectsOf(me).includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，不能把卡片改到那個專案。');
+      sets.project = body.project; logs.push(`專案改為 ${body.project}`);
     }
     if (body.type !== undefined && checkType(body.type) !== c.type) {
       if (body.type === '決策' || c.type === '決策') throw new ApiError(400, 'TYPE_LOCKED', '決策卡片的類型不能改，工作或阻塞卡片也不能改成決策。請另外建立一張。');
@@ -346,7 +361,7 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     const plain = cur.title.replace('[平台]', '').replace('[銀行系統]', '').trim();
     const msg = `[通知] ${tag}${cardNo(c.seq)} ${plain}：${summary}`.slice(0, 1900);
     try {
-      const r = await createMessage(ctx, me, { text: msg, requestId: `cardev_${c.uid}_${key}_${cur.version}`.slice(0, 128), recipientIds: ids });
+      const r = await createMessage(ctx, me, { text: msg, requestId: `cardev_${c.uid}_${key}_${cur.version}`.slice(0, 128), recipientIds: ids, project: cur.project });
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, r.message.messageId);
     } catch (err) { console.error('card notify failed:', err.message); }
   }
@@ -363,6 +378,7 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     const to = await validPerson(people, body.toId, '接手者');
     if (!to) throw invalid('toId 為必填：要交給誰');
     if (to === c.owner_id || to === me.id) throw new ApiError(400, 'SAME_OWNER', '不能交給目前的負責人或自己。');
+    if (!projectsOf(people.get(to)).includes(c.project)) throw new ApiError(400, 'PROJECT_MISMATCH', `接手者不屬於這張卡的專案（${c.project}）；只能交給同專案成員，或兩邊都屬於的成員。`);
     const note = text({ handover: body.note }, 'handover', { required: true });
     if (note === undefined) throw invalid('交接說明（note）為必填');
     const at = nowIso(), fromName = people.get(c.owner_id || me.id)?.name || me.name, toName = people.get(to).name;
@@ -377,7 +393,7 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     const msgText = `[交接] ${proj ? `【${proj[1]}】` : ''}${cardNo(c.seq)} ${c.title.slice(proj ? proj[0].length : 0)} → @${toName}：${note}`;
     let messageId = null, notifyError = null;
     try {
-      const r = await createMessage(ctx, me, { text: msgText, requestId: `handover_${c.uid}_${c.version}`, recipientIds: [to] });
+      const r = await createMessage(ctx, me, { text: msgText, requestId: `handover_${c.uid}_${c.version}`, recipientIds: [to], project: c.project });
       messageId = r.message.messageId;
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
     } catch (err) { notifyError = err.message; }
@@ -444,7 +460,10 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
       if (type === '決策') throw invalid('決策卡片請直接用 POST /api/cards 建立（它本來就是等人類決定）。');
       const owner = await validPerson(people, body.ownerId, '負責人');
       if (!owner || owner === me.id) throw new ApiError(400, 'USE_POST', '替自己建卡或不指派負責人，請直接用 POST /api/cards；建議只用在「把工作指派給別人」。');
-      payload = { type, title, reason: text(body, 'reason') ?? '', ownerId: owner, next: text(body, 'next') ?? '', blocker: text(body, 'blocker') ?? '',
+      const mineP = projectsOf(me);
+      const sp = body.project ?? (mineP.length === 1 ? mineP[0] : undefined);
+      if (!PROJECTS.includes(sp)) throw invalid(`project 為必填：${PROJECTS.join('、')}`);
+      payload = { type, project: sp, title, reason: text(body, 'reason') ?? '', ownerId: owner, next: text(body, 'next') ?? '', blocker: text(body, 'blocker') ?? '',
         waitForId: await validPerson(people, body.waitForId, '等誰'), criteria: text(body, 'criteria') ?? '' };
     } else if (kind === 'status') {
       const c = await load(String(body.cardId ?? ''));
@@ -505,13 +524,14 @@ export function registerCards({ route, createMessage, db, ApiError, invalid, rea
     const f = { ...p };
     for (const k of ['title', 'reason', 'next', 'blocker', 'criteria']) { const v = text(body, k, { required: k === 'title' }); if (v !== undefined) f[k] = v; }
     if (body.type !== undefined) { f.type = checkType(body.type); if (f.type === '決策') throw invalid('決策卡片請直接建立'); }
+    if (body.project !== undefined) { if (!PROJECTS.includes(body.project)) throw invalid(`project 需為：${PROJECTS.join('、')}`); f.project = body.project; }
     if (body.ownerId !== undefined) f.ownerId = await validPerson(people, body.ownerId, '負責人');
     if (body.waitForId !== undefined) f.waitForId = await validPerson(people, body.waitForId, '等誰');
     const status = f.type === '阻塞' ? '受阻' : '待處理';
     const uid = randId('card');
-    await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, f.type, f.title, f.reason ?? '', f.ownerId ?? null, status, f.next ?? '', f.blocker ?? '', f.waitForId ?? null,
-      f.criteria ?? '', r.from_id, `sug_${r.id}`, at, at);
+    await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at, project)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, f.type, f.title, f.reason ?? '', f.ownerId ?? null, status, f.next ?? '', f.blocker ?? '', f.waitForId ?? null,
+      f.criteria ?? '', r.from_id, `sug_${r.id}`, at, at, f.project || '平台');
     const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
     await db.batch([
       ...logStmt(c.seq, me, [`採用 ${aiName} 的建議建立卡片（類型：${f.type}）`], at),

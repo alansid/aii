@@ -41,8 +41,10 @@ function migrate(db) {
     avatar: "TEXT NOT NULL DEFAULT ''",
     avatar_v: 'INTEGER NOT NULL DEFAULT 0',
     standby_at: 'INTEGER NOT NULL DEFAULT 0',
+    projects: "TEXT NOT NULL DEFAULT '平台,銀行系統'",
   });
   add('cards', {
+    project: "TEXT NOT NULL DEFAULT '平台'",
     decider_id: "TEXT",
     proposer_id: "TEXT",
     question: "TEXT NOT NULL DEFAULT ''",
@@ -55,7 +57,7 @@ function migrate(db) {
     decision_at: "TEXT",
     decision_note: "TEXT NOT NULL DEFAULT ''",
   });
-  add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT' });
+  add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT', project: 'TEXT' });
   const soon = Date.now() + 24 * 3600_000;
   db.prepare('UPDATE participants SET token_expires_at = ? WHERE token_expires_at = 0').run(soon);
 }

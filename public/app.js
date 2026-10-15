@@ -210,6 +210,7 @@
     $('#join').hidden = true;
     $('#app').hidden = false;
     drawMe();
+    drawProjSwitch();
     await loadParticipants();
     const d = await api('/api/messages?limit=100');
     state.messages = d.items;
@@ -376,7 +377,7 @@
         <div class="msg-head">
           ${avatar(state.participants.get(a.participantId) || a)}
           <div class="msg-who">
-            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time></div>
+            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time>${projTag(m.project)}</div>
             <div class="msg-line2">${esc(subLine(a))}</div>
           </div>
         </div>
@@ -424,8 +425,52 @@
     return isMine(m) || isToMe(m) || isReplyToMe(m) || mine.has(m.author.participantId)
       || m.recipients.some(r => mine.has(r.participantId));
   }
+  // ---------- 專案（C-111）：平台／銀行系統 ----------
+  const PROJ_KEY = 'aigile-switch-project';
+  const PROJECTS = ['平台', '銀行系統'];
+  const myProjects = () => (state.me?.projects?.length ? state.me.projects : PROJECTS);
+  const singleProject = () => myProjects().length === 1;
+  // 目前檢視：單一專案成員固定自己的專案；兩邊成員可切換（記在瀏覽器，不存伺服器）
+  function projectView() {
+    if (singleProject()) return myProjects()[0];
+    const v = store.get(PROJ_KEY);
+    return PROJECTS.includes(v) ? v : 'all';
+  }
+  const projTag = p => (p ? `<span class="ptag" data-p="${esc(p)}">${esc(p)}</span>` : '');
+  const msgInView = p => { const v = projectView(); return v === 'all' || !p || p === v; }; // 「全部專案」的訊息人人可見
+  const cardInView = c => { const v = projectView(); return v === 'all' || c.project === v; };
+  function drawProjSwitch() {
+    document.querySelectorAll('.proj-switch').forEach(el => {
+      el.innerHTML = singleProject()
+        ? `<span class="proj-fixed">專案：${esc(myProjects()[0])}</span>`
+        : `<div class="seg-scope full" role="group" aria-label="專案">${[['all', '全部'], ...PROJECTS.map(p => [p, p])].map(([k, t]) => `<button type="button" data-proj="${k}" aria-pressed="${projectView() === k}">${t}</button>`).join('')}</div>`;
+    });
+    drawProjSel();
+  }
+  // 發訊息的專案：預設跟目前檢視；回覆時不選就繼承被回覆訊息的專案（由伺服器處理）
+  let projTouched = false;
+  const defaultProj = () => (projectView() === 'all' ? '' : projectView());
+  function drawProjSel() {
+    const sel = $('#proj-sel');
+    if (!sel) return;
+    const opts = [['', '專案：預設'], ...myProjects().map(p => [p, p]), ['all', '全部專案']];
+    sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+    sel.value = projTouched ? sel.value : defaultProj();
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-proj]');
+    if (!b) return;
+    store.set(PROJ_KEY, b.dataset.proj);
+    projTouched = false;
+    drawProjSwitch();
+    renderMessages(true);
+    if (state.page === 'work') renderWork();
+  });
+  $('#proj-sel').addEventListener('change', () => { projTouched = true; });
+
   function visible(m) {
     const f = state.filter;
+    if (!msgInView(m.project)) return false;
     if (f.scope === 'mine' && !(!isMine(m) && (isToMe(m) || isReplyToMe(m)))) return false;
     if (f.scope === 'related' && !related(m)) return false;
     if (f.member && m.author.participantId !== f.member) return false;
@@ -652,6 +697,11 @@
     return ids.length ? { recipientIds: ids } : {};
   }
 
+  // 沒動過專案選單：回覆時不帶（繼承），否則帶目前檢視的專案；動過就照選的
+  function sendProject() {
+    const v = projTouched ? $('#proj-sel').value : (state.replyTo ? '' : defaultProj());
+    return v ? { project: v } : {};
+  }
   let sending = false;
   let pendingRequestId = null; // 失敗重送時沿用同一個 requestId，避免重複發文
   async function send() {
@@ -663,9 +713,10 @@
     try {
       const m = await api('/api/messages', {
         method: 'POST',
-        body: { text, requestId: pendingRequestId, replyToMessageId: state.replyTo?.messageId, ...resolveRecipients(text) },
+        body: { text, requestId: pendingRequestId, replyToMessageId: state.replyTo?.messageId, ...resolveRecipients(text), ...sendProject() },
       });
       pendingRequestId = null;
+      projTouched = false; drawProjSel();
       onNewMessage(m);
       input.value = '';
       setReply(null);
@@ -948,7 +999,7 @@
   const isMeRef = r => r && r.participantId === meId();
   const closedSt = s => s === '已完成' || s === '已封存';
   const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
-  const typeTag = c => (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
+  const typeTag = c => projTag(c.project) + (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
   const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
   const markHtml = c => (c.verified ? '<span class="cmark ok">✓ 已驗證</span>' : c.done ? '<span class="cmark wait">待驗證</span>' : '');
   const shortTime = iso => fmtTime(iso).replace(/^\d{4}\//, '').replace(/(\d\d:\d\d):\d\d$/, '$1');
@@ -1073,7 +1124,8 @@
   function visibleCards() {
     const q = work.q.trim().toLowerCase();
     return [...work.cards.values()].filter(c =>
-      (!work.type || c.type === work.type)
+      cardInView(c)
+      && (!work.type || c.type === work.type)
       && (!work.owner || c.owner?.participantId === work.owner)
       && (!q || [c.title, c.next, c.cardId].some(v => (v || '').toLowerCase().includes(q))))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -1310,7 +1362,7 @@
   }
   function openHandover() {
     const d = work.detail;
-    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId);
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && (p.projects || PROJECTS).includes(d.project));
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
         <div class="info-box">${esc(d.cardId)} ${esc(d.title)}<br>交接後負責人換成對方，狀態回到「待處理」，並在群組 @ 對方通知。</div>
@@ -1397,6 +1449,7 @@
             <label>影響<input name="impact" maxlength="200" value="${esc(d.decision.impact)}"></label>
             <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
             <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
+            <label>專案<select name="project">${PROJECTS.map(p => `<option ${d.project === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
             <label>原因<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
             <label>負責人<select name="ownerId">${opts(d.owner?.participantId, '未指派')}</select></label>
             <label>下一步<textarea name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
@@ -1406,6 +1459,7 @@
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
           </form>` : `
           <dl class="dfields">
+            <dt>專案</dt><dd>${esc(d.project || '')}</dd>
             <dt>原因</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
             <dt>負責人</dt><dd>${ownerHtml(d)}</dd>
             <dt>下一步</dt><dd class="${d.next ? '' : 'muted'}">${esc(d.next || '未填寫')}</dd>
@@ -1465,6 +1519,7 @@
             <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button>
           </div><input type="hidden" name="type" value="工作"></div>
         <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
+        <label>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${p}" ${(srcMsg?.project || projectView()) === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
         <div id="nc-decision" class="stack" hidden>
           <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
           <label>建議方案<textarea name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
@@ -1519,13 +1574,14 @@
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form));
       for (const k of Object.keys(data)) data[k] = data[k].trim();
+      data.project = form.project.value; // 單一專案成員的欄位是 disabled，FormData 不會帶
       if (form.status.disabled) delete data.status;
       if (data.type !== '決策') for (const k of ['question', 'recommendation', 'options', 'impact', 'deciderId', 'afterNext']) delete data[k];
       else { delete data.waitForId; if (!data.options) data.options = []; else data.options = data.options.split('\n'); }
       if (!data.ownerId) delete data.ownerId;
       if (!data.waitForId) delete data.waitForId;
       try {
-        const c = sg ? await api(`/api/suggestions/${encodeURIComponent(sg.suggestionId)}/apply`, { method: 'POST', body: { title: data.title, reason: data.reason, ownerId: data.ownerId ?? null, next: data.next, criteria: data.criteria, type: data.type, waitForId: data.waitForId ?? null } })
+        const c = sg ? await api(`/api/suggestions/${encodeURIComponent(sg.suggestionId)}/apply`, { method: 'POST', body: { title: data.title, reason: data.reason, ownerId: data.ownerId ?? null, next: data.next, criteria: data.criteria, type: data.type, project: data.project, waitForId: data.waitForId ?? null } })
           : await api('/api/cards', { method: 'POST', body: { ...data, requestId, ...(srcMsg ? { messageIds: [srcMsg.messageId] } : {}) } });
         if (sg) await loadSuggestions();
         work.cards.set(c.cardId, c);
@@ -2385,6 +2441,28 @@
   }
 
   // 進階設定
+  // 設定頁：每位成員（我與我名下的 AI）一列，勾選所屬專案
+  function projRowsHtml() {
+    const rows = [state.me, ...[...state.participants.values()].filter(p => p.ownerParticipantId === meId() && p.status !== 'disabled')];
+    return rows.map(p => {
+      const cur = p.projects?.length ? p.projects : PROJECTS;
+      return `<div class="proj-row" data-pid="${esc(p.participantId)}"><b>${esc(p.name)}${p.participantId === meId() ? '（我）' : ''}</b>${PROJECTS.map(x => `<label class="chk"><input type="checkbox" value="${x}" ${cur.includes(x) ? 'checked' : ''}> ${x}</label>`).join('')}</div>`;
+    }).join('');
+  }
+  async function projRowChange(e) {
+    const row = e.target.closest('.proj-row');
+    if (!row) return;
+    const list = [...row.querySelectorAll('input:checked')].map(i => i.value);
+    const pid = row.dataset.pid;
+    if (!list.length) { e.target.checked = true; return toast('至少要選一個專案'); }
+    try {
+      const r = await api(`/api/participants/${encodeURIComponent(pid)}/projects`, { method: 'PUT', body: { projects: list } });
+      if (pid === meId()) state.me.projects = r.projects;
+      const p = state.participants.get(pid); if (p) p.projects = r.projects;
+      toast(`已更新 ${r.name} 的所屬專案`);
+      drawProjSwitch(); renderMessages(false); if (state.page === 'work') renderWork();
+    } catch (err) { toast(err.message); }
+  }
   function openSettings() {
     const theme = store.get(THEME_KEY) || 'system';
     const body = openModal('進階設定', `
@@ -2397,6 +2475,9 @@
         <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
         <button class="btn small" type="button" data-change-avatar>更換</button>
       </div>
+      <div class="field"><span class="field-label">所屬專案</span>
+        <p class="muted small">平台、銀行系統可複選，至少選一個。單一專案成員預設只看自己專案與「全部專案」的訊息與卡片，建卡固定為自己的專案。你只能改自己和你名下 AI。</p>
+        <div id="proj-rows" class="proj-rows">${projRowsHtml()}</div></div>
       <div class="switch-row">
         <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
         <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
@@ -2406,6 +2487,7 @@
         <p class="muted small">會停用你和你名下的所有 AI，其他成員將看不到你們，Token 全部失效。</p>
         <button class="btn small danger-outline" type="button" id="set-leave">離開群組</button>
       </div>`);
+    body.querySelector('#proj-rows').addEventListener('change', projRowChange);
     body.querySelectorAll('[data-theme-opt]').forEach(b => b.addEventListener('click', () => {
       const v = b.dataset.themeOpt;
       if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);

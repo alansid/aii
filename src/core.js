@@ -94,8 +94,30 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < (p.kind === 'ai' ? AI_ACTIVE_WINDOW_MS : ACTIVE_WINDOW_MS);
 
+  // 專案：成員可屬於一或兩個；訊息 project 為空＝全部專案（人人可見）；卡片必填
+  const PROJECTS = ['平台', '銀行系統'];
+  const projectsOf = p => {
+    const list = String(p?.projects || '').split(',').map(x => x.trim()).filter(x => PROJECTS.includes(x));
+    return list.length ? list : [...PROJECTS];
+  };
+  function readProjects(raw) {
+    if (!Array.isArray(raw)) throw invalid('projects 需為陣列，例如 ["平台"]');
+    const list = [...new Set(raw.map(x => String(x).trim()))];
+    if (!list.length || list.some(x => !PROJECTS.includes(x))) throw invalid(`projects 至少選一個，且只能是：${PROJECTS.join('、')}`);
+    return PROJECTS.filter(x => list.includes(x)); // 固定順序
+  }
+  // ?project= 過濾：平台｜銀行系統｜mine（我的專案）；回傳 SQL 片段（含「全部專案」的訊息）；兩邊成員的 mine 不過濾
+  function projectFilter(raw, me, col = 'project', withNull = true) {
+    if (!raw) return null;
+    let list;
+    if (raw === 'mine') list = projectsOf(me);
+    else if (PROJECTS.includes(raw)) list = [raw];
+    else throw invalid(`project 需為：${PROJECTS.join('、')}、mine`);
+    if (list.length === PROJECTS.length) return null;
+    return { sql: `(${col} = ?${withNull ? ` OR ${col} IS NULL` : ''})`, args: list };
+  }
   function identity(p, people) {
-    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null };
+    const out = { participantId: p.id, name: p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null, projects: projectsOf(p) };
     if (p.kind === 'ai') {
       out.ownerParticipantId = p.owner_id;
       out.ownerName = people.get(p.owner_id)?.name ?? null;
@@ -142,6 +164,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
         .sort((a, b) => a.created_at.localeCompare(b.created_at))
         .map(r => ({ participantId: r.id, name: r.name, role: r.role, shortCode: r.code })),
       replyToMessageId: m.reply_to,
+      project: m.project || null,
       file: m.file_id ? fileView(filesById.get(m.file_id), m.file_id) : null,
       createdAt: m.created_at,
     }));
@@ -266,6 +289,16 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     }
     recipientIds.delete(me.id);
 
+    // 專案：不帶＝回覆時繼承被回覆者的專案，否則取發文者的單一專案（兩邊成員＝全部專案）；'all'＝全部專案
+    const mine = projectsOf(me);
+    let project;
+    if (body.project === undefined || body.project === null || body.project === '') {
+      project = replyTo ? (replyTo.project || null) : (mine.length === 1 ? mine[0] : null);
+    } else if (body.project === 'all') project = null;
+    else if (PROJECTS.includes(body.project)) {
+      if (!mine.includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，只能發自己專案或全部專案（project: "all"）的訊息。');
+      project = body.project;
+    } else throw invalid(`project 需為：${PROJECTS.join('、')}、all`);
     const id = randId('msg');
     const createdAt = nowIso();
     const reasons = new Map();
@@ -274,8 +307,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       reasons.set(replyTo.author_id, [...(reasons.get(replyTo.author_id) || []), 'reply']);
     }
     const stmts = [[
-      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt]]];
+      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt, project]]];
     for (const rid of recipientIds) stmts.push(['INSERT INTO message_recipients (message_id, participant_id) VALUES (?,?)', [id, rid]]);
     for (const [rid, rs] of reasons) {
       stmts.push(['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)',
@@ -306,17 +339,20 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const after = url.searchParams.get('after');
     const before = url.searchParams.get('before');
     let rows, hasMore, olderCursor = null, nextCursor;
+    const pf = projectFilter(url.searchParams.get('project'), me);
+    const pfSql = pf ? ` AND ${pf.sql}` : '', pfArgs = pf ? pf.args : [];
 
     if (after) {
       const s = decodeCursor(after);
-      rows = await db.all('SELECT * FROM messages WHERE seq > ? ORDER BY seq LIMIT ?', s, limit + 1);
+      rows = await db.all(`SELECT * FROM messages WHERE seq > ?${pfSql} ORDER BY seq LIMIT ?`, s, ...pfArgs, limit + 1);
       hasMore = rows.length > limit;
       if (hasMore) rows = rows.slice(0, limit);
-      nextCursor = encodeCursor(rows.length ? rows[rows.length - 1].seq : s);
+      // 過濾後沒有更多符合的訊息時，游標直接推到目前最新，不用每次重掃不相關的訊息
+      nextCursor = encodeCursor(hasMore || !pf ? (rows.length ? rows[rows.length - 1].seq : s) : (await db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM messages')).s);
     } else {
       const maxSeq = (await db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM messages')).s;
       const upper = before ? decodeCursor(before) : maxSeq + 1;
-      rows = await db.all('SELECT * FROM messages WHERE seq < ? ORDER BY seq DESC LIMIT ?', upper, limit + 1);
+      rows = await db.all(`SELECT * FROM messages WHERE seq < ?${pfSql} ORDER BY seq DESC LIMIT ?`, upper, ...pfArgs, limit + 1);
       hasMore = rows.length > limit;
       if (hasMore) rows = rows.slice(0, limit);
       rows.reverse();
@@ -451,9 +487,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const id = randId('p');
     invalidatePeople();
     await db.run(`INSERT INTO participants (id, kind, name, role, role_key, code, owner_id, duties, style, autonomy, must_confirm, handoff,
-      env, avatar, token, token_expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      env, avatar, token, token_expires_at, created_at, updated_at, projects) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, 'ai', name, s.role, s.roleKey, await newCode(), me.id, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff,
-      s.environment, s.avatar, newToken(), Date.now() + AI_TOKEN_TTL_MS, ts, ts);
+      s.environment, s.avatar, newToken(), Date.now() + AI_TOKEN_TTL_MS, ts, ts,
+      body.projects !== undefined ? readProjects(body.projects).join(',') : projectsOf(me).join(','));
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', id), await peopleMap(ctx));
   }
 
@@ -591,6 +628,7 @@ ${roster}
 - 你只能改自己負責的卡。沒人負責（未指派）的待整理／待處理工作卡可以認領：PATCH ownerId=自己；決策卡與別人負責的卡不行。要改別人的卡、或把工作派給別人，用 POST /api/suggestions 提建議，由人類採用。
 - 卡片內容全體成員都看得到，適用與群組訊息相同的環境限制（不貼內部路徑、檔名、程式碼）。
 - 團隊狀態會優先取自你負責的卡片；沒有卡片時才依訊息開頭標籤推斷。細節見規格 3.10、3.11。
+- 專案：卡片與訊息有 project（平台／銀行系統）。建卡要帶 project（單一專案的你可省略）；訊息預設你的專案、回覆繼承；輪詢可加 project=mine 只讀自己專案與「全部專案」的訊息。細節見規格 3.13。
 
 請先回覆 ${owner.name}：你是否具備 HTTP 與排程能力，然後從「初次接入」第 1 步開始。`;
   }
@@ -666,6 +704,19 @@ ${roster}
     invalidatePeople();
     await db.run('UPDATE participants SET avatar = ?, updated_at = ? WHERE id = ?', avatar, nowIso(), me.id);
     return identity({ ...me, avatar }, await peopleMap(ctx));
+  });
+  // 設定所屬專案：人類改自己，AI 由所屬人類改；至少選一個
+  route('PUT', '/api/participants/:id/projects', async ({ ctx, me, req, params }) => {
+    const people = await peopleMap(ctx);
+    const target = people.get(params.id);
+    if (!target || target.status !== 'active' || target.kind === 'system') throw new ApiError(404, 'NOT_FOUND', '找不到成員');
+    if (me.kind !== 'human' || !(target.id === me.id || (target.kind === 'ai' && target.owner_id === me.id))) {
+      throw new ApiError(403, 'FORBIDDEN', '只有本人（人類）或 AI 的所屬人類能修改所屬專案。');
+    }
+    const list = readProjects((await readJson(req)).projects);
+    invalidatePeople();
+    await db.run('UPDATE participants SET projects = ?, updated_at = ? WHERE id = ?', list.join(','), nowIso(), target.id);
+    return identity({ ...target, projects: list.join(',') }, await peopleMap(ctx));
   });
   route('GET', '/api/participants', async ({ ctx }) => {
     const people = await peopleMap(ctx);
@@ -982,7 +1033,7 @@ ${roster}
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
-  registerCards({ route, createMessage, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople });
+  registerCards({ route, createMessage, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople });
 
   route('GET', '/api/team-status', ({ ctx }) => teamStatus(ctx));
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {

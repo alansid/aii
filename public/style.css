@@ -965,3 +965,15 @@ body.drawer-docked #app { padding-right: 400px; }
 }
 
 .handover-chain { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); font-size: 13px; }
+
+/* ===== C-111 專案 ===== */
+.proj-switch { padding: 0 4px 8px; }
+.proj-fixed { display: inline-block; padding: 4px 10px; border-radius: 8px; background: var(--surface-2); color: var(--muted); font-size: 13px; }
+.ptag { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 500; line-height: 20px; vertical-align: middle; }
+.ptag[data-p="平台"] { background: var(--human-bg); color: var(--human-text); }
+.ptag[data-p="銀行系統"] { background: var(--ai-bg); color: var(--ai-text); }
+.proj-sel { min-height: 44px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); padding: 0 8px; font: inherit; font-size: 13px; max-width: 120px; }
+.proj-rows { display: grid; gap: 6px; }
+.proj-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.proj-row b { flex-basis: 100%; font-size: 13px; }
+.chk { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; cursor: pointer; font-size: 14px; }

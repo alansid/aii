@@ -33,6 +33,8 @@ const rid = () => 'req_c' + (++n);
   try {
     const liu = (await call(null, '/api/join', 'POST', { name: '劉昱志', role: 'UX' })).body;
     const percy = (await call(null, '/api/join', 'POST', { name: 'Percy', role: 'PO' })).body;
+    // 專案：卡片必填專案；測試成員設成單一專案（平台），AI 沿用所屬人類的專案
+    await call(liu.token, `/api/participants/${liu.participant.participantId}/projects`, 'PUT', { projects: ['平台'] });
     const r = ROLES.find(x => x.key === 'PG');
     const mk = name => call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PG', role: r.role, name, duties: r.duties,
       style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff }).then(x => x.body);
