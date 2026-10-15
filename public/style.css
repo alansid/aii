@@ -1195,3 +1195,11 @@ body.drawer-docked #app { padding-right: 400px; }
 
 /* ===== C-142 側欄底部：移除殘留的底部區塊；選單太長時在選單內捲動 ===== */
 .sidebar .side-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* ===== C-143 進階設定「所屬專案」：每人一列，勾選文字不拆字 ===== */
+.proj-rows { gap: 0; }
+.proj-row { flex-wrap: wrap; gap: 0 12px; padding: 0 4px; min-height: 48px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+.proj-row b { flex: 1 1 120px; min-width: 0; flex-basis: auto; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chk { flex: none; white-space: nowrap; min-height: 44px; padding: 0 4px; gap: 6px; }
+.chk input { width: 18px; height: 18px; }
+@media (max-width: 520px) { .proj-row b { flex-basis: 100%; padding-top: 6px; min-height: 0; } .proj-row .chk { min-height: 44px; } }
