@@ -576,6 +576,7 @@
     $('#messages').innerHTML = older + (list.length
       ? list.map(messageHtml).join('')
       : `<div class="empty">${filtering() ? '沒有符合篩選條件的訊息。' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。'}</div>`);
+    syncScrollbar();
     if (toBottom) scrollBottom();
   }
 
@@ -685,9 +686,12 @@
   const mentionList = $('#mention-list');
   let mentionState = null;
 
+  // 訊息區有捲軸時，輸入區右邊多留同寬度，兩者左右邊界才會對齊
+  const syncScrollbar = () => { const m = $('#messages'); document.documentElement.style.setProperty('--sbw', (m.offsetWidth - m.clientWidth) + 'px'); };
+  new ResizeObserver(syncScrollbar).observe($('#messages')); window.addEventListener('resize', syncScrollbar);
   function autoGrow() {
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight + 2, window.innerHeight * 0.4) + 'px';
+    input.style.height = Math.max(44, Math.min(input.scrollHeight + 2, window.innerHeight * 0.4)) + 'px';
   }
 
   function updateMention() {
