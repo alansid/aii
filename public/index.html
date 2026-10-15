@@ -54,12 +54,13 @@
       </div>
       <div id="me-line" class="me-card"></div>
       <div class="proj-switch" aria-label="專案"></div>
+      <div class="side-label">主功能</div>
       <nav class="side-nav" aria-label="主要功能">
-        <button type="button" data-nav="messages" aria-current="page"><span aria-hidden="true">💬</span>訊息</button>
-        <button type="button" data-nav="inbox"><span aria-hidden="true">📥</span>收件匣 <span class="badge inbox-badge" hidden></span></button>
-        <button type="button" data-nav="work"><span aria-hidden="true">📋</span>工作</button>
+        <button type="button" data-nav="messages" aria-current="page"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
+        <button type="button" data-nav="inbox"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" data-nav="work"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="14" rx="1.5"/><rect x="11" y="3" width="6" height="9" rx="1.5"/></svg>工作</button>
         <div class="nav-group" data-team-group>
-          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><span aria-hidden="true">👥</span>團隊<span class="chev" aria-hidden="true">▸</span></button>
+          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="14" cy="8" r="2.4"/><path d="M2 16c0-3 2.4-5 5-5s5 2 5 5M12 14c.6-1.6 1.8-2.4 3-2.4 1.6 0 3 1.2 3 3.4"/></svg>團隊<span class="chev" aria-hidden="true">▸</span></button>
           <div class="nav-sub" hidden>
           <button type="button" data-team-go="status">團隊狀態</button>
           <button type="button" data-team-go="memory">AI 工作記憶</button>
@@ -67,7 +68,7 @@
           <button type="button" data-team-go="ai">我的 AI</button>
         </div>
         </div>
-        <button type="button" data-open="files"><span aria-hidden="true">📄</span>文件</button>
+        <button type="button" data-open="files"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
       </nav>
       <section class="side-team" aria-label="團隊狀態">
         <div class="side-title"><span>團隊狀態</span><button type="button" class="link small" data-team>詳細</button></div>
@@ -142,11 +143,11 @@
       <div class="sheet-panel" role="dialog" aria-modal="true" aria-label="選單">
         <div class="sheet-grab" aria-hidden="true"></div>
         <div id="sheet-me" class="sheet-me"></div>
-        <button type="button" data-nav="messages">訊息</button>
-        <button type="button" data-nav="inbox">收件匣 <span class="badge inbox-badge" hidden></span></button>
-        <button type="button" data-nav="work">工作</button>
+        <button type="button" data-nav="messages"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
+        <button type="button" data-nav="inbox"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" data-nav="work"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="14" rx="1.5"/><rect x="11" y="3" width="6" height="9" rx="1.5"/></svg>工作</button>
         <div class="nav-group" data-team-group>
-          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false">團隊<span class="chev" aria-hidden="true">▸</span></button>
+          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="14" cy="8" r="2.4"/><path d="M2 16c0-3 2.4-5 5-5s5 2 5 5M12 14c.6-1.6 1.8-2.4 3-2.4 1.6 0 3 1.2 3 3.4"/></svg>團隊<span class="chev" aria-hidden="true">▸</span></button>
           <div class="nav-sub" hidden>
           <button type="button" data-team-go="status">團隊狀態</button>
           <button type="button" data-team-go="memory">AI 工作記憶</button>
@@ -154,7 +155,7 @@
           <button type="button" data-team-go="ai">我的 AI</button>
         </div>
         </div>
-        <button type="button" data-open="files">文件</button>
+        <button type="button" data-open="files"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
         <button type="button" data-open="api">API 資訊</button>
         <button type="button" data-open="settings">進階設定</button>
         <button type="button" data-open="qr">QR Code</button>

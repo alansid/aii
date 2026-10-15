@@ -1129,3 +1129,52 @@ body.drawer-docked #app { padding-right: 400px; }
 
 /* UX 樣式：縮排 14px＋左側細線 */
 .nav-sub { padding-left: 14px; margin-left: 14px; border-left: 1px solid var(--border); }
+
+/* ===== C-137 側欄配色與視覺層次 ===== */
+:root { --sb-bg: #e9edf4; --sb-card: #ffffff; --sb-line: #cdd5e1; --sb-text: #1f2937; --sb-muted: #4b5563; --sb-active: #1d4ed8; --sb-bar: #2563eb; --sb-danger: #b91c1c; --sb-on: #16a34a; --sb-warn: #b45309; --sb-off: #6b7280; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --sb-bg: #0f172a; --sb-card: #1e293b; --sb-line: #334155; --sb-text: #e5e7eb; --sb-muted: #9ca3af; --sb-active: #93c5fd; --sb-bar: #60a5fa; --sb-danger: #fca5a5; --sb-on: #4ade80; --sb-warn: #fbbf24; --sb-off: #9ca3af; } }
+:root[data-theme="dark"] { --sb-bg: #0f172a; --sb-card: #1e293b; --sb-line: #334155; --sb-text: #e5e7eb; --sb-muted: #9ca3af; --sb-active: #93c5fd; --sb-bar: #60a5fa; --sb-danger: #fca5a5; --sb-on: #4ade80; --sb-warn: #fbbf24; --sb-off: #9ca3af; }
+.sidebar { background: var(--sb-bg); color: var(--sb-text); border-right: 1px solid var(--sb-line); }
+.sidebar .muted, .sidebar .me-info .muted { color: var(--sb-muted); }
+.sidebar .me-card { background: var(--sb-card); border: 1px solid var(--sb-line); }
+.side-label, .sidebar .side-title { font-size: 11px; letter-spacing: .08em; font-weight: 700; color: var(--sb-muted); padding: 10px 12px 0; text-transform: none; }
+.sidebar .side-title { display: flex; justify-content: space-between; align-items: center; }
+.sidebar .side-title .link { letter-spacing: 0; color: var(--sb-active); }
+.side-nav button, .nav-parent { display: flex; align-items: center; gap: 12px; min-height: 44px; color: var(--sb-text); }
+.side-nav button .ni-ico, .sheet-panel button .ni-ico { flex: none; }
+.side-nav button:hover { background: color-mix(in srgb, var(--sb-card) 55%, transparent); }
+.side-nav button[aria-current="page"] { background: var(--sb-card); color: var(--sb-active); font-weight: 700; box-shadow: inset 3px 0 0 var(--sb-bar); }
+.nav-parent .chev { margin-left: auto; font-size: 16px; font-weight: 700; color: var(--sb-text); width: 20px; text-align: center; }
+.nav-sub { border-left-color: var(--sb-line); }
+.nav-sub button[aria-current="page"] { background: var(--sb-card); color: var(--sb-active); }
+.sidebar .proj-switch .seg-scope { background: color-mix(in srgb, var(--sb-line) 60%, transparent); }
+.sidebar .side-foot { border-top: 1px solid var(--sb-line); }
+.sidebar .side-foot button { color: var(--sb-muted); }
+.sidebar .side-foot .logout-btn { color: var(--sb-danger); }
+/* 團隊狀態清單：卡片、內部捲動、列高 48px */
+.sidebar .side-team { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.sidebar .team-list { background: var(--sb-card); border: 1px solid var(--sb-line); border-radius: 10px; padding: 4px 8px; overflow-y: auto; min-height: 0; flex: 1; gap: 0; }
+.sidebar .team-row { min-height: 48px; padding: 4px 6px; color: var(--sb-text); }
+.sidebar .team-row:hover { background: color-mix(in srgb, var(--sb-bg) 70%, transparent); }
+.sidebar .team-row-main span { color: var(--sb-muted); font-size: 12px; }
+/* 在線點：實心綠＝在線、空心琥珀環＝可能斷線、空心灰＝離線（形狀不同，不只靠顏色） */
+.sidebar .team-row .dot { width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; }
+.sidebar .team-row.h-green .dot { background: var(--sb-on); }
+.sidebar .team-row.h-yellow .dot { background: transparent; border: 2px solid var(--sb-warn); }
+.sidebar .team-row.h-grey .dot { background: transparent; border: 2px solid var(--sb-off); }
+.sidebar .team-row.h-red .dot { background: var(--sb-danger); }
+.sidebar .team-row.h-yellow .team-row-main span { color: var(--sb-warn); }
+/* 狀態標籤：統一 22px 膠囊 */
+.st { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.st-blocked { background: #fee2e2; color: #991b1b; }
+.st-waiting { background: #fef3c7; color: #92400e; }
+.st-todo { background: #dbeafe; color: #1e40af; }
+.st-working { background: #e5e7eb; color: #374151; }
+.st-idle { background: transparent; color: var(--sb-muted); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .st-blocked { background: #450a0a; color: #fecaca; } :root:not([data-theme="light"]) .st-waiting { background: #451a03; color: #fde68a; } :root:not([data-theme="light"]) .st-todo { background: #172554; color: #bfdbfe; } :root:not([data-theme="light"]) .st-working { background: #334155; color: #e2e8f0; } }
+:root[data-theme="dark"] .st-blocked { background: #450a0a; color: #fecaca; } :root[data-theme="dark"] .st-waiting { background: #451a03; color: #fde68a; } :root[data-theme="dark"] .st-todo { background: #172554; color: #bfdbfe; } :root[data-theme="dark"] .st-working { background: #334155; color: #e2e8f0; }
+/* 手機選單圖示 22px */
+.sheet-panel > button, .sheet-panel .nav-parent { display: flex; align-items: center; gap: 12px; }
+/* 「團隊」的展開箭頭原本被 .side-nav button > span[aria-hidden] 隱藏（昱志截圖看不出可展開的原因） */
+.side-nav .nav-parent > span.chev { display: inline-block; }
+.sidebar .side-foot .logout-btn { color: var(--sb-danger) !important; } /* 對比 ≥4.5:1（淺 #b91c1c、深 #fca5a5） */
