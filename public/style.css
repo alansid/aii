@@ -980,9 +980,14 @@ body.drawer-docked #app { padding-right: 400px; }
 
 /* C-123 看板：桌面版固定在畫面內捲動，左右捲軸一直看得到；欄位內卡片多時上下捲 */
 @media (min-width: 900px) {
-  .board { max-height: calc(100vh - 220px); max-height: calc(100dvh - 220px); min-height: 280px; overflow: auto; padding: 0 0 12px; align-items: flex-start; scroll-padding: 12px; }
-  .board::-webkit-scrollbar { height: 12px; width: 12px; }
-  .board::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+  .page-work.is-board { overflow: hidden; }
+  .page-work.is-board > .board { flex: 1 1 0; min-height: 0; max-height: none; overflow-x: auto; overflow-y: hidden; padding: 0 0 4px; align-items: stretch; scroll-padding: 12px; }
+  .page-work.is-board .bcol { max-height: 100%; overflow-y: auto; align-content: start; }
+  .page-work.is-board .bcol-head { position: sticky; top: -10px; z-index: 1; background: inherit; padding: 4px 0; }
+  .board, .bcol { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .board::-webkit-scrollbar, .bcol::-webkit-scrollbar { height: 8px; width: 8px; }
+  .board::-webkit-scrollbar-thumb, .bcol::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .board::-webkit-scrollbar-track, .bcol::-webkit-scrollbar-track, .board::-webkit-scrollbar-corner { background: transparent; }
 }
 
 /* ===== C-126 手機訊息頁（≤600px）===== */
@@ -1187,3 +1192,6 @@ body.drawer-docked #app { padding-right: 400px; }
 /* ===== C-141 ②：側欄「設定」兩層選單 ===== */
 .nav-sub .nav-logout { color: var(--sb-danger, #b91c1c); border-top: 1px solid var(--sb-line, #cdd5e1); border-radius: 0; margin-top: 4px; }
 .sidebar .side-nav { overflow-y: auto; }
+
+/* ===== C-142 側欄底部：移除殘留的底部區塊；選單太長時在選單內捲動 ===== */
+.sidebar .side-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; }

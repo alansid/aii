@@ -1395,6 +1395,7 @@
   function renderWork() {
     const box = $('#page-work');
     if (!['work', 'inbox'].includes(state.page) || !work.loaded) return;
+    box.classList.remove('is-board');
     if (state.page === 'inbox') { box.innerHTML = inboxHtml(); return; }
     const all = visibleCards();
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
@@ -1414,6 +1415,7 @@
         <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策'].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
       ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
+    box.classList.toggle('is-board', work.view === 'B'); // 看板：高度＝頁面剩餘高度，欄內各自捲動（C-142）
     if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
