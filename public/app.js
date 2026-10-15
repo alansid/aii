@@ -2037,14 +2037,17 @@
     const text = m.text, mineR = repliesOf(m.messageId).filter(isMine);
     const pend = authPending.get(m.messageId);
     const rows = [];
-    const shas = [...new Set(text.match(SHA40) || [])];
+    // Push 授權列只給「程式開發（PG）AI 發的 [需確認]」；[完成]／[進度]／[通知] 就算含完整 SHA 也不顯示（C-140：事後會被誤按成再授權一次）
+    const authorPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG';
+    const pushAsk = authorPG && /^\s*\[需確認\]/.test(text);
+    const shas = pushAsk ? [...new Set(text.match(SHA40) || [])] : [];
     for (const sha of shas) {
       const sent = mineR.find(r => r.text.includes('同意 push：' + sha));
       if (sent) rows.push(`<div class="auth-row sent"><b>已授權 Push · ${shortTime(sent.createdAt)}</b><span class="muted small">僅限 ${sha.slice(0, 7)}…${sha.slice(-4)}</span></div>`);
       else if (pend && pend.key === 'push:' + sha) rows.push(authConfirm(m, pend));
       else rows.push(`<div class="auth-row"><span class="auth-title">授權此 SHA（${sha.slice(0, 7)}…${sha.slice(-4)}）</span>${authBtn(m, 'push', '同意 Push', sha)}</div>`);
     }
-    if (!shas.length && /push/i.test(text) && /\b(?=[0-9a-f]*\d)[0-9a-f]{7,39}\b/.test(text) && !mineR.some(r => /同意 push/.test(r.text))) {
+    if (pushAsk && !shas.length && /push/i.test(text) &&/\b(?=[0-9a-f]*\d)[0-9a-f]{7,39}\b/.test(text) && !mineR.some(r => /同意 push/.test(r.text))) {
       rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
     }
     if (!shas.length && /^\s*\[需確認\]/.test(text)) {
