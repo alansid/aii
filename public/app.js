@@ -2495,7 +2495,20 @@
     if (file) openUpload(file);
   });
 
+  // C-128：在輸入框 Ctrl+V 貼上截圖 → 走同一個上傳流程（先預覽、可取消、每張都要重新勾聲明）
+  input.addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.items || [])].filter(it => it.kind === 'file' && /^image\/(png|jpeg)$/.test(it.type)).map(it => it.getAsFile()).filter(Boolean);
+    if (!files.length) return; // 純文字照舊貼上
+    e.preventDefault();
+    if (files.length > 1) toast('一次只能貼一張截圖，先處理第一張');
+    const f = files[0], ext = f.type === 'image/jpeg' ? 'jpg' : 'png', d = new Date(), p = n => String(n).padStart(2, '0');
+    const name = `截圖-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+    openUpload(new File([f], name, { type: f.type }));
+  });
+
   function openUpload(file) {
+    const isImg = /^image\//.test(file.type);
+    const previewUrl = isImg ? URL.createObjectURL(file) : '';
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     let problem = '';
     if (!FILE_EXTS.includes(ext)) problem = `不允許的檔案類型「.${ext}」，只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg。`;
@@ -2503,15 +2516,17 @@
     const body = openModal('上傳文件', `
       <div class="file-box"><span class="file-icon">${fileIcon(ext)}</span>
         <div class="file-info"><b class="file-name">${esc(file.name)}</b><span class="muted small">${fmtBytes(file.size)}</span></div></div>
+      ${isImg && !problem ? `<img class="up-preview" alt="截圖預覽" src="${previewUrl}">` : ''}
       ${problem ? `<div class="warn-box red">${esc(problem)}</div>` : `
-      <div class="warn-box">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。</div>
+      <div class="warn-box">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。${isImg ? '截圖請先確認沒有客戶資料（尤其行內畫面）。' : ''}</div>
       <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><textarea id="up-note" rows="3" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></label>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>
       <p class="error" id="up-error" role="alert"></p>`}`, problem ? {} : {
       foot: `<button class="btn" type="button" data-close>取消</button>
              <button class="btn primary" type="button" id="up-go" disabled>上傳</button>`,
     });
-    if (problem) return;
+    body.querySelector('.up-preview')?.addEventListener('load', () => URL.revokeObjectURL(previewUrl));
+    if (problem) { if (previewUrl) URL.revokeObjectURL(previewUrl); return; }
     const go = body.modal.querySelector('#up-go');
     body.querySelector('#up-declare').addEventListener('change', e => { go.disabled = !e.target.checked; });
     go.addEventListener('click', async () => {
