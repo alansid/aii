@@ -2601,6 +2601,42 @@
     openUpload(new File([f], name, { type: f.type }));
   });
 
+  // @ 成員選單（上傳視窗的附註欄用）：輸入 @ 跳出清單，↑↓ 移動、Enter／Tab／點選插入、Esc 關閉
+  function attachMention(ta, list) {
+    let st = null;
+    const close = () => { st = null; list.hidden = true; };
+    const render = () => {
+      list.innerHTML = st.items.map((p, i) => `<li role="option" data-i="${i}" aria-selected="${i === st.index}"><span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.name)}</b><span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}</li>`).join('');
+      list.hidden = false;
+    };
+    const update = () => {
+      const pos = ta.selectionStart, m = ta.value.slice(0, pos).match(/@([^\s@]*)$/);
+      if (!m) return close();
+      const q = m[1].toLowerCase();
+      const items = [ALL, ...[...state.participants.values()].filter(p => p.participantId !== meId())]
+        .filter(p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q)).slice(0, 8);
+      if (!items.length) return close();
+      st = { start: pos - m[0].length, end: pos, items, index: 0 };
+      render();
+    };
+    const pick = i => {
+      const insert = '@' + st.items[i].name + ' ';
+      ta.value = ta.value.slice(0, st.start) + insert + ta.value.slice(st.end);
+      const caret = st.start + insert.length;
+      close(); ta.focus(); ta.setSelectionRange(caret, caret);
+    };
+    ta.addEventListener('input', update);
+    ta.addEventListener('click', update);
+    ta.addEventListener('blur', () => setTimeout(close, 150));
+    ta.addEventListener('keydown', e => {
+      if (!st || e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); st.index = (st.index + (e.key === 'ArrowDown' ? 1 : st.items.length - 1)) % st.items.length; return render(); }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pick(st.index); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    });
+    list.addEventListener('mousedown', e => { const li = e.target.closest('li'); if (li && st) { e.preventDefault(); pick(Number(li.dataset.i)); } });
+  }
+
   function openUpload(file) {
     const isImg = /^image\//.test(file.type);
     const previewUrl = isImg ? URL.createObjectURL(file) : '';
@@ -2614,7 +2650,7 @@
       ${isImg && !problem ? `<img class="up-preview" alt="截圖預覽" src="${previewUrl}">` : ''}
       ${problem ? `<div class="warn-box red">${esc(problem)}</div>` : `
       <div class="warn-box">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。${isImg ? '截圖請先確認沒有客戶資料（尤其行內畫面）。' : ''}</div>
-      <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><textarea id="up-note" rows="3" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></label>
+      <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea id="up-note" rows="3" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></div></label>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>
       <p class="error" id="up-error" role="alert"></p>`}`, problem ? {} : {
       foot: `<button class="btn" type="button" data-close>取消</button>
@@ -2622,6 +2658,7 @@
     });
     body.querySelector('.up-preview')?.addEventListener('load', () => URL.revokeObjectURL(previewUrl));
     if (problem) { if (previewUrl) URL.revokeObjectURL(previewUrl); return; }
+    attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'));
     const go = body.modal.querySelector('#up-go');
     body.querySelector('#up-declare').addEventListener('change', e => { go.disabled = !e.target.checked; });
     go.addEventListener('click', async () => {

@@ -1075,3 +1075,13 @@ body.drawer-docked #app { padding-right: 400px; }
 .inl-open { justify-self: start; }
 .sugg-row { flex-wrap: wrap; }
 @media (max-width: 600px) { .inl-text { font-size: 16px; } .inl-actions .btn, .inl-open { min-height: 44px; } }
+
+/* C-131 上傳視窗附註的 @ 選單 */
+.modal .input-wrap { position: relative; }
+.modal .mention-list { z-index: 30; }
+
+/* 輸入列對齊：附件、標籤、專案、送出同高（昱志截圖「有點跑版」） */
+.composer-row .attach, .composer-row .tag-btn, .composer-row .proj-sel, .composer-row .send { height: 44px; min-height: 44px; box-sizing: border-box; margin: 0; }
+.composer-row .tag-btn { padding: 0 14px; display: inline-flex; align-items: center; line-height: 1; }
+.composer-row .proj-sel { padding: 0 10px; }
+.composer-row { align-items: flex-end; }
