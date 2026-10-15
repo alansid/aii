@@ -279,6 +279,25 @@ const rid = () => 'req_c' + (++n);
     assert.equal(await nPend(), 0, '人類回覆後該則通知自動已讀');
     const aiNotif = (await call(qa.token, '/api/notifications?status=pending&limit=100')).body.items.filter(n => n.messageId !== ask.messageId);
     assert.ok(aiNotif.some(n => (n.preview || '').startsWith('[回覆] 可以')), 'AI 收到的回覆通知仍是待處理（不替 AI 自動 ACK）');
+    // ===== C-139：決策卡暫緩／恢復 =====
+    const df = (await call(pg.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: '暫緩測試', deciderId: liuId })).body;
+    assert.equal((await call(percy.token, `/api/cards/${df.cardId}/defer`, 'POST', { reason: 'x' })).body.error.code, 'NOT_PARTY', '無關的人不能暫緩');
+    assert.equal((await call(qa.token, `/api/cards/${df.cardId}/defer`, 'POST', { reason: 'x' })).body.error.code, 'NOT_PARTY', '無關的 AI 不能暫緩');
+    const wk = (await call(pg.token, '/api/cards', 'POST', { requestId: rid(), title: '一般工作卡' })).body;
+    assert.equal((await call(liu.token, `/api/cards/${wk.cardId}/defer`, 'POST', {})).status, 400, '非決策卡不能暫緩');
+    const dfd = (await call(liu.token, `/api/cards/${df.cardId}/defer`, 'POST', { reason: '等銀行端確認' })).body;
+    assert.equal(dfd.status, '受阻'); assert.ok(dfd.blocker.startsWith('暫緩（') && dfd.blocker.includes('等銀行端確認')); assert.equal(dfd.decision.deferred, true);
+    assert.equal((await call(liu.token, `/api/cards/${df.cardId}/decide`, 'POST', { result: '同意' })).body.error.code, 'NOT_PENDING', '暫緩中不能決定');
+    assert.equal((await call(liu.token, `/api/cards/${df.cardId}/defer`, 'POST', {})).body.error.code, 'NOT_PENDING', '不能重複暫緩');
+    assert.ok((await pend(pg.token)).some(t => t.includes(df.cardId) && t.includes('暫緩（')), '暫緩通知提案人');
+    assert.ok(!(await call(liu.token, '/api/team-status')).body.decisions.some(d => d.cardId === df.cardId), '暫緩後不在待決定清單');
+    assert.equal((await call(percy.token, `/api/cards/${df.cardId}/resume`, 'POST')).body.error.code, 'NOT_PARTY');
+    const rs = (await call(pg.token, `/api/cards/${df.cardId}/resume`, 'POST')).body;
+    assert.equal(rs.status, '待確認'); assert.equal(rs.blocker, ''); assert.equal(rs.decision.deferred, false); assert.equal(rs.waitFor.participantId, liuId);
+    assert.ok((await call(liu.token, '/api/team-status')).body.decisions.some(d => d.cardId === df.cardId), '恢復後回到待決定清單');
+    assert.equal((await call(pg.token, `/api/cards/${df.cardId}/resume`, 'POST')).body.error.code, 'NOT_DEFERRED', '沒暫緩不能恢復');
+    await call(liu.token, `/api/cards/${df.cardId}/decide`, 'POST', { result: '同意' });
+    assert.equal((await call(liu.token, `/api/cards/${df.cardId}/defer`, 'POST', {})).body.error.code, 'DECIDED', '已決定不能暫緩');
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);

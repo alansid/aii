@@ -58,7 +58,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
   const decisionView = (c, people) => ({
     question: c.question || c.title, proposer: ref(people, c.proposer_id), decider: ref(people, c.decider_id),
     recommendation: c.recommendation, options: parseOptions(c), impact: c.impact, afterNext: c.after_next,
-    result: c.decision_result, by: ref(people, c.decision_by), at: c.decision_at, note: c.decision_note,
+    deferred: c.status === '受阻' && !c.decision_result && String(c.blocker).startsWith('暫緩（'), result: c.decision_result, by: ref(people, c.decision_by), at: c.decision_at, note: c.decision_note,
   });
 
   const canEdit = (me, c) => me.kind === 'human' || c.owner_id === me.id || (!c.owner_id && c.created_by === me.id);
@@ -338,6 +338,40 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
       ? (c.proposer_id && people.get(c.proposer_id)?.status === 'active' ? c.proposer_id : c.created_by)
       : (c.proposer_id || c.created_by);
     await notifyCard(ctx, me, c, [back2], result === '要求補充' ? `要求補充：${note}` : `決定「${result}」${note ? '：' + note : ''}`, 'decide');
+    return view(await load(params.id), people);
+  });
+
+  // 暫緩／恢復（C-139）：不新增狀態，沿用「受阻」＋阻塞原因以「暫緩（」開頭。暫緩的決策卡離開待處理清單，恢復後回到「待確認」
+  const DEFER_PREFIX = '暫緩（';
+  const isDeferred = c => c.type === '決策' && c.status === '受阻' && !c.decision_result && String(c.blocker).startsWith(DEFER_PREFIX);
+  function requireDeferParty(me, c) {
+    if (c.type !== '決策') throw invalid('只有決策卡片能暫緩或恢復');
+    if (me.id !== c.decider_id && me.id !== c.proposer_id && me.id !== c.created_by) throw new ApiError(403, 'NOT_PARTY', '只有這張決策卡的決策者或提案人能暫緩或恢復。');
+  }
+  route('POST', '/api/cards/:id/defer', async ({ ctx, me, req, params }) => {
+    const body = await readJson(req);
+    const c = await load(params.id);
+    requireDeferParty(me, c);
+    if (c.decision_result) throw new ApiError(409, 'DECIDED', '這張決策卡片已經決定了，不能暫緩。');
+    if (c.status !== '待確認') throw new ApiError(409, 'NOT_PENDING', '決策卡片要在「待確認」才能暫緩。');
+    if (body.version !== undefined && Number(body.version) !== c.version) throw new ApiError(409, 'CONFLICT', '這張卡片剛被別人修改過，請重新讀取後再試。');
+    const people = await peopleMap(ctx), at = nowIso();
+    const reason = String(body.reason ?? '').trim();
+    const blocker = `${DEFER_PREFIX}${people.get(me.id)?.name || me.name}）${reason ? '：' + reason : ''}`;
+    if (blocker.length > CARD_LIMITS.blocker) throw invalid(`暫緩原因太長（整句上限 ${CARD_LIMITS.blocker} 字）`);
+    await save(c, { status: '受阻', blocker, wait_for_id: c.decider_id }, ['狀態 待確認 → 受阻', blocker], me, at);
+    invalidatePeople();
+    await notifyCard(ctx, me, c, [c.proposer_id || c.created_by, c.decider_id], blocker, 'defer');
+    return view(await load(params.id), people);
+  });
+  route('POST', '/api/cards/:id/resume', async ({ ctx, me, params }) => {
+    const c = await load(params.id);
+    requireDeferParty(me, c);
+    if (!isDeferred(c)) throw new ApiError(409, 'NOT_DEFERRED', '這張決策卡片目前不是暫緩狀態。');
+    const people = await peopleMap(ctx), at = nowIso();
+    await save(c, { status: '待確認', blocker: '', wait_for_id: c.decider_id }, ['狀態 受阻 → 待確認', '恢復（結束暫緩）'], me, at);
+    invalidatePeople();
+    await notifyCard(ctx, me, c, [c.proposer_id || c.created_by, c.decider_id], '已恢復，回到待確認', 'resume');
     return view(await load(params.id), people);
   });
 

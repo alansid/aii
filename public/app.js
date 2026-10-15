@@ -612,7 +612,7 @@
     }
   }
 
-  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (t) quickState(t.dataset.qText).text = t.value; });
+  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (!t) return; quickState(t.dataset.qText).text = t.value; const sb = t.closest('[data-q-root]')?.querySelector('[data-q-send]'); if (sb && cardOfConfirm({ messageId: t.dataset.qText })) sb.disabled = !t.value.trim(); });
   $('#messages').addEventListener('keydown', e => {
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
     e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
@@ -1099,6 +1099,12 @@
   const optionsOf = c => (c.decision?.options?.length ? c.decision.options : ['同意']);
   // 這張決策卡現在是在等「我」做決定
   const decidingMe = c => c.type === '決策' && c.status === '待確認' && !c.decision?.result && c.decision?.decider?.participantId === meId() && isMeRef(c.waitFor);
+  // [需確認] 訊息裡提到「正在等我決定的決策卡」→ 以決策卡為準，訊息不再單獨列出（C-139）
+  const cardOfConfirm = d => {
+    const text = state.byId.get(d.messageId)?.text || d.title || '';
+    for (const id of text.match(/C-\d+/g) || []) { const c = work.cards.get(id); if (c && (decidingMe(c) || (c.decision?.deferred && c.decision.decider?.participantId === meId()))) return c; }
+    return null;
+  };
   work.note = null; // { id, kind: '不同意' | '要求補充', text }
   // ---------- C-130 行內輸入：待你處理清單與卡片抽屜共用同一個元件 ----------
   // key 前綴：m:訊息編號（[需確認] 訊息）、c:卡號（決策卡）、s:建議編號、k:卡號（一般卡片）
@@ -1115,11 +1121,12 @@
       hint = '想說明或留言給提案的 AI（Ctrl+Enter 留言）';
       btns = inlBtn(key, 'sugg-note', '只留言', { need: true, primary: true }) + inlBtn(key, 'sugg-skip', '略過並附原因', { need: true });
     } else if (kind === 'decision') {
-      hint = '說明可選填；不同意或要求補充一定要寫（Ctrl+Enter 只送意見）';
+      hint = '說明可選填；不同意或要求補充一定要寫；「暫緩」可寫原因（Ctrl+Enter 只送意見）';
       btns = optionsOf(c).map((o, i) => inlBtn(key, 'decide', `決定「${esc(o)}」`, { cls: i === 0 ? 'ok' : '', result: o })).join('')
         + inlBtn(key, 'opinion', '只送意見', { need: true, primary: true })
         + inlBtn(key, 'decide', '不同意', { need: true, result: '不同意' })
-        + inlBtn(key, 'decide', '要求補充', { need: true, result: '要求補充' });
+        + inlBtn(key, 'decide', '要求補充', { need: true, result: '要求補充' })
+        + inlBtn(key, 'defer', '暫緩');
     }
     return `<div class="inl" data-inl-root="${esc(key)}">
       <textarea class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
@@ -1182,6 +1189,10 @@
         const r = await api(`/api/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { result, note: text, version: c?.version } });
         work.cards.set(id, r);
         toast(result === '要求補充' ? `已請 ${r.waitFor?.name || '提案人'} 補充` : `已記錄決定：${result}`);
+      } else if (act === 'defer') {
+        const c = work.cards.get(id);
+        work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/defer`, { method: 'POST', body: { reason: text, version: c?.version } }));
+        toast('已暫緩，會從收件匣移出；要繼續請到「工作」按「恢復」');
       } else if (act === 'sugg-note' || act === 'sugg-skip') {
         const g = (work.sugg || []).find(x => x.suggestionId === id);
         if (!g) throw new Error('這則建議已經被處理過了');
@@ -1190,7 +1201,7 @@
         await post({ text: `[回覆] ${act === 'sugg-skip' ? '略過了你的建議' : '關於你的建議'}（${what}）：${text}`, ...(g.card?.cardId ? { cardId: g.card.cardId } : {}), recipientIds: others([g.from?.participantId]) });
       }
       delete work.drafts[key]; work.openInl = null;
-      if (act !== 'decide') toast('已送出');
+      if (act !== 'decide' && act !== 'defer') toast('已送出');
       await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]);
       updateTodoBadge(); renderWork();
       if (work.openId) openCard(work.openId);
@@ -1210,6 +1221,10 @@
   function decisionStatus(c) {
     const d = c.decision;
     if (d.result) return `<div class="dresult"><b>決定：${esc(d.result)}</b><span class="muted small">${esc(d.by?.name || '')} · ${shortTime(d.at)}${d.note ? ' · ' + esc(d.note) : ''}</span></div>`;
+    if (d.deferred) {
+      const mine = [d.decider?.participantId, d.proposer?.participantId].includes(meId());
+      return `<div class="dresult"><b>暫緩中</b><span class="muted small">${esc(c.blocker)}</span>${mine ? `<button type="button" class="btn small primary" data-resume="${esc(c.cardId)}">恢復</button>` : ''}</div>`;
+    }
     if (decidingMe(c)) return decisionActions(c);
     if (c.status !== '待確認') return '';
     const who = c.waitFor?.name || d.decider?.name;
@@ -1444,7 +1459,7 @@
   async function loadNotes() { work.notes = (await api('/api/notifications?status=pending&limit=100')).items; }
   const ackNotes = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
   // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
-  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !dup.has(n.messageId)); };
+  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview })); };
   function notesHtml() {
     const list = noteList();
     const reason = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
@@ -1470,7 +1485,7 @@
   }
 
   // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議（C-107）
-  const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId);
+  const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId && !cardOfConfirm(d));
   const todoCount = () => (state.team ? myDecisions(state.team).length : 0) + (work.sugg?.length || 0);
   function updateTodoBadge() {
     const n = todoCount();
@@ -1648,6 +1663,12 @@
     const t = e.target;
     const dc = t.closest('[data-decide]');
     if (dc) { decideCard(dc.dataset.decide, dc.dataset.result, ''); return true; }
+    const rsm = t.closest('[data-resume]');
+    if (rsm) {
+      const id = rsm.dataset.resume; rsm.disabled = true;
+      api(`/api/cards/${encodeURIComponent(id)}/resume`, { method: 'POST', body: {} }).then(async r => { work.cards.set(id, r); toast('已恢復，回到待確認'); await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]); updateTodoBadge(); renderWork(); if (work.openId) openCard(work.openId); }).catch(err => { rsm.disabled = false; toast(err.message); });
+      return true;
+    }
     const open = t.closest('[data-note-open]');
     if (open) { work.note = { id: open.dataset.noteOpen, kind: open.dataset.kind, text: '' }; refreshDecisionUi(); return true; }
     if (t.closest('[data-note-cancel]')) { work.note = null; refreshDecisionUi(); return true; }
@@ -1988,6 +2009,16 @@
   }
   function quickHtml(m) {
     const q = quickState(m.messageId);
+    const dcard = cardOfConfirm({ messageId: m.messageId });
+    if (dcard?.decision.deferred) return `<div class="auth-row quick" data-q-root="${esc(m.messageId)}"><p class="small muted">決策卡 ${esc(dcard.cardId)} 暫緩中。要繼續請到「工作」打開決策卡按「恢復」。</p></div>`;
+    if (dcard) { // 這則在講一張等我決定的決策卡：只送意見，或暫緩；選項與「同意」到決策卡上按
+      const id = esc(m.messageId);
+      return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(dcard.cardId)} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
+      <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只送意見）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只送意見'}</button>
+        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button></div>
+      ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
+    }
     const opts = q.noOpts ? [] : parseOptions(m.text);
     const id = esc(m.messageId);
     const sendLabel = opts.length ? (q.sel ? `選 ${esc(q.sel)} 並送出` : '先選一個選項') : '同意照辦';
@@ -2004,6 +2035,19 @@
   async function quickSend(id, kind) {
     const m = state.byId.get(id), q = quickState(id);
     if (!m || q.busy) return;
+    const dcard = cardOfConfirm({ messageId: id });
+    if (dcard) {
+      if (kind === 'send' && !q.text.trim()) return;
+      q.busy = true; q.error = ''; refreshMsg(id);
+      try {
+        if (kind === 'hold') work.cards.set(dcard.cardId, await api(`/api/cards/${encodeURIComponent(dcard.cardId)}/defer`, { method: 'POST', body: { reason: q.text.trim(), version: dcard.version } }));
+        else onNewMessage(await api('/api/messages', { method: 'POST', body: { text: `[回覆] ${dcard.cardId}（決策意見）：${q.text.trim()}`, requestId: newRequestId(), replyToMessageId: id, cardId: dcard.cardId, recipientIds: [m.author.participantId] } }));
+        quickMap.delete(id); refreshMsg(id);
+        toast(kind === 'hold' ? '已暫緩，決策卡已移出收件匣' : '已送出');
+        await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]); updateTodoBadge();
+      } catch (err) { q.busy = false; q.error = err.message; refreshMsg(id); }
+      return;
+    }
     const opts = q.noOpts ? [] : parseOptions(m.text);
     if (kind === 'send' && opts.length && !q.sel) return;
     const head = kind === 'hold' ? '暫緩處理' : opts.length ? `選 ${q.sel}` : '同意照辦';
@@ -2192,7 +2236,7 @@
   // ---------- 團隊狀態 ----------
   const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定', todo: '待處理' };
   // 「等你決定」：訊息型的所有人都看；決策卡只給指定的決策者看
-  const myDecisions = t => t.decisions.filter(d => !d.cardId || d.deciderId === meId());
+  const myDecisions = t => t.decisions.filter(d => (!d.cardId && !cardOfConfirm(d)) || d.deciderId === meId());
   const agoText = iso => {
     if (!iso) return '從未上線';
     const min = Math.floor((Date.now() - new Date(iso)) / 60000);
