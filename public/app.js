@@ -525,7 +525,7 @@
     body.modal.querySelector('#fs-clear').onclick = () => { setFilter({ scope: 'all', member: '', tag: '' }); closeModal(); };
   }
   $('#f-open').onclick = openFilterSheet;
-  $('#f-decide').onclick = () => openTeam();
+  $('#f-decide').onclick = () => openTodoPage();
   document.querySelectorAll('[data-scope]').forEach(b => { b.onclick = () => setFilter({ scope: b.dataset.scope }); });
   $('#f-member').onchange = e => setFilter({ member: e.target.value });
   $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
@@ -1028,7 +1028,7 @@
   const VIEW_KEY = 'aigile-switch-work-view';
   const work = {
     cards: new Map(), since: null, loaded: false, lastSync: 0,
-    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
+    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
     showArchived: false, openId: null, detail: null, editing: false, dragId: null,
   };
   const isMeRef = r => r && r.participantId === meId();
@@ -1086,6 +1086,7 @@
   }
   async function loadSuggestions() {
     work.sugg = (await api('/api/suggestions?state=pending')).items;
+    updateTodoBadge();
   }
   // 增量同步：只讀上次之後有變動的卡片
   async function syncCards() {
@@ -1094,6 +1095,7 @@
     const [d, sg] = await Promise.all([api('/api/cards?since=' + encodeURIComponent(work.since || '')), api('/api/suggestions?state=pending')]);
     const suggChanged = JSON.stringify(sg.items.map(x => x.suggestionId)) !== JSON.stringify((work.sugg || []).map(x => x.suggestionId));
     work.sugg = sg.items;
+    updateTodoBadge();
     if (!d.items.length && !suggChanged) return;
     for (const c of d.items) work.cards.set(c.cardId, c);
     if (d.items.length) work.since = d.nextSince;
@@ -1103,14 +1105,18 @@
   }
 
   // AI 建議區塊
-  function suggHtml() {
+  function suggHtml(batch = false) {
     const list = work.sugg || [];
     if (!list.length) return '';
+    for (const id of [...work.sel]) if (!list.some(g => g.suggestionId === id)) work.sel.delete(id);
+    const batchBar = batch ? `<div class="batch-bar" role="group" aria-label="批次處理"><span class="small">已選 <b>${work.sel.size}</b> 則</span><button type="button" class="btn small primary" data-batch="apply" ${work.sel.size ? '' : 'disabled'}>批次採用</button><button type="button" class="btn small" data-batch="skip" ${work.sel.size ? '' : 'disabled'}>批次略過</button><span class="muted small">逐則勾選後才能批次處理，不提供一鍵全部採用</span></div>` : '';
     const what = g => (g.kind === 'create'
       ? `建立${g.create.type}卡片「${esc(g.create.title)}」，負責人 ${esc(g.create.owner?.name || '未指派')}`
       : `${esc(g.card?.cardId || '')} ${esc(g.card?.title || '')} 狀態改為「${esc(g.to)}」${g.waitFor ? `，等 ${esc(g.waitFor.name)}` : ''}`);
     return `<section class="wsugg"><div class="wsugg-head"><span class="wdot sg"></span><h3>AI 建議</h3><span class="wcount pur">${list.length}</span><span class="muted small">由你採用後才會建立或更新卡片</span></div>
+      ${batchBar}
       ${list.map(g => `<div class="sugg-row">
+        ${batch ? `<label class="sugg-check"><input type="checkbox" data-sugg-check="${esc(g.suggestionId)}" ${work.sel.has(g.suggestionId) ? 'checked' : ''} aria-label="勾選這則建議"></label>` : ''}
         <div class="sugg-main"><div class="sugg-top"><span class="sgk">${g.kind === 'create' ? '建立卡片' : '更新狀態'}</span><span class="muted small">${esc(g.from?.name || '')}</span></div>
           <b>${what(g)}</b><span class="small">${esc(g.why)}</span>
           ${g.basisMessageId ? `<button type="button" class="link small" data-sugg-basis="${esc(g.basisMessageId)}">看依據訊息</button>` : ''}</div>
@@ -1135,6 +1141,8 @@
     }
   }
 
+  function openTodoPage() { closeSheet(false); work.view = 'T'; showPage('work'); }
+  document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
   function showPage(page) {
     if (work.openId) closeCard();
     state.page = page === 'work' ? 'work' : 'messages';
@@ -1178,6 +1186,7 @@
         <div class="seg-scope" role="group" aria-label="檢視方式">
           <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
           <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
+          <button type="button" data-view="T" aria-pressed="${work.view === 'T'}">待你處理${todoCount() ? ` ${todoCount()}` : ''}</button>
         </div>
         <button class="btn primary" type="button" id="card-new">＋ 新增卡片</button>
       </div>
@@ -1186,7 +1195,7 @@
         <select id="card-owner" aria-label="負責人"><option value="">所有負責人</option>${people.map(p => `<option value="${esc(p.participantId)}" ${work.owner === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
         <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策'].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
-      ${work.view === 'A' ? overviewHtml(all) : boardHtml(all)}`;
+      ${work.view === 'A' ? overviewHtml(all) : work.view === 'T' ? todoHtml(all) : boardHtml(all)}`;
     if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
@@ -1204,16 +1213,7 @@
       </section>`;
     const chips = [['open', '未完成', all.filter(c => !closedSt(c.status)).length], ...CARD_ST.map(s => [s, s, all.filter(c => c.status === s).length])];
     const listed = all.filter(c => (work.filter === 'open' ? !closedSt(c.status) : c.status === work.filter));
-    const decSection = decideMe.length ? `
-      <section class="wdecisions"><div class="wdec-head"><h3>待你決定</h3><span class="wcount ora">${decideMe.length}</span></div>
-        <div class="dgrid">${decideMe.map(c => `
-          <article class="dcard">
-            <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span><span class="cid">${esc(c.cardId)}</span><span class="grow"></span>
-              <button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
-            <h4>${esc(c.decision.question)}</h4>
-            ${decisionBox(c)}
-            ${decisionActions(c)}
-          </article>`).join('')}</div></section>` : '';
+    const decSection = decisionSectionHtml(decideMe);
     return `
       ${decSection}
       ${suggHtml()}
@@ -1235,6 +1235,42 @@
             <span class="crow-time muted small">${shortTime(c.updatedAt)}${markHtml(c)}</span>
           </button>`).join('') : '<p class="muted">沒有符合條件的卡片。</p>'}
       </div>`;
+  }
+
+  // 決策卡區塊（總覽與「待你處理」共用）
+  function decisionSectionHtml(decideMe) {
+    return decideMe.length ? `
+      <section class="wdecisions"><div class="wdec-head"><h3>待你決定</h3><span class="wcount ora">${decideMe.length}</span></div>
+        <div class="dgrid">${decideMe.map(c => `
+          <article class="dcard">
+            <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span><span class="cid">${esc(c.cardId)}</span><span class="grow"></span>
+              <button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
+            <h4>${esc(c.decision.question)}</h4>
+            ${decisionBox(c)}
+            ${decisionActions(c)}
+          </article>`).join('')}</div></section>` : '';
+  }
+  // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議（C-107）
+  const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId);
+  const todoCount = () => (state.team ? myDecisions(state.team).length : 0) + (work.sugg?.length || 0);
+  function updateTodoBadge() {
+    const n = todoCount();
+    document.querySelectorAll('.todo-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
+    const fd = $('#f-decide'); if (fd) { fd.hidden = !n; fd.textContent = `待你處理 ${n}`; }
+  }
+  function todoHtml(all) {
+    const decideMe = all.filter(decidingMe);
+    const confirms = legacyConfirms();
+    const sg = work.sugg || [];
+    if (!decideMe.length && !confirms.length && !sg.length) return '<section class="wpanel"><p class="muted">目前沒有需要你處理的事。</p></section>';
+    const confSection = confirms.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>[需確認] 訊息</h3><span class="wcount ora">${confirms.length}</span><span class="muted small">AI 發出、還沒人回覆的確認；授權列在訊息上</span></div>
+        ${confirms.map(d => `<div class="sugg-row">
+          <div class="sugg-main"><b>${esc(d.title || '（無標題）')}</b><span class="muted small">${esc(d.author?.name || '')} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-todo-jump="${esc(d.messageId)}">到訊息處理</button>
+            <button type="button" class="link small" data-todo-resolve="${esc(d.messageId)}" title="已經決定了，從這裡移出">已處理</button></div>
+        </div>`).join('')}</section>` : '';
+    return decisionSectionHtml(decideMe) + confSection + suggHtml(true);
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
@@ -1265,13 +1301,33 @@
   // 互動
   const workBox = $('#page-work');
   workBox.addEventListener('input', decisionInput);
-  workBox.addEventListener('click', e => {
+  workBox.addEventListener('click', async e => {
     if (decisionClick(e)) return;
     const t = e.target;
     const v = t.closest('[data-view]');
-    if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
+    if (v) { work.view = v.dataset.view; if (work.view !== 'T') store.set(VIEW_KEY, work.view); return renderWork(); }
     const f = t.closest('[data-filter]');
     if (f) { work.filter = f.dataset.filter; work.view = 'A'; return renderWork(); }
+    const tj = t.closest('[data-todo-jump]');
+    if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
+    const tr = t.closest('[data-todo-resolve]');
+    if (tr) {
+      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); toast('已從「待你處理」移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
+      return;
+    }
+    const bt = t.closest('[data-batch]');
+    if (bt && work.sel.size) {
+      const ids = [...work.sel], action = bt.dataset.batch;
+      const ok = await confirmDialog({ title: action === 'apply' ? '批次採用' : '批次略過', message: action === 'apply' ? `確定採用已勾選的 ${ids.length} 則 AI 建議？卡片會依建議建立或更新，提案的 AI 會收到一則合併通知。` : `確定略過已勾選的 ${ids.length} 則 AI 建議？`, confirmText: action === 'apply' ? '採用' : '略過' });
+      if (!ok) return;
+      try {
+        const r = await api('/api/suggestions/batch', { method: 'POST', body: { ids, action } });
+        work.sel.clear();
+        toast(`已${action === 'apply' ? '採用' : '略過'} ${r.done} 則${r.failed ? `，${r.failed} 則失敗（可能已被處理）` : ''}`);
+        await loadCards(); renderWork();
+      } catch (err) { toast(err.message); }
+      return;
+    }
     const sa = t.closest('[data-sugg-apply]');
     if (sa) return void suggAction(sa.dataset.suggApply, 'apply');
     const ss = t.closest('[data-sugg-skip]');
@@ -1295,6 +1351,12 @@
   workBox.addEventListener('change', e => {
     if (e.target.id === 'card-owner') { work.owner = e.target.value; renderWork(); }
     if (e.target.id === 'card-type') { work.type = e.target.value; renderWork(); }
+  });
+  workBox.addEventListener('change', e => {
+    const c = e.target.closest?.('[data-sugg-check]');
+    if (!c) return;
+    if (c.checked) work.sel.add(c.dataset.suggCheck); else work.sel.delete(c.dataset.suggCheck);
+    renderWork();
   });
   // 看板拖曳（桌面）
   workBox.addEventListener('dragstart', e => {
@@ -1871,8 +1933,8 @@
     const abnormal = t.members.filter(mb => ['yellow', 'red'].includes(health(mb).cls));
     document.querySelectorAll('.presence-alert').forEach(el => { el.hidden = !abnormal.length; el.title = abnormal.length ? '需要注意：' + abnormal.map(mb => `${mb.name}（${health(mb).text}）`).join('、') : ''; });
     const mdec = myDecisions(t);
-    { const fd = $('#f-decide'); if (fd) { fd.hidden = !mdec.length; fd.textContent = `等你決定 ${mdec.length}`; } }
-    const dec = mdec.length ? `<button type="button" class="chip decide" data-team>等你決定 ${mdec.length}</button>` : '';
+    updateTodoBadge();
+    const dec = todoCount() ? `<button type="button" class="chip decide" data-todo>待你處理 ${todoCount()}</button>` : '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;
     // 側欄：兩行清單（名稱／最後上線 · 環境），狀態靠右
@@ -1885,7 +1947,7 @@
         ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
       </button>`;
     }).join('');
-    $('#team-list').innerHTML = (mdec.length ? `<button type="button" class="decide-row" data-team><span>等你決定</span><b>${mdec.length}</b></button>` : '') + rows;
+    $('#team-list').innerHTML = (todoCount() ? `<button type="button" class="decide-row" data-todo><span>待你處理</span><b>${todoCount()}</b></button>` : '') + rows;
   }
   for (const el of [$('#team-bar'), $('#team-list'), $('.side-title')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
 

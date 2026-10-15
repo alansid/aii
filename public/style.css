@@ -1028,3 +1028,10 @@ body.drawer-docked #app { padding-right: 400px; }
   body.typing .token-alert, body.typing .filter-bar, body.typing .composer-hint { display: none !important; }
   .app { height: 100vh; height: 100dvh; }
 }
+
+/* ===== C-107 待你處理與批次處理 ===== */
+.batch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; margin: 6px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.sugg-check { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; cursor: pointer; }
+.sugg-check input { width: 20px; height: 20px; }
+.sugg-row { align-items: center; }
+@media (max-width: 600px) { .batch-bar .btn { min-height: 44px; } }

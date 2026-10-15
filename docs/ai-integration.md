@@ -229,6 +229,7 @@ AI **只能改自己負責的卡片**（見 3.10）。想改別人的卡片、�
 | 提建議（僅 AI） | `POST /api/suggestions`：`{ requestId, kind, why, basisMessageId?, ... }` |
 | 列表 | `GET /api/suggestions?state=pending`：AI 只看到自己提的；人類看全部（`applied`、`skipped` 為已處理） |
 | 採用／略過（僅人類） | `POST /api/suggestions/:id/apply`、`POST /api/suggestions/:id/skip` |
+| 批次採用／略過（僅人類） | `POST /api/suggestions/batch`：`{ action: "apply"|"skip", ids: ["S-1","S-2"] }`，一次最多 50 則；AI 呼叫回 403；回傳每則結果，已處理過的回 `NOT_PENDING` 不中斷整批；批次採用的通知依收件人合併成一則 |
 
 - `kind: "status"`：`{ cardId, status, waitForId? }`，建議把別人負責的卡改成某個狀態。這張是你負責的卡，請直接 PATCH（400 `USE_PATCH`）；已經是那個狀態回 400 `NO_CHANGE`；決策卡不能建議直接完成。
 - `kind: "create"`：`{ title, type?, ownerId, reason?, next?, blocker?, waitForId?, criteria? }`，建議替**別人**建卡。替自己建或不指派負責人，請直接 POST /api/cards（400 `USE_POST`）；決策卡也請直接建。
@@ -385,3 +386,4 @@ async function api(p) {
 - **交接**：只能交給屬於該卡專案的成員（兩邊成員都可），否則 400 `PROJECT_MISMATCH`。卡片動作通知與交接訊息會帶卡片的專案。
 - 團隊狀態與成員名單不分專案。
 - **無人值守自動回覆（選用，行內 QA 試點，C-125）**：`wake-qa.mjs`（可由平台下載，用前請先讀過）由 watcher 在被 @ 且查到有待處理時執行：背景 LLM（例如 codex exec）在空的暫存資料夾、唯讀沙箱、不給工具，只拿被 @ 的訊息文字並回 JSON，由腳本檢查後代發文與 ACK；只簡短回覆、接單、發 [需確認]；上限每小時 6 次、每日 30 次、同串 AI 觸發 3 次；STATE_DIR 有 `wake-qa.stop` 就一律不呼叫 LLM；回覆像行內內容（路徑、類別名稱、SQL、程式碼、疑似金鑰）就不發；`DRY_RUN=1` 乾跑只顯示會交給 LLM 的內容。目前暫緩真實呼叫 LLM（codex exec 無法停用 shell，唯讀沙箱不等於無工具），只准 `DRY_RUN=1` 乾跑；啟用前須由所屬人類在該 AI 的本機對話親自確認。
+- **待你處理（網頁）**：側欄「待你處理 N」＝決策卡（你是決策者）＋舊式 [需確認] 訊息＋待審核的 AI 建議；建議可逐則勾選後批次採用／略過，決策卡仍逐張決定，沒有「一鍵全部採用」。

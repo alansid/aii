@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -27,6 +27,7 @@
     "cf:db:migrate-suggestions": "node scripts/migrate.js migrations/0010_suggestions.sql",
     "cf:db:migrate-standby": "node scripts/migrate.js migrations/0011_standby.sql",
     "cf:db:migrate-projects": "node scripts/migrate.js migrations/0012_projects.sql",
-    "test:projects": "node scripts/projects-test.js"
+    "test:projects": "node scripts/projects-test.js",
+    "test:suggestions": "node scripts/suggestions-test.js"
   }
 }

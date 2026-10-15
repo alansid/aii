@@ -503,10 +503,15 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
   route('POST', '/api/suggestions/:id/apply', async ({ ctx, me, req, params }) => {
     humanOnly(me);
     const body = await readJson(req);
-    const r = await loadSug(params.id);
+    return applySuggestion(ctx, me, await loadSug(params.id), body, null);
+  });
+
+  // collect：批次時傳入陣列，通知先收集起來，最後每位收件人合併成一則；單筆採用維持原本逐筆通知
+  async function applySuggestion(ctx, me, r, body, collect) {
     if (r.state !== 'pending') throw new ApiError(409, 'NOT_PENDING', '這則建議已經被處理過了。');
     const people = await peopleMap(ctx), p = JSON.parse(r.payload || '{}'), at = nowIso();
     const aiName = people.get(r.from_id)?.name || 'AI';
+    const note = (c, ids, summary, key) => (collect ? collect.push({ c, ids, summary }) : notifyCard(ctx, me, c, ids, summary, key));
     if (r.kind === 'status') {
       const c = await db.get('SELECT * FROM cards WHERE seq = ?', r.card_seq);
       if (!c) throw notFound();
@@ -517,7 +522,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
       await save(c, sets, logs, me, at);
       await claim(r, me, at, c.seq);
       invalidatePeople();
-      await notifyCard(ctx, me, c, [r.from_id, p.waitForId], `採用了 ${aiName} 的建議：狀態改為 ${p.to}`, `sug${r.id}`);
+      await note(c, [r.from_id, p.waitForId], `採用了 ${aiName} 的建議：狀態改為 ${p.to}`, `sug${r.id}`);
       return view(await db.get('SELECT * FROM cards WHERE seq = ?', c.seq), people);
     }
     // create：採用時可以先改欄位
@@ -539,8 +544,38 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     ]);
     await claim(r, me, at, c.seq);
     invalidatePeople();
-    await notifyCard(ctx, me, c, [r.from_id, f.ownerId, f.waitForId], `採用了 ${aiName} 的建議建立這張卡${f.ownerId ? '，負責人 ' + people.get(f.ownerId)?.name : ''}`, `sug${r.id}`);
+    await note(c, [r.from_id, f.ownerId, f.waitForId], `採用了 ${aiName} 的建議建立這張卡${f.ownerId ? '，負責人 ' + people.get(f.ownerId)?.name : ''}`, `sug${r.id}`);
     return { __status: 201, ...view(c, people) };
+  }
+
+  // 批次採用／略過（C-107）：只接受明確列出的建議（上限 50），不做「全部採用」；僅人類；逐筆沿用單筆邏輯，部分失敗不中斷
+  route('POST', '/api/suggestions/batch', async ({ ctx, me, req }) => {
+    humanOnly(me);
+    const body = await readJson(req);
+    if (!['apply', 'skip'].includes(body.action)) throw invalid("action 需為 'apply' 或 'skip'");
+    const ids = [...new Set(Array.isArray(body.ids) ? body.ids.map(String) : [])];
+    if (!ids.length) throw invalid('ids 為必填：要處理的建議編號（例如 ["S-1","S-2"]）');
+    if (ids.length > 50) throw invalid('一次最多 50 則');
+    const results = [], collect = [];
+    for (const id of ids) {
+      try {
+        const r = await loadSug(id);
+        if (body.action === 'skip') await claim(r, me, nowIso(), null, 'skipped');
+        else await applySuggestion(ctx, me, r, {}, collect);
+        results.push({ id, ok: true });
+      } catch (e) { results.push({ id, ok: false, error: e.code || 'ERROR', message: e.message }); }
+    }
+    // 通知合併：每位收件人（提案 AI、新負責人、等待對象）只發一則，列出與他有關的卡
+    const byTo = new Map();
+    for (const it of collect) for (const to of new Set(it.ids)) if (to && to !== me.id) { if (!byTo.has(to)) byTo.set(to, new Map()); byTo.get(to).set(cardNo(it.c.seq), it.c.project); }
+    const sample = ids.slice(0, 3).join('');
+    for (const [to, cards] of byTo) {
+      const nos = [...cards.keys()], projects = new Set(cards.values());
+      try {
+        await createMessage(ctx, me, { text: `[通知] 批次採用了 AI 建議，與你有關的 ${nos.length} 張卡：${nos.join('、')}`.slice(0, 1900), requestId: `sugbatch_${to}_${sample}_${nos.length}_${Date.now()}`.slice(0, 128), recipientIds: [to], project: projects.size === 1 ? [...projects][0] : undefined });
+      } catch (err) { console.error('batch notify failed:', err.message); }
+    }
+    return { action: body.action, results, done: results.filter(x => x.ok).length, failed: results.filter(x => !x.ok).length };
   });
 
   route('POST', '/api/suggestions/:id/skip', async ({ ctx, me, params }) => {
