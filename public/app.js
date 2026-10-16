@@ -900,7 +900,9 @@
   function openModal(title, bodyHtml, opts = {}) {
     const pane = state.page === 'team' && TEAM_PANES.includes(title) ? $('#team-pane') : null;
     if (pane) {
+      const sc = $('#page-work'), top = sc.scrollTop;
       pane.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
+      sc.scrollTop = top;
       const inner = pane.querySelector('.modal'), inBody = pane.querySelector('.modal-body');
       inBody.modal = inner;
       return inBody;
@@ -1370,11 +1372,17 @@
   work.teamTab = 'status';
   function renderTeamPage() {
     const box = $('#page-work');
+    // C-157：看板會在共用容器加 is-board（桌面版 overflow:hidden），切到團隊頁要清掉，否則滾輪捲不動
+    box.classList.remove('is-board');
+    // 同一個分頁重畫（例如切專案）時保留捲動位置，不跳回頂端
+    const keep = work.teamScrollTab === work.teamTab ? box.scrollTop : 0;
+    work.teamScrollTab = work.teamTab;
     const tabs = [['status', '團隊狀態'], ['memory', 'AI 工作記憶'], ['members', '成員名單'], ['ai', '我的 AI']];
     box.innerHTML = `<div class="work-head"><div class="work-title"><h2>團隊</h2></div>
       <div class="seg-scope" role="group" aria-label="團隊分頁">${tabs.map(([k, t]) => `<button type="button" data-team-tab="${k}" aria-pressed="${work.teamTab === k}">${t}</button>`).join('')}</div></div>
       <div id="team-pane" class="inline-pane"></div>`;
-    ({ status: openTeam, memory: openTeamMemory, members: openMembers, ai: openMyAi })[work.teamTab]();
+    const done = ({ status: openTeam, memory: openTeamMemory, members: openMembers, ai: openMyAi })[work.teamTab]();
+    if (keep) Promise.resolve(done).then(() => { box.scrollTop = keep; });
     syncTeamNav();
   }
   // AI 工作記憶（獨立一個子項目）
