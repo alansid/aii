@@ -141,17 +141,19 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   }
   const isolatedFrom = me => !!me && me.kind !== 'system' && PROJECTS.some(x => !projectsOf(me).includes(x));
   // 訊息可見範圍的 SQL 片段（col：資料表別名）；不受限回 null
+  // C-180（昱志第 1219 則）：隔離前的舊訊息，只有當時就在群組的人看得到（訊息時間 ≥ 加入時間）；之後才加入的人看不到
   async function messageScope(me, col = '') {
     if (!isolatedFrom(me)) return null;
     const since = await isolationSince();
     if (!since) return null;
-    const c = col ? col + '.' : '', mine = projectsOf(me);
-    return { sql: `(${c}project IS NULL OR ${c}created_at < ?${mine.length ? ` OR ${c}project IN (${mine.map(() => '?').join(',')})` : ''})`, args: [since, ...mine] };
+    const c = col ? col + '.' : '', mine = projectsOf(me), joined = me.created_at || '';
+    return { sql: `(${mine.length ? `${c}project IN (${mine.map(() => '?').join(',')}) OR ` : ''}(${c}created_at >= ? AND ${c}project IS NULL) OR (${c}created_at < ? AND ${c}created_at >= ?))`, args: [...mine, since, since, joined] };
   }
   async function canSeeMessage(me, m) {
-    if (!m.project || !isolatedFrom(me)) return true;
+    if (!isolatedFrom(me) || (m.project && projectsOf(me).includes(m.project))) return true;
     const since = await isolationSince();
-    return !since || m.created_at < since || projectsOf(me).includes(m.project);
+    if (!since) return true;
+    return m.created_at >= since ? !m.project : m.created_at >= (me.created_at || '');
   }
   function identity(p, people) {
     const out = { participantId: p.id, name: p.status === 'deleted' ? p.name + '（已刪除）' : p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null, projects: projectsOf(p) };
