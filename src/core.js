@@ -1099,9 +1099,11 @@ ${trial
         }
       }
     }
-    return projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges });
+    return scopeProjects(await projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges }), me);
   });
-  route('GET', '/api/projects', async ({ ctx }) => projectsResponse(ctx));
+  // UX 第 1354 則：不屬於全部專案的人，專案清單只回自己所屬的專案（不露出別專案名稱）
+  const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))) }; };
+  route('GET', '/api/projects', async ({ ctx, me }) => scopeProjects(await projectsResponse(ctx), me));
   route('GET', '/api/projects/:id/events', async ({ params, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
     const rows = await db.all('SELECT * FROM project_events WHERE project_id = ? ORDER BY id DESC LIMIT ?', params.id, limit);

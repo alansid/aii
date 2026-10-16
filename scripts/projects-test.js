@@ -306,6 +306,8 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const ts = (await call(plat.token, '/api/team-status')).body.members.map(m => m.participantId);
     assert.ok(!ts.includes(bank.participantId), '團隊狀態也依專案');
     assert.ok((await call(liu.token, '/api/participants')).body.items.some(p => p.participantId === bank.participantId), '兩邊都屬的人看得到全部');
+    assert.deepEqual((await call(plat.token, '/api/projects')).body.items.map(p => p.id), ['平台'], '專案清單只回自己所屬的專案');
+    assert.ok((await call(liu.token, '/api/projects')).body.items.length >= 2, '兩邊都屬的人看得到全部專案');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);
