@@ -327,7 +327,7 @@
   window.addEventListener('online', () => { if (state.me) connectEvents(true); });
 
   // 抓取中旗標記開始時間：超過 20 秒還沒結束就當作卡住，允許重抓（C-163）
-  let catching = 0;
+  let catching = 0, connFails = 0;
   async function catchUp() {
     if (!state.token || !state.nextCursor) return true;
     if (catching && Date.now() - catching < 20_000) return true;
@@ -339,10 +339,10 @@
         state.nextCursor = d.nextCursor;
         if (!d.hasMore) break;
       }
-      setConnBanner(false);
+      connFails = 0; setConnBanner(false);
       return true;
     } catch {
-      setConnBanner(true);
+      if (++connFails >= 2) setConnBanner(true); // 連續失敗 2 次（約 10 秒）才提示，網路小抖動不閃（UX 第 1071 則）
       return false;
     } finally { if (catching === mine) catching = 0; }
   }
@@ -1252,7 +1252,8 @@
   function inlineHtml(key, kind, c) {
     if (narrowInl() && work.openInl !== key) return `<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">回覆…</button>`;
     let btns = '', hint = '想說什麼都可以寫在這裡（Ctrl+Enter 送出）';
-    if (kind === 'confirm' || kind === 'card') btns = inlBtn(key, 'send', '送出', { cls: 'primary', need: true, primary: true });
+    if (kind === 'confirm') btns = inlBtn(key, 'send', '送出', { cls: 'primary', need: true, primary: true });
+    else if (kind === 'card') { const n = cardRecipients(key, c).length; btns = inlBtn(key, 'send', cardSendLabel(n), { cls: n ? 'primary' : 'quiet', need: true, primary: true }) + `<button type="button" class="btn small" data-inl-at="${esc(key)}">＠ 加人</button>`; }
     else if (kind === 'sugg') {
       hint = '想說明或留言給提案的 AI（Ctrl+Enter 留言）';
       btns = inlBtn(key, 'sugg-note', '只留言', { need: true, primary: true }) + inlBtn(key, 'sugg-skip', '略過並附原因', { need: true });
@@ -1265,11 +1266,46 @@
         + inlBtn(key, 'defer', '暫緩');
     }
     return `<div class="inl" data-inl-root="${esc(key)}">
-      <textarea class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
+      <div class="inl-field"><textarea class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${kind === 'card' ? '想說什麼都可以寫在這裡，打 @ 可以指定人（Ctrl+Enter 送出）' : hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
+        ${kind === 'card' ? '<ul class="mention-list" role="listbox" aria-label="選擇成員" hidden></ul>' : ''}</div>
+      ${kind === 'card' ? cardToHtml(key, c) : ''}
       <div class="inl-actions">${btns}</div>
       <p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
   }
   const decisionActions = c => inlineHtml('c:' + c.cardId, 'decision', c);
+  // C-162：卡片回覆的收件人
+  work.inlRm = {}; // key → 使用者按 × 移除的成員
+  const cardMembers = c => [...state.participants.values()].filter(p => p.status !== 'disabled' && (p.projects || []).includes(c.project));
+  const cardMentionCandidates = c => raw => { const q = raw.toLowerCase(); return cardMembers(c).filter(p => p.participantId !== meId() && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q))); };
+  function cardRecipients(key, c) {
+    const text = work.drafts[key] || '', out = new Map();
+    const add = (id, why) => { if (id && id !== meId() && !out.has(id)) out.set(id, why); };
+    const members = cardMembers(c);
+    for (const tok of text.match(/@[^\s@]+/g) || []) {
+      const name = tok.slice(1).replace(/[，。、,.!?！？：:；;）)」]+$/, '');
+      const p = members.find(x => x.name === name);
+      if (p) add(p.participantId, '你 @ 的');
+    }
+    add(c.owner?.participantId, '負責人');
+    add(c.waitFor?.participantId, '等誰');
+    if (!c.owner) add(c.createdBy?.participantId, '建卡人');
+    const rm = work.inlRm[key] || new Set();
+    return [...out].filter(([id]) => !rm.has(id)).map(([id, why]) => ({ id, why, name: state.participants.get(id)?.name || '?' }));
+  }
+  function cardToHtml(key, c) {
+    const to = cardRecipients(key, c);
+    return `<div class="inl-to" data-inl-to="${esc(key)}"><span class="muted small">會通知：</span>${to.length
+      ? to.map(r => `<span class="to-chip"><b>${esc(r.name)}</b><span class="muted small">${esc(r.why)}</span><button type="button" class="to-x" data-inl-rm="${esc(r.id)}" data-inl="${esc(key)}" aria-label="不通知 ${esc(r.name)}">×</button></span>`).join('')
+      : `<span class="muted small">沒有人（${isMeRef(c.owner) ? '你是負責人' : c.owner ? '負責人已移除' : '沒有負責人'}，${c.waitFor ? '等誰已移除' : '也沒有等誰'}）</span>`}</div>`;
+  }
+  const cardSendLabel = n => (n ? `送出並通知 ${n} 人` : '只留紀錄，不通知');
+  function refreshCardTo(key) {
+    const c = work.cards.get(key.slice(2)), root = document.querySelector(`[data-inl-root="${CSS.escape(key)}"]`);
+    if (!c || !root) return;
+    root.querySelector('[data-inl-to]').outerHTML = cardToHtml(key, c);
+    const b = root.querySelector('[data-inl-act="send"]'), n = cardRecipients(key, c).length;
+    if (b && !b.textContent.includes('送出中')) { b.textContent = cardSendLabel(n); b.classList.toggle('primary', !!n); b.classList.toggle('quiet', !n); }
+  }
 
   function inlineInput(e) {
     const ta = e.target.closest?.('[data-inl-text]');
@@ -1277,6 +1313,7 @@
     work.drafts[ta.dataset.inlText] = ta.value;
     const root = ta.closest('.inl');
     root.querySelectorAll('[data-need="1"]').forEach(b => { b.disabled = !ta.value.trim(); });
+    if (ta.dataset.inlText.startsWith('k:')) refreshCardTo(ta.dataset.inlText);
     return true;
   }
   function inlineKey(e) {
@@ -1292,6 +1329,14 @@
       renderWork(); if (work.openId) renderDrawer(false);
       const ta = document.querySelector(`[data-inl-text="${CSS.escape(work.openInl)}"]`);
       if (ta) { ta.focus(); ta.scrollIntoView({ block: 'center' }); }
+      return true;
+    }
+    const rmb = e.target.closest?.('[data-inl-rm]');
+    if (rmb) { const k = rmb.dataset.inl; (work.inlRm[k] ||= new Set()).add(rmb.dataset.inlRm); refreshCardTo(k); return true; }
+    const at = e.target.closest?.('[data-inl-at]');
+    if (at) {
+      const ta = document.querySelector(`[data-inl-text="${CSS.escape(at.dataset.inlAt)}"]`);
+      if (ta) { const p = ta.selectionStart ?? ta.value.length, pre = ta.value.slice(0, p), sep = pre && !/\s$/.test(pre) ? ' ' : ''; ta.value = pre + sep + '@' + ta.value.slice(p); ta.focus(); const c2 = p + sep.length + 1; ta.setSelectionRange(c2, c2); ta.dispatchEvent(new Event('input', { bubbles: true })); ta.openMention?.(); }
       return true;
     }
     const b = e.target.closest?.('[data-inl-act]');
@@ -1313,9 +1358,11 @@
       if (act === 'send' && key.startsWith('m:')) {
         let m = state.byId.get(id); if (!m) m = await api(`/api/messages/${encodeURIComponent(id)}`);
         await post({ text: `[回覆] ${text}`, replyToMessageId: id, recipientIds: others([m.author.participantId]) });
-      } else if (act === 'send') { // 一般卡片：給負責人（沒有就給等待對象）
-        const c = work.cards.get(id);
-        await post({ text: `[回覆] ${id}：${text}`, cardId: id, recipientIds: others([c?.owner?.participantId, c?.waitFor?.participantId].slice(0, c?.owner ? 1 : 2)) });
+      } else if (act === 'send') { // 一般卡片（C-162）：照「會通知」名單——@ 的人＋負責人＋等誰（沒負責人改建卡人），可移除
+        const c = work.cards.get(id), to = c ? cardRecipients(key, c) : [];
+        await post({ text: `[回覆] ${id}：${text}`, cardId: id, recipientIds: to.map(r => r.id) });
+        delete work.inlRm[key];
+        work.sentTo = to.length ? `已送出，通知 ${to.map(r => r.name).join('、')}` : '已送出（只留紀錄，沒有通知任何人）';
       } else if (act === 'opinion') { // 決策卡只送意見：給提案人，卡片狀態不變
         const c = work.cards.get(id);
         await post({ text: `[回覆] ${id}（決策意見）：${text}`, cardId: id, recipientIds: others([c?.decision?.proposer?.participantId]) });
@@ -1337,7 +1384,8 @@
         await post({ text: `[回覆] ${act === 'sugg-skip' ? '略過了你的建議' : '關於你的建議'}（${what}）：${text}`, ...(g.card?.cardId ? { cardId: g.card.cardId } : {}), recipientIds: others([g.from?.participantId]) });
       }
       delete work.drafts[key]; work.openInl = null;
-      if (act !== 'decide' && act !== 'defer') toast('已送出');
+      if (act !== 'decide' && act !== 'defer') toast(work.sentTo || '已送出');
+      work.sentTo = null;
       await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]);
       updateTodoBadge(); renderWork();
       if (work.openId) openCard(work.openId);
@@ -2099,6 +2147,7 @@
       for (const k of Object.keys(data)) data[k] = data[k].trim();
       if (await patchCard(work.openId, data)) { work.editing = false; openCard(work.openId); toast('已儲存'); }
     });
+    host.querySelectorAll('[data-inl-text^="k:"]').forEach(ta => { const c = work.cards.get(ta.dataset.inlText.slice(2)); const list = ta.parentElement.querySelector('.mention-list'); if (c && list) attachMention(ta, list, { candidates: cardMentionCandidates(c) }); });
     if (focus) host.querySelector('.modal-x').focus();
   }
   document.addEventListener('keydown', e => {
@@ -3128,7 +3177,7 @@
   });
 
   // @ 成員選單（上傳視窗的附註欄用）：輸入 @ 跳出清單，↑↓ 移動、Enter／Tab／點選插入、Esc 關閉
-  function attachMention(ta, list) {
+  function attachMention(ta, list, { candidates = mentionCandidates } = {}) {
     let st = null;
     const close = () => { st = null; list.hidden = true; };
     const render = () => {
@@ -3139,16 +3188,18 @@
     const update = () => {
       const pos = ta.selectionStart, m = ta.value.slice(0, pos).match(/@([^\s@]*)$/);
       if (!m) return close();
-      const items = mentionCandidates(m[1]);
+      const items = candidates(m[1]);
       if (!items.length) return close();
       st = { start: pos - m[0].length, end: pos, items, index: 0 };
       render();
     };
+    ta.openMention = update; // 「＠ 加人」按鈕插入 @ 後直接開選單
     const pick = i => {
       const insert = '@' + st.items[i].name + ' ';
       ta.value = ta.value.slice(0, st.start) + insert + ta.value.slice(st.end);
       const caret = st.start + insert.length;
       close(); ta.focus(); ta.setSelectionRange(caret, caret);
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
     };
     ta.addEventListener('input', update);
     ta.addEventListener('click', update);
