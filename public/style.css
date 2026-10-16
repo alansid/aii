@@ -1291,3 +1291,5 @@ body.drawer-docked #app { padding-right: 400px; }
 .arch-note { display: grid; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); font-size: 13px; margin-bottom: 8px; }
 .board-tools { display: flex; align-items: center; gap: 12px; }
 @media (max-width: 899px) { .cmini { min-height: 48px; font-size: 14px; } .bfoot { min-height: 48px; } }
+/* C-163 連線中斷提示 */
+.conn-banner { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 60; padding: 6px 14px; border-radius: 999px; background: #7c2d12; color: #fff; font-size: 13px; box-shadow: var(--shadow); }

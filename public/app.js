@@ -32,12 +32,22 @@
   };
 
   // ---------- 共用 ----------
-  async function api(path, { method = 'GET', body } = {}) {
-    const r = await fetch(path, {
-      method,
-      headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+  async function api(path, { method = 'GET', body, timeoutMs = 0 } = {}) {
+    // C-163：輪詢要設逾時，否則網路卡住時 fetch 可能永遠不回來，整個輪詢跟著停
+    const ctl = timeoutMs ? new AbortController() : null;
+    const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
+    let r;
+    try {
+      r = await fetch(path, {
+        method, signal: ctl?.signal,
+        headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (e) {
+      const err = new Error(ctl?.signal.aborted ? '連線逾時' : '連線失敗');
+      err.code = ctl?.signal.aborted ? 'TIMEOUT' : 'NETWORK';
+      throw err;
+    } finally { clearTimeout(timer); }
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const err = new Error(data?.error?.message || `HTTP ${r.status}`);
@@ -287,11 +297,15 @@
   let pollTimer = null;
   let lastSlowPoll = 0;
   let lastTeamPoll = 0;
-  function connectEvents() {
+  let pollGen = 0; // 每次重新連線換一代，舊的計時鏈自動結束，不會越疊越多
+  function connectEvents(immediate = false) {
     clearTimeout(pollTimer);
+    const gen = ++pollGen;
     const tick = async () => {
-      if (!state.token) return;
-      await catchUp();
+      if (!state.token || gen !== pollGen) return;
+      let ok = true;
+      try {
+      ok = await catchUp();
       if (!document.hidden && Date.now() - lastSlowPoll > 30_000) {
         lastSlowPoll = Date.now();
         loadParticipants().catch(() => {});
@@ -302,25 +316,38 @@
         lastTeamPoll = Date.now();
         loadTeam();
       }
-      pollTimer = setTimeout(tick, document.hidden ? 60_000 : 5_000);
+      } catch {} finally {
+        // 失敗（或背景分頁）也一定排下一輪；失敗時 5 秒後重試
+        if (gen === pollGen) pollTimer = setTimeout(tick, !ok ? 5_000 : document.hidden ? 60_000 : 5_000);
+      }
     };
-    pollTimer = setTimeout(tick, 5_000);
+    pollTimer = setTimeout(tick, immediate ? 0 : 5_000);
   }
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) connectEvents(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) connectEvents(true); }); // 回到前景立刻補抓
+  window.addEventListener('online', () => { if (state.me) connectEvents(true); });
 
-  let catching = false;
+  // 抓取中旗標記開始時間：超過 20 秒還沒結束就當作卡住，允許重抓（C-163）
+  let catching = 0;
   async function catchUp() {
-    if (!state.token || !state.nextCursor || catching) return;
-    catching = true;
+    if (!state.token || !state.nextCursor) return true;
+    if (catching && Date.now() - catching < 20_000) return true;
+    const mine = catching = Date.now();
     try {
       for (let i = 0; i < 5; i++) {
-        const d = await api(`/api/messages?limit=100&after=${encodeURIComponent(state.nextCursor)}`);
+        const d = await api(`/api/messages?limit=100&after=${encodeURIComponent(state.nextCursor)}`, { timeoutMs: 8_000 });
         d.items.forEach(onNewMessage);
         state.nextCursor = d.nextCursor;
         if (!d.hasMore) break;
       }
-    } catch {} finally { catching = false; }
+      setConnBanner(false);
+      return true;
+    } catch {
+      setConnBanner(true);
+      return false;
+    } finally { if (catching === mine) catching = 0; }
   }
+  // 抓取失敗時頂端提示，恢復後自動收起
+  function setConnBanner(down) { const b = $('#conn-banner'); if (b) b.hidden = !down; }
 
   // ---------- 訊息 ----------
   const BASE_TITLE = document.title;
@@ -1701,8 +1728,9 @@
     const colBody = (st, list) => {
       if (st === '已完成') {
         const pend = list.filter(c => !c.verified), ver = list.filter(c => c.verified);
-        return `<div class="bsub warn">待驗證 ${pend.length}（不會自動收起）</div>${pend.map(tile).join('')}
-          <div class="bsub ok">已驗證 ${ver.length}（精簡一行，點開看詳情）</div>${ver.map(mini).join('')}${archFoot}`;
+        return `${pend.length ? `<div class="bsub warn">待驗證 ${pend.length}（不會自動收起）</div>${pend.map(tile).join('')}` : ''}
+          ${ver.length ? `<div class="bsub ok">已驗證 ${ver.length}（精簡一行，點開看詳情）</div>${ver.map(mini).join('')}` : ''}
+          ${!pend.length && !ver.length ? '<p class="muted small bempty">最近 7 天沒有完成的卡</p>' : ''}${archFoot}`;
       }
       if (st === '已封存') return (list.length ? list.map(tile).join('') : `<p class="muted small bempty">${work.archived.loading ? '載入中…' : '沒有已封存的卡片'}</p>`)
         + (work.archived.hasMore ? `<button type="button" class="bfoot" data-arch-more>再載入 50 張</button>` : '');
