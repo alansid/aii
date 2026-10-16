@@ -131,6 +131,28 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     if (!list.length) return { sql: withNull ? `(${col} IS NULL)` : '(1 = 0)', args: [] };
     return { sql: `(${col} = ?${withNull ? ` OR ${col} IS NULL` : ''})`, args: list };
   }
+  // C-146 A 隔離：沒有屬於全部專案的成員，只看得到自己專案、全部專案（project 為空）與隔離起算前的舊訊息
+  let isoSince = null, isoAt = 0;
+  async function isolationSince() {
+    if (isoSince !== null && Date.now() - isoAt < 60_000) return isoSince;
+    const r = await db.get("SELECT value FROM app_settings WHERE key = 'isolation_since'").catch(() => null);
+    isoSince = r?.value || ''; isoAt = Date.now();
+    return isoSince;
+  }
+  const isolatedFrom = me => !!me && me.kind !== 'system' && PROJECTS.some(x => !projectsOf(me).includes(x));
+  // 訊息可見範圍的 SQL 片段（col：資料表別名）；不受限回 null
+  async function messageScope(me, col = '') {
+    if (!isolatedFrom(me)) return null;
+    const since = await isolationSince();
+    if (!since) return null;
+    const c = col ? col + '.' : '', mine = projectsOf(me);
+    return { sql: `(${c}project IS NULL OR ${c}created_at < ?${mine.length ? ` OR ${c}project IN (${mine.map(() => '?').join(',')})` : ''})`, args: [since, ...mine] };
+  }
+  async function canSeeMessage(me, m) {
+    if (!m.project || !isolatedFrom(me)) return true;
+    const since = await isolationSince();
+    return !since || m.created_at < since || projectsOf(me).includes(m.project);
+  }
   function identity(p, people) {
     const out = { participantId: p.id, name: p.status === 'deleted' ? p.name + '（已刪除）' : p.name, role: p.role, roleKey: p.role_key || null, avatar: p.avatar || null, avatarImg: p.avatar_v || null, shortCode: p.code, memberType: p.kind, environment: p.env || null, projects: projectsOf(p) };
     if (p.status === 'deleted') out.deleted = true; // C-143：已刪除成員的舊訊息仍顯示原名稱，前端加註（已刪除）
@@ -322,9 +344,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     }
     const id = randId('msg');
     const createdAt = nowIso();
+    if (audience && project) for (const rid of [...recipientIds]) if (!projectsOf(people.get(rid)).includes(project)) recipientIds.delete(rid);
     const reasons = new Map();
     for (const rid of recipientIds) reasons.set(rid, [audience ? 'all' : 'mention']);
-    if (replyTo && replyTo.author_id !== me.id) {
+    if (replyTo && replyTo.author_id !== me.id && (!project || !isolatedFrom(people.get(replyTo.author_id)) || projectsOf(people.get(replyTo.author_id)).includes(project))) {
       reasons.set(replyTo.author_id, [...(reasons.get(replyTo.author_id) || []), 'reply']);
     }
     const stmts = [[
@@ -366,7 +389,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const before = url.searchParams.get('before');
     let rows, hasMore, olderCursor = null, nextCursor;
     const pf = projectFilter(url.searchParams.get('project'), me);
-    const pfSql = pf ? ` AND ${pf.sql}` : '', pfArgs = pf ? pf.args : [];
+    const scope = await messageScope(me);
+    const pfSql = (pf ? ` AND ${pf.sql}` : '') + (scope ? ` AND ${scope.sql}` : ''), pfArgs = [...(pf ? pf.args : []), ...(scope ? scope.args : [])];
 
     if (after) {
       const s = decodeCursor(after);
@@ -374,7 +398,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       hasMore = rows.length > limit;
       if (hasMore) rows = rows.slice(0, limit);
       // 過濾後沒有更多符合的訊息時，游標直接推到目前最新，不用每次重掃不相關的訊息
-      nextCursor = encodeCursor(hasMore || !pf ? (rows.length ? rows[rows.length - 1].seq : s) : (await db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM messages')).s);
+      nextCursor = encodeCursor(hasMore || !(pf || scope) ? (rows.length ? rows[rows.length - 1].seq : s) : (await db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM messages')).s);
     } else {
       const maxSeq = (await db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM messages')).s;
       const upper = before ? decodeCursor(before) : maxSeq + 1;
@@ -1043,9 +1067,9 @@ ${autoStandby
   });
 
   route('GET', '/api/messages', ({ ctx, url, me }) => listMessages(ctx, url, me));
-  route('GET', '/api/messages/:id', async ({ ctx, params }) => {
+  route('GET', '/api/messages/:id', async ({ ctx, me, params }) => {
     const m = await db.get('SELECT * FROM messages WHERE id = ?', params.id);
-    if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
+    if (!m || !(await canSeeMessage(me, m))) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
     return serializeMessage(ctx, m);
   });
   // cardId（選填）：訊息發出時一併關聯到該卡（C-130 待你處理的行內輸入、卡片內回覆用）；一張卡最多 50 則，滿了就略過關聯
@@ -1243,12 +1267,13 @@ ${autoStandby
       })),
     };
   });
-  route('GET', '/api/files', async ({ ctx }) => {
+  route('GET', '/api/files', async ({ ctx, me }) => {
     const people = await peopleMap(ctx);
-    const rows = await db.all('SELECT * FROM files WHERE deleted_at IS NULL AND expires_at > ? ORDER BY created_at DESC', Date.now());
+    const scope = await messageScope(me, 'm');
+    const rows = await db.all(`SELECT f.*, m.project AS msg_project FROM files f LEFT JOIN messages m ON m.id = f.message_id WHERE f.deleted_at IS NULL AND f.expires_at > ?${scope ? ` AND (m.id IS NULL OR ${scope.sql})` : ''} ORDER BY f.created_at DESC`, Date.now(), ...(scope ? scope.args : []));
     const used = rows.reduce((n, f) => n + f.size, 0);
     return {
-      items: rows.map(f => ({ ...fileView(f), uploader: people.get(f.uploader_id) ? identity(people.get(f.uploader_id), people) : null })),
+      items: rows.map(f => ({ ...fileView(f), project: f.msg_project ?? null, uploader: people.get(f.uploader_id) ? identity(people.get(f.uploader_id), people) : null })),
       usedBytes: used, limitBytes: MAX_TOTAL, maxFileBytes: MAX_FILE_BYTES, enabled: !!storage,
     };
   });
@@ -1278,7 +1303,7 @@ ${autoStandby
   // 團隊狀態用的最近 200 則訊息與 [需確認] 的回覆：保留在記憶體，之後只補讀新訊息
   let recentCache = { rows: null, maxSeq: 0, replies: new Map() }; // replies: [需確認] id → 回覆列
   async function recentMessages() {
-    const cols = 'SELECT id, seq, author_id, text, reply_to, created_at FROM messages';
+    const cols = 'SELECT id, seq, author_id, text, reply_to, created_at, project FROM messages';
     if (!recentCache.rows) {
       const rows = await db.all(`${cols} ORDER BY seq DESC LIMIT 200`);
       recentCache = { rows, maxSeq: rows[0]?.seq || 0, replies: null };
@@ -1379,13 +1404,13 @@ ${autoStandby
       if (closes(r)) resolved.add(r.reply_to);
     }
     const decisions = asks.filter(m => !resolved.has(m.id)).slice(0, 30).map(m => ({
-      messageId: m.id, sequence: m.seq, title: headline(m.text), createdAt: m.created_at,
+      messageId: m.id, sequence: m.seq, title: headline(m.text), createdAt: m.created_at, project: m.project || null, at: m.created_at,
       author: identity(people.get(m.author_id), people), replyCount: replyCount.get(m.id) || 0,
     }));
 
     // 決策卡片等決策者的，一併列入「等你決定」（網頁只對指定的決策者顯示）
     for (const d of cardWork.decisions) {
-      decisions.push({ messageId: null, cardId: d.cardId, sequence: null, title: d.title, createdAt: d.createdAt,
+      decisions.push({ messageId: null, cardId: d.cardId, sequence: null, title: d.title, createdAt: d.createdAt, project: d.project,
         author: identity(people.get(d.proposerId) || { id: d.proposerId, name: '?', kind: 'ai' }, people), replyCount: 0, deciderId: d.deciderId });
     }
     const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
@@ -1395,12 +1420,17 @@ ${autoStandby
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
-  registerCards({ route, createMessage, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
+  registerCards({ route, createMessage, isolatedFrom, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
   route('GET', '/api/team-status', async ({ ctx, me }) => {
     const d = await teamStatus(ctx);
     const people = await peopleMap(ctx);
-    return { ...d, members: d.members.map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)) }; // 工作記憶依專案可見
+    // C-146 A：只屬部分專案的成員，「等你決定」只留看得到的（訊息依隔離規則、決策卡依卡片專案）
+    const decisions = [];
+    for (const x of d.decisions) {
+      if (x.cardId ? (!isolatedFrom(me) || projectsOf(me).includes(x.project)) : await canSeeMessage(me, { project: x.project, created_at: x.at })) decisions.push(x);
+    }
+    return { ...d, decisions, members: d.members.map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)) }; // 工作記憶依專案可見
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);

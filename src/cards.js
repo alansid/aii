@@ -29,11 +29,11 @@ export async function teamCards(db) {
   }
   const work = new Map([...byOwner].map(([id, { best, count }]) => [id,
     { state: WORK_STATE[best.status], title: best.title, cardId: cardNo(best.seq), at: best.updated_at, cardCount: count, source: 'card' }]));
-  const decisions = await db.all("SELECT seq, title, question, proposer_id, decider_id, created_at FROM cards WHERE type = '決策' AND status = '待確認' AND decision_result IS NULL ORDER BY created_at DESC LIMIT 30");
-  return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id })) };
+  const decisions = await db.all("SELECT seq, title, question, proposer_id, decider_id, created_at, project FROM cards WHERE type = '決策' AND status = '待確認' AND decision_result IS NULL ORDER BY created_at DESC LIMIT 30");
+  return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, createMessage, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, createMessage, isolatedFrom, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // C-144：卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   const parseNo = id => {
@@ -108,9 +108,10 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
   }
   const decisionFields = c => (c.type === '決策' ? c : null);
 
-  async function load(no) {
+  // me 有給時套用 C-146 A 隔離：不屬於卡片專案的成員視為找不到
+  async function load(no, me = null) {
     const c = await db.get('SELECT * FROM cards WHERE seq = ?', parseNo(no));
-    if (!c) throw notFound();
+    if (!c || (me && isolatedFrom(me) && !projectsOf(me).includes(c.project))) throw notFound();
     return c;
   }
   const logStmt = (seq, me, texts, at) => texts.map(t =>
@@ -168,6 +169,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     if (q.get('since')) { where.push('updated_at > ?'); args.push(String(q.get('since'))); }
     const pf = projectFilter(q.get('project'), me, 'project', false);
     if (pf) { where.push(pf.sql); args.push(...pf.args); }
+    if (isolatedFrom(me)) { const mine = projectsOf(me); where.push(mine.length ? `project IN (${mine.map(() => '?').join(',')})` : '1 = 0'); args.push(...mine); }
     const kw = (q.get('q') || '').trim();
     if (kw) { where.push("(title LIKE ? ESCAPE '\\' OR next LIKE ? ESCAPE '\\')"); const like = `%${kw.replace(/[%_\\]/g, m => '\\' + m)}%`; args.push(like, like); }
     const rows = await db.all(`SELECT * FROM cards ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC, seq DESC LIMIT ?`, ...args, limit + 1);
@@ -184,8 +186,8 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     return { items: out.map(c => withStale(view(c, people), c, stale)), hasMore, nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
   });
 
-  route('GET', '/api/cards/:id', async ({ ctx, params }) => {
-    const c = await load(params.id);
+  route('GET', '/api/cards/:id', async ({ ctx, me, params }) => {
+    const c = await load(params.id, me);
     const people = await peopleMap(ctx);
     const [log, msgs] = await Promise.all([
       db.all('SELECT at, by_id, via, text FROM card_log WHERE card_seq = ? ORDER BY id DESC LIMIT 200', c.seq),
@@ -262,7 +264,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
 
   route('PATCH', '/api/cards/:id', async ({ ctx, me, req, params }) => {
     const body = await readJson(req);
-    const c = await load(params.id);
+    const c = await load(params.id, me);
     // 認領：AI 可把「未指派、待整理或待處理、非決策」的卡片的負責人設為自己
     const claiming = me.kind === 'ai' && !c.owner_id && body.ownerId === me.id && c.type !== '決策' && ['待整理', '待處理'].includes(c.status);
     if (!claiming) requireEdit(me, c);
@@ -436,7 +438,7 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
   // 交接：負責人把自己的卡交給指定成員。接手者回到「待處理」；伺服器代交接者在群組發一則 [交接] 並 @ 對方（既有 @ 通知）
   route('POST', '/api/cards/:id/handover', async ({ ctx, me, req, params }) => {
     const body = await readJson(req);
-    const c = await load(params.id);
+    const c = await load(params.id, me);
     if (me.kind === 'ai' && c.owner_id !== me.id) throw new ApiError(403, 'NOT_CARD_OWNER', 'AI 只能交接自己負責的卡片。');
     if (c.type === '決策') throw new ApiError(400, 'NO_HANDOVER_DECISION', '決策卡片不能交接，它本來就在等決策者決定。');
     if (c.status === '已完成' || c.status === '已封存') throw new ApiError(400, 'CARD_CLOSED', '已完成或已封存的卡片不能交接。');
@@ -495,8 +497,9 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
   const isExpired = (r, card) => r.state === 'pending' && !!card && card.updated_at > r.created_at;
   async function sugView(r, people) {
     const p = JSON.parse(r.payload || '{}');
-    const card = r.card_seq ? await db.get('SELECT seq, title, status, updated_at FROM cards WHERE seq = ?', r.card_seq) : null;
+    const card = r.card_seq ? await db.get('SELECT seq, title, status, updated_at, project FROM cards WHERE seq = ?', r.card_seq) : null;
     return {
+      project: card?.project ?? p.project ?? null,
       suggestionId: sugNo(r.id), kind: r.kind, state: r.state, expired: isExpired(r, card), from: ref(people, r.from_id), why: r.why, basisMessageId: r.basis_message_id, createdAt: r.created_at,
       card: card ? { cardId: cardNo(card.seq), title: card.title, status: card.status } : null,
       to: p.to ?? null, waitFor: ref(people, p.waitForId),

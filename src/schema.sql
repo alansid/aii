@@ -198,3 +198,9 @@ CREATE TABLE IF NOT EXISTS project_events (
   text TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_project_events ON project_events (project_id, id);
+-- C-146 A：系統設定。isolation_since＝隔離起算時間，之前的舊訊息兩邊都看得到（當跨專案頻道）
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('isolation_since', '1970-01-01T00:00:00.000Z');

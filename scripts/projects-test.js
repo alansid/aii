@@ -183,6 +183,31 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal(xm.body.error?.code, 'PROJECT_MISMATCH', '收件人不同專案擋下');
     assert.ok(xm.body.error.message.includes('銀行PG'), '錯誤訊息說明是誰');
     assert.equal((await msg(plat.token, '[回覆] 全部專案可指定', { project: 'all', recipientIds: [bank.participantId] })).status, 201, '全部專案的訊息可指定任何人');
+    // ===== C-146 A 隔離（UX 第 948 則 5–7）：伺服器擋，不只畫面 =====
+    await put(liu.token, plat.participantId, ['平台']);
+    await put(liu.token, bank.participantId, ['銀行系統']);
+    const bm = (await msg(bank.token, '[進度] 銀行內部進度', { project: '銀行系統' })).body;
+    const am = (await msg(bank.token, '[通知] 跨專案公告', { project: 'all' })).body;
+    const platAll = (await call(plat.token, '/api/messages?limit=100')).body.items.map(m => m.messageId);
+    assert.ok(!platAll.includes(bm.messageId), '只屬平台的成員，不帶 project 也讀不到銀行系統訊息');
+    assert.ok(platAll.includes(am.messageId), '全部專案（跨專案頻道）的訊息人人看得到');
+    assert.equal((await call(plat.token, `/api/messages/${bm.messageId}`)).status, 404, '單則讀取也擋');
+    assert.ok((await call(liu.token, '/api/messages?limit=100')).body.items.some(m => m.messageId === bm.messageId), '兩邊成員看得到');
+    const allBank = (await msg(liu.token, '[通知] 銀行系統全體注意', { project: '銀行系統', audience: 'all' })).body;
+    const platN = (await call(plat.token, '/api/notifications?limit=100')).body.items.map(n => n.messageId);
+    const bankN = (await call(bank.token, '/api/notifications?limit=100')).body.items.map(n => n.messageId);
+    assert.ok(!platN.includes(allBank.messageId) && bankN.includes(allBank.messageId), '@所有人只送到該專案成員');
+    const rp = (await msg(liu.token, '[回覆] 回銀行 PG', { replyToMessageId: bm.messageId })).body;
+    assert.equal(rp.project, '銀行系統', '回覆繼承專案');
+    const bc = (await call(liu.token, '/api/cards', 'POST', { requestId: 'req_iso1', title: '銀行專案的卡', project: '銀行系統' })).body;
+    assert.ok(!(await call(plat.token, '/api/cards?limit=200')).body.items.some(c => c.cardId === bc.cardId), '只屬平台的成員看不到銀行系統的卡');
+    assert.equal((await call(plat.token, `/api/cards/${bc.cardId}`)).status, 404, '卡片詳情也擋');
+    assert.ok((await call(liu.token, '/api/cards?limit=200')).body.items.some(c => c.cardId === bc.cardId), '兩邊成員看得到兩邊的卡');
+    const after0 = (await call(plat.token, '/api/messages?limit=1')).body.nextCursor;
+    await msg(bank.token, '[進度] 銀行又一則（隔離）', { project: '銀行系統' });
+    const inc = (await call(plat.token, `/api/messages?after=${encodeURIComponent(after0)}`)).body;
+    assert.equal(inc.items.length, 0, '輪詢拿不到別專案的新訊息');
+    assert.notEqual(inc.nextCursor, after0, '游標仍推進到最新');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);
