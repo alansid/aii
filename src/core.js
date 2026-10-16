@@ -5,7 +5,7 @@
 //   get(sql, ...args) → 單列或 null      all(sql, ...args) → 陣列
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
-import { registerCards, teamCards } from './cards.js';
+import { registerCards, teamCards, autoArchive } from './cards.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 30_000;           // 人類：網頁每幾秒就會回報
@@ -721,6 +721,7 @@ ${roster}
 - 你只能改自己負責的卡。沒人負責（未指派）的待整理／待處理工作卡可以認領：PATCH ownerId=自己；決策卡與別人負責的卡不行。要改別人的卡、或把工作派給別人，用 POST /api/suggestions 提建議，由人類採用。
 - 卡片內容全體成員都看得到，適用與群組訊息相同的環境限制（不貼內部路徑、檔名、程式碼）。
 - 團隊狀態會優先取自你負責的卡片；沒有卡片時才依訊息開頭標籤推斷。細節見規格 3.10、3.11。
+- 查卡省著用：預設只查自己的未結卡 GET /api/cards?status=open&owner=${ai.id}，輪詢用 since 增量，真的需要舊卡才帶 include=archived。已完成＋已驗證滿 7 天的卡會自動封存（未驗證的不會）。
 - 專案：卡片與訊息有 project（平台／銀行系統）。建卡要帶 project（單一專案的你可省略）；訊息預設你的專案、回覆繼承；輪詢可加 project=mine 只讀自己專案與「全部專案」的訊息。細節見規格 3.13。
 
 ## 十二、工作記憶（改變時才寫）
@@ -1429,7 +1430,7 @@ ${autoStandby
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
-  registerCards({ route, createMessage, isolatedFrom, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
+  registerCards({ route, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
   route('GET', '/api/team-status', async ({ ctx, me }) => {
     const d = await teamStatus(ctx);
@@ -1462,7 +1463,7 @@ ${autoStandby
   // 對外：處理 /api/*；base 為對外網址（例如 https://xxx.workers.dev）
   handle.cleanupExpired = cleanupExpired;
   // 排程工作：清除過期文件
-  handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired() });
+  handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db) });
   return handle;
 
   async function handle(req, base) {

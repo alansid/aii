@@ -1274,3 +1274,20 @@ body.drawer-docked #app { padding-right: 400px; }
 .q-opt b { flex: none; }
 @media (max-width: 640px) { .q-opts { flex-direction: column; align-items: stretch; } }
 .composer-error { margin: 4px 0 0; }
+/* C-161 卡片瘦身 */
+.wchips button.dashed { border-style: dashed; }
+.bsub { font-size: 12px; font-weight: 700; margin: 2px 0; }
+.bsub.warn { color: #92400e; }
+.bsub.ok, .ok-text { color: #166534; }
+.cmini { all: unset; box-sizing: border-box; cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.cmini:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.cmini-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bfoot { all: unset; box-sizing: border-box; cursor: pointer; min-height: 44px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; color: var(--text); }
+.bfoot:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.arch-group { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.arch-group-head { all: unset; box-sizing: border-box; cursor: pointer; display: block; width: 100%; min-height: 40px; padding: 8px 12px; background: var(--surface-2); color: var(--muted); font-size: 13px; }
+.arch-group-head:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.crow.arch { color: var(--muted); }
+.arch-note { display: grid; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); font-size: 13px; margin-bottom: 8px; }
+.board-tools { display: flex; align-items: center; gap: 12px; }
+@media (max-width: 899px) { .cmini { min-height: 48px; font-size: 14px; } .bfoot { min-height: 48px; } }

@@ -14,7 +14,7 @@ const BASE = `http://localhost:${PORT}`;
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-cards-'));
 
 const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0', CARD_STALE_HOURS: '0' }, stdio: 'pipe',
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0', CARD_STALE_HOURS: '0', ARCHIVE_EVERY_MS: '0' }, stdio: 'pipe',
 });
 const ready = new Promise((res, rej) => {
   server.stdout.on('data', d => { if (String(d).includes('已啟動')) res(); });
@@ -348,6 +348,47 @@ const rid = () => 'req_c' + (++n);
     await call(liu.token, `/api/cards/${st1.cardId}`, 'PATCH', { status: '待確認' });
     await call(liu.token, `/api/cards/${st1.cardId}`, 'PATCH', { status: '已完成' });
     assert.equal((await call(liu.token, `/api/cards/${st1.cardId}`)).body.staleHint, undefined, '已完成的卡不標過時');
+    // ===== C-161 卡片瘦身：已完成＋已驗證滿 7 天自動封存 =====
+    // 這段改用 Percy 的帳號，避免劉昱志的帳號撞到每分鐘請求上限
+    await call(liu.token, `/api/participants/${percy.participant.participantId}/projects`, 'PUT', { projects: ['平台'] });
+    const pc = percy;
+    const { DatabaseSync } = await import('node:sqlite');
+    const sqlDb = new DatabaseSync(path.join(dataDir, 'switch.db'));
+    const ago = d => new Date(Date.now() - d * 86400_000).toISOString();
+    const seqOf = id => Number(id.slice(2)) - 100;
+    const mkDone = async (title, verify) => {
+      const c = (await call(pc.token, '/api/cards', 'POST', { requestId: rid(), title, ownerId: pg.participantId })).body;
+      if (!c.cardId) throw new Error('建卡失敗：' + JSON.stringify(c));
+      await call(pg.token, `/api/cards/${c.cardId}`, 'PATCH', { status: '已完成' });
+      if (verify) await call(pc.token, `/api/cards/${c.cardId}/verify`, 'POST');
+      return c;
+    };
+    const oldV = await mkDone('驗證滿 8 天', true), oldU = await mkDone('完成 8 天沒驗證', false), newV = await mkDone('驗證 6 天', true);
+    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(9), ago(8), seqOf(oldV.cardId));
+    sqlDb.prepare('UPDATE cards SET done_at = ? WHERE seq = ?').run(ago(8), seqOf(oldU.cardId));
+    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(7), ago(6), seqOf(newV.cardId));
+    const list = (await call(pc.token, '/api/cards?limit=200&counts=1')).body; // 讀卡時順便封存（測試設 ARCHIVE_EVERY_MS=0）
+    const st = id => list.items.find(c => c.cardId === id)?.status;
+    assert.equal(st(oldV.cardId), undefined, '已驗證滿 7 天 → 不在預設清單（已封存）');
+    assert.equal(st(oldU.cardId), '已完成', '未驗證永遠不自動封存');
+    assert.equal(st(newV.cardId), '已完成', '驗證未滿 7 天不封存');
+    assert.ok(list.counts.archived >= 1, 'counts=1 回已封存總數');
+    const arch = (await call(pc.token, `/api/cards/${oldV.cardId}`)).body;
+    assert.equal(arch.status, '已封存');
+    assert.ok(arch.log.some(l => l.text === '系統自動封存（完成滿 7 天）' && l.by?.name === '系統' && l.via === '系統'), '紀錄寫系統自動封存');
+    assert.ok(arch.done && arch.verified, '封存保留完成與驗證資訊（抽屜要顯示）');
+    const archList = (await call(pc.token, '/api/cards?status=已封存&limit=1&offset=0')).body;
+    assert.equal(archList.items.length, 1, '已封存分頁 limit');
+    assert.ok((await call(pc.token, '/api/cards?include=archived&limit=200')).body.items.some(c => c.cardId === oldV.cardId), 'include=archived 拿得到');
+    // 重新打開：清掉完成／驗證，再完成＋驗證重新計 7 天（不會馬上又被封存）
+    const reo = (await call(pc.token, `/api/cards/${oldV.cardId}`, 'PATCH', { status: '待處理' })).body;
+    assert.ok(reo.status === '待處理' && !reo.done && !reo.verified, '重新打開清掉完成與驗證');
+    await call(pg.token, `/api/cards/${oldV.cardId}`, 'PATCH', { status: '已完成' });
+    await call(pc.token, `/api/cards/${oldV.cardId}/verify`, 'POST');
+    assert.equal((await call(pc.token, '/api/cards?limit=200')).body.items.find(c => c.cardId === oldV.cardId)?.status, '已完成', '重新完成＋驗證後重新計 7 天');
+    const back = (await call(pc.token, `/api/cards/${oldV.cardId}`)).body;
+    assert.ok(back.log.some(l => l.text === '重新打開'), '紀錄寫重新打開');
+    sqlDb.close();
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);

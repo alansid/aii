@@ -15,6 +15,21 @@ const DECISION_COL = { question: 'question', recommendation: 'recommendation', i
 const cardNo = seq => `C-${seq + CARD_NO_BASE}`;
 
 
+// C-161 卡片瘦身：已完成＋已驗證滿 7 天自動封存（未驗證的永遠不自動封存）
+export const ARCHIVE_DAYS = 7;
+export async function autoArchive(db, now = Date.now()) {
+  const cutoff = new Date(now - ARCHIVE_DAYS * 86400_000).toISOString();
+  const rows = await db.all("SELECT seq FROM cards WHERE status = '已完成' AND verified_by IS NOT NULL AND COALESCE(verified_at, done_at) <= ?", cutoff);
+  if (!rows.length) return 0;
+  const at = new Date(now).toISOString(), stmts = [];
+  for (const r of rows) {
+    stmts.push(["UPDATE cards SET status = '已封存', updated_at = ?, version = version + 1 WHERE seq = ? AND status = '已完成'", [at, r.seq]]);
+    stmts.push(['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [r.seq, at, 'system', '系統', `系統自動封存（完成滿 ${ARCHIVE_DAYS} 天）`]]);
+  }
+  await db.batch(stmts);
+  return rows.length;
+}
+
 // 團隊狀態用：每位負責人手上最急的未完成卡片、以及等決策者的決策卡（只讀未完成的卡片，量很小）
 const WORK_RANK = { 受阻: 0, 待確認: 1, 進行中: 2, 待處理: 3 };
 const WORK_STATE = { 受阻: 'blocked', 待確認: 'waiting', 進行中: 'working', 待處理: 'todo' };
@@ -33,9 +48,11 @@ export async function teamCards(db) {
   return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, createMessage, isolatedFrom, projectName = id => id, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, createMessage, isolatedFrom, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // C-144：卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
+  let archivedAt = 0;
+  const maybeArchive = async () => { if (Date.now() - archivedAt < archiveEveryMs) return; archivedAt = Date.now(); await autoArchive(db).catch(e => console.error('autoArchive', e.message)); };
   // C-146 A：卡片的專案看專案欄位；舊卡標題的「[專案]」前綴在通知裡去掉，改用【專案】標記
   const plainTitle = t => { const m = /^\s*\[([^\]\n]{1,20})\]\s*/.exec(t); return m && (PROJECTS.includes(m[1]) || ['平台', '銀行系統'].includes(m[1])) ? t.slice(m[0].length) || t : t; };
   const parseNo = id => {
@@ -123,10 +140,13 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
   function statusChange(c, to, me, at) {
     if (c.type === '決策' && to === '已完成') throw new ApiError(400, 'USE_DECIDE', '決策卡片要由指定決策者用 POST /api/cards/:id/decide 決定，不能直接標為已完成。');
     const sets = { status: to }, logs = [`狀態 ${c.status} → ${to}`];
-    if (to === '已完成' && !c.done_by) { Object.assign(sets, { done_by: me.id, done_at: at }); logs.push('標為已完成'); }
-    if (to !== '已完成' && c.status === '已完成') {
-      Object.assign(sets, { done_by: null, done_at: null, verified_by: null, verified_at: null });
+    // C-161：離開「已完成」或「已封存」都清掉完成／驗證標記（重新打開的封存卡要重新完成＋驗證，7 天重新計）
+    const leaving = (c.status === '已完成' && to !== '已完成') || (c.status === '已封存' && to !== '已封存');
+    if (to === '已完成' && (!c.done_by || leaving)) { Object.assign(sets, { done_by: me.id, done_at: at }); logs.push('標為已完成'); }
+    if (leaving) {
+      Object.assign(sets, { verified_by: null, verified_at: null }, to === '已完成' ? {} : { done_by: null, done_at: null });
       if (c.verified_by) logs.push('移除已驗證標記');
+      if (c.status === '已封存') logs.push('重新打開');
       if (c.decision_result) { // 重開決策卡：決定作廢
         Object.assign(sets, { decision_result: null, decision_by: null, decision_at: null, decision_note: '' });
         logs.push('決定已撤回');
@@ -160,7 +180,9 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
   const withStale = (v, c, stale) => (stale.has(c.seq) ? { ...v, staleHint: stale.get(c.seq) } : v);
 
   route('GET', '/api/cards', async ({ ctx, me, url }) => {
+    await maybeArchive();
     const q = url.searchParams, limit = parseLimit(url, 100, 200);
+    const offset = Math.max(0, Math.min(Number.parseInt(q.get('offset') || '0', 10) || 0, 100_000)); // C-161：已封存分頁
     const where = [], args = [];
     const status = q.get('status');
     if (status === 'open') where.push(`status NOT IN ${OPEN_STATUSES_SQL}`);
@@ -174,7 +196,7 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     if (isolatedFrom(me)) { const mine = projectsOf(me); where.push(mine.length ? `project IN (${mine.map(() => '?').join(',')})` : '1 = 0'); args.push(...mine); }
     const kw = (q.get('q') || '').trim();
     if (kw) { where.push("(title LIKE ? ESCAPE '\\' OR next LIKE ? ESCAPE '\\')"); const like = `%${kw.replace(/[%_\\]/g, m => '\\' + m)}%`; args.push(like, like); }
-    const rows = await db.all(`SELECT * FROM cards ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC, seq DESC LIMIT ?`, ...args, limit + 1);
+    const rows = await db.all(`SELECT * FROM cards ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC, seq DESC LIMIT ? OFFSET ?`, ...args, limit + 1, offset);
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit);
     const people = await peopleMap(ctx);
@@ -185,10 +207,17 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
       const extra = [...stale.keys()].filter(seq => !have.has(seq));
       if (extra.length) out = [...items, ...(await db.all(`SELECT * FROM cards WHERE seq IN (SELECT value FROM json_each(?))${pf ? ' AND ' + pf.sql : ''}`, JSON.stringify(extra), ...(pf ? pf.args : [])))];
     }
-    return { items: out.map(c => withStale(view(c, people), c, stale)), hasMore, nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
+    let counts;
+    if (q.get('counts') === '1') { // C-161：已封存總數（依可見專案）
+      const mine = isolatedFrom(me) ? projectsOf(me) : null;
+      const cw = mine ? ` AND project IN (${mine.map(() => '?').join(',') || "''"})` : '';
+      counts = { archived: (await db.get(`SELECT COUNT(*) AS n FROM cards WHERE status = '已封存'${cw}`, ...(mine || []))).n };
+    }
+    return { items: out.map(c => withStale(view(c, people), c, stale)), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
   });
 
   route('GET', '/api/cards/:id', async ({ ctx, me, params }) => {
+    await maybeArchive();
     const c = await load(params.id, me);
     const people = await peopleMap(ctx);
     const [log, msgs] = await Promise.all([
@@ -197,7 +226,7 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     ]);
     return {
       ...withStale(view(c, people), c, await staleHints()), messageIds: msgs.map(m => m.message_id),
-      log: log.map(l => ({ at: l.at, by: ref(people, l.by_id), via: l.via, text: l.text })),
+      log: log.map(l => ({ at: l.at, by: l.by_id === 'system' ? { participantId: 'system', name: '系統', memberType: 'system' } : ref(people, l.by_id), via: l.via, text: l.text })),
     };
   });
 

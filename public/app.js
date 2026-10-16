@@ -1161,6 +1161,43 @@
   const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
   const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
   const markHtml = c => (c.verified ? '<span class="cmark ok">✓ 已驗證</span>' : c.done ? '<span class="cmark wait">待驗證</span>' : '') + staleTag(c);
+  // C-161 卡片瘦身：已完成＋已驗證滿 7 天由伺服器自動封存；未驗證不封存，超過 7 天標紅
+  const ARCHIVE_DAYS = 7, DAY_MS = 86400_000;
+  const archiveLeftMs = c => new Date(c.verified?.at || c.done?.at || c.updatedAt).getTime() + ARCHIVE_DAYS * DAY_MS - Date.now();
+  const pendingDays = c => Math.floor((Date.now() - new Date(c.done?.at || c.updatedAt).getTime()) / DAY_MS);
+  const mmdd = iso => { const d = new Date(iso); return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`; };
+  const doneTag = c => (c.status !== '已完成' ? '' : !c.verified
+    ? (pendingDays(c) > ARCHIVE_DAYS ? `<span class="pill-tag red">待驗證 ${pendingDays(c)} 天</span>` : '<span class="pill-tag yellow">待驗證</span>')
+    : archiveLeftMs(c) < DAY_MS ? '<span class="pill-tag grey">明天收起</span>' : '');
+  const archTag = c => (c.status === '已封存' ? `<span class="pill-tag grey">已封存 ${mmdd(c.updatedAt)}</span>` : '');
+  // 已封存的卡不預先載入：按「已封存」才分頁拿（每次 50 張）；數字來自伺服器 counts
+  work.archived = { count: 0, loaded: 0, hasMore: false, fetched: false, loading: false };
+  work.archSearch = { q: '', items: [], open: false, timer: null };
+  async function loadArchived(more = false) {
+    const a = work.archived;
+    if (a.loading) return;
+    a.loading = true;
+    try {
+      const d = await api(`/api/cards?status=${encodeURIComponent('已封存')}&limit=50&offset=${more ? a.loaded : 0}`);
+      for (const c of d.items) work.cards.set(c.cardId, c);
+      a.loaded = (more ? a.loaded : 0) + d.items.length; a.hasMore = d.hasMore; a.fetched = true;
+    } finally { a.loading = false; }
+  }
+  const refreshArchivedCount = () => api('/api/cards?limit=1&counts=1').then(d => { work.archived.count = d.counts?.archived ?? work.archived.count; }).catch(() => {});
+  // 搜尋有字時一併搜已封存（另一組、預設收合）
+  function searchArchived() {
+    const q = work.q.trim(), sa = work.archSearch;
+    clearTimeout(sa.timer);
+    if (!q) { sa.q = ''; sa.items = []; return; }
+    sa.timer = setTimeout(async () => {
+      try {
+        const d = await api(`/api/cards?status=${encodeURIComponent('已封存')}&q=${encodeURIComponent(q)}&limit=50`);
+        if (work.q.trim() !== q) return;
+        sa.q = q; sa.items = d.items.filter(cardInView);
+        renderWork();
+      } catch {}
+    }, 300);
+  }
   const shortTime = iso => fmtTime(iso).replace(/^\d{4}\//, '').replace(/(\d\d:\d\d):\d\d$/, '$1');
   function ownerHtml(c) {
     if (!c.owner) return '<span class="cowner none">未指派</span>';
@@ -1304,8 +1341,9 @@
   }
 
   async function loadCards() {
-    const d = await api('/api/cards?include=archived&limit=200');
+    const d = await api('/api/cards?limit=200&counts=1'); // C-161：預設不載入已封存
     work.cards = new Map(d.items.map(c => [c.cardId, c]));
+    work.archived = { count: d.counts?.archived ?? 0, loaded: 0, hasMore: false, fetched: false, loading: false };
     work.since = d.nextSince;
     work.loaded = true;
     work.lastSync = Date.now();
@@ -1324,8 +1362,10 @@
     work.sugg = sg.items;
     updateTodoBadge();
     if (!d.items.length && !suggChanged) return;
+    const archMoved = d.items.some(c => c.status === '已封存' || work.cards.get(c.cardId)?.status === '已封存');
     for (const c of d.items) work.cards.set(c.cardId, c);
     if (d.items.length) work.since = d.nextSince;
+    if (archMoved) await refreshArchivedCount(); // 有卡被封存或重新打開，已封存數字跟著更新
     renderWork();
     if (state.page === 'messages' && d.items.length) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
     if (work.openId && d.items.some(c => c.cardId === work.openId) && !work.editing) openCard(work.openId);
@@ -1507,15 +1547,20 @@
     const waitMe = all.filter(c => isMeRef(c.waitFor) && !closedSt(c.status) && !decidingMe(c));
     const blocked = all.filter(c => c.status === '受阻');
     const done = all.filter(c => c.status === '已完成');
-    const panel = (title, cls, list, empty, meta) => `
+    const panel = (title, cls, list, empty, meta, extra = '') => `
       <section class="wpanel ${cls}${list.length ? ' has' : ''}">
         <div class="wpanel-head"><span class="wdot"></span><b>${title}</b><span class="wcount">${list.length}</span></div>
         ${list.length ? list.slice(0, 3).map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span>${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(meta(c))}</span></button>`).join('')
           : `<p class="muted small">${empty}</p>`}
         ${list.length > 3 ? `<button type="button" class="link small" data-filter="${cls === 'done' ? '已完成' : cls === 'blocked' ? '受阻' : 'open'}">查看全部 ${list.length} 張</button>` : ''}
+        ${extra}
       </section>`;
-    const chips = [['open', '未完成', all.filter(c => !closedSt(c.status)).length], ...CARD_ST.map(s => [s, s, all.filter(c => c.status === s).length])];
+    const chips = [['open', '未完成', all.filter(c => !closedSt(c.status)).length], ...CARD_ST.map(s => [s, s === '已完成' ? '已完成（7 天）' : s, s === '已封存' ? work.archived.count : all.filter(c => c.status === s).length])];
     const listed = all.filter(c => (work.filter === 'open' ? !closedSt(c.status) : c.status === work.filter));
+    const archMore = work.filter === '已封存' && work.archived.hasMore ? `<button type="button" class="btn small" data-arch-more ${work.archived.loading ? 'disabled' : ''}>再載入 50 張</button>` : '';
+    const sa = work.archSearch, archHits = work.q.trim() && sa.q === work.q.trim() && work.filter !== '已封存' ? sa.items.filter(c => !listed.some(x => x.cardId === c.cardId)) : [];
+    const archGroup = archHits.length ? `<div class="arch-group"><button type="button" class="arch-group-head" data-arch-toggle aria-expanded="${sa.open}">已封存 ${archHits.length}（${sa.open ? '點一下收合' : '收合中，點開'}）${sa.open ? '▴' : '▾'}</button>
+        ${sa.open ? archHits.map(c => `<button type="button" class="crow arch" data-card="${esc(c.cardId)}"><span class="cid">${esc(c.cardId)}</span><span class="crow-main"><span class="crow-title">${projTag(c.project)} ${esc(cardTitle(c))}</span></span><span class="crow-st">${archTag(c)}</span></button>`).join('') : ''}</div>` : '';
     const decSection = decisionSectionHtml(decideMe);
     return `
       ${decSection}
@@ -1523,11 +1568,13 @@
       <div class="wpanels">
         ${panel('等你處理', 'mine', waitMe, '目前沒有等你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`)}
         ${panel('受阻', 'blocked', blocked, '沒有受阻的卡片。', c => waitText(c) || '未填寫阻塞原因')}
-        ${panel('最近完成', 'done', done, '最近沒有完成的卡片。', c => `${c.verified ? '已驗證' : '待驗證'} · ${c.done?.by?.name || ''} · ${shortTime(c.done?.at || c.updatedAt)}`)}
+        ${panel('最近完成（7 天）', 'done', done, '最近 7 天沒有完成的卡片。', c => `${c.verified ? (archiveLeftMs(c) < DAY_MS ? '已驗證 · 明天收起' : '已驗證') : pendingDays(c) > ARCHIVE_DAYS ? `待驗證 ${pendingDays(c)} 天` : '待驗證'} · ${c.done?.by?.name || ''} · ${shortTime(c.done?.at || c.updatedAt)}`,
+          work.archived.count ? `<button type="button" class="link small" data-filter="已封存">更早的 ${work.archived.count} 張已封存</button>` : '')}
       </div>
       <div class="wchips" role="group" aria-label="依狀態篩選">
-        ${chips.map(([v, label, n]) => `<button type="button" data-filter="${esc(v)}" aria-pressed="${work.filter === v}">${label}<span>${n}</span></button>`).join('')}
+        ${chips.map(([v, label, n]) => `<button type="button" data-filter="${esc(v)}" aria-pressed="${work.filter === v}"${v === '已封存' ? ' class="dashed"' : ''}>${label}<span>${n}</span></button>`).join('')}
       </div>
+      ${work.q.trim() ? '<p class="muted small">搜尋時一併找已封存</p>' : ''}
       <div class="crows">
         ${listed.length ? listed.map(c => `
           <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}" data-card="${esc(c.cardId)}">
@@ -1535,9 +1582,11 @@
             <span class="crow-main"><span class="crow-title">${typeTag(c)}${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
             <span class="crow-st">${stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
-            <span class="crow-time muted small">${shortTime(c.updatedAt)}${markHtml(c)}</span>
-          </button>`).join('') : '<p class="muted">沒有符合條件的卡片。</p>'}
-      </div>`;
+            <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
+          </button>`).join('') : `<p class="muted">${work.filter === '已封存' && work.archived.loading ? '載入中…' : '沒有符合條件的卡片。'}</p>`}
+        ${archMore}
+      </div>
+      ${archGroup}`;
   }
 
   // 決策卡區塊（總覽與「待你處理」共用）
@@ -1641,21 +1690,34 @@
     const cols = wide() ? CARD_ST.filter(s => s !== '已封存' || work.showArchived) : [work.mCol];
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
-        <div class="ctile-top"><span class="cid">${esc(c.cardId)}</span>${typeTag(c)}${markHtml(c)}</div>
+        <div class="ctile-top"><span class="cid">${esc(c.cardId)}</span>${typeTag(c)}${c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
         <b class="ctile-title">${projTag(c.project)} ${esc(cardTitle(c))}</b>
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
         <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
       </div>`;
+    const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}"><span class="cid">${esc(c.cardId)}</span><span class="cmini-t">${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
+    const archFoot = work.archived.count ? `<button type="button" class="bfoot" data-show-archived>更早完成的 ${work.archived.count} 張已收進「已封存」· 查看</button>` : '';
+    const colBody = (st, list) => {
+      if (st === '已完成') {
+        const pend = list.filter(c => !c.verified), ver = list.filter(c => c.verified);
+        return `<div class="bsub warn">待驗證 ${pend.length}（不會自動收起）</div>${pend.map(tile).join('')}
+          <div class="bsub ok">已驗證 ${ver.length}（精簡一行，點開看詳情）</div>${ver.map(mini).join('')}${archFoot}`;
+      }
+      if (st === '已封存') return (list.length ? list.map(tile).join('') : `<p class="muted small bempty">${work.archived.loading ? '載入中…' : '沒有已封存的卡片'}</p>`)
+        + (work.archived.hasMore ? `<button type="button" class="bfoot" data-arch-more>再載入 50 張</button>` : '');
+      return list.length ? list.map(tile).join('') : `<p class="muted small bempty">${wide() ? '拖曳卡片到這裡' : '這個狀態沒有卡片'}</p>`;
+    };
+    const mLabel = st => (st === '已完成' ? '已完成（7 天）' : st);
     return `
-      ${wide() ? `<div class="board-tools"><button type="button" class="link small" id="toggle-archived">${work.showArchived ? '隱藏已封存' : '顯示已封存'}</button><span class="muted small">拖曳卡片到其他欄可以改狀態</span></div>`
-        : `<div class="wchips" role="group" aria-label="狀態">${CARD_ST.map(s => `<button type="button" data-mcol="${esc(s)}" aria-pressed="${work.mCol === s}">${s}<span>${all.filter(c => c.status === s).length}</span></button>`).join('')}</div>`}
+      ${wide() ? `<div class="board-tools"><span class="muted small">拖曳卡片到其他欄可以改狀態</span><span class="grow"></span><span class="muted small">已封存 ${work.archived.count} 張（完成滿 7 天自動收起）</span><button type="button" class="link small" id="toggle-archived">${work.showArchived ? '隱藏已封存' : '顯示已封存'}</button></div>`
+        : `<div class="wchips" role="group" aria-label="狀態">${CARD_ST.map(st => `<button type="button" data-mcol="${esc(st)}" aria-pressed="${work.mCol === st}"${st === '已封存' ? ' class="dashed"' : ''}>${mLabel(st)}<span>${st === '已封存' ? work.archived.count : all.filter(c => c.status === st).length}</span></button>`).join('')}</div>`}
       <div class="board">
         ${cols.map(s => {
           const list = all.filter(c => c.status === s);
           return `<section class="bcol" data-col="${esc(s)}" aria-label="${esc(s)}">
-            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(s)}</b><span class="wcount">${list.length}</span></div>
-            <div class="bcol-list">${list.length ? list.map(tile).join('') : `<p class="muted small bempty">${wide() ? '拖曳卡片到這裡' : '這個狀態沒有卡片'}</p>`}</div>
+            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(s)}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount">${s === '已封存' ? work.archived.count : list.length}</span></div>
+            <div class="bcol-list">${colBody(s, list)}</div>
           </section>`;
         }).join('')}
       </div>`;
@@ -1671,7 +1733,19 @@
     const v = t.closest('[data-view]');
     if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
     const f = t.closest('[data-filter]');
-    if (f) { work.filter = f.dataset.filter; work.view = 'A'; return renderWork(); }
+    if (f) {
+      work.filter = f.dataset.filter; work.view = 'A';
+      if (work.filter === '已封存' && !work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      return renderWork();
+    }
+    if (t.closest('[data-arch-more]')) { await loadArchived(true).catch(err => toast(err.message)); return renderWork(); }
+    if (t.closest('[data-arch-toggle]')) { work.archSearch.open = !work.archSearch.open; return renderWork(); }
+    if (t.closest('[data-show-archived]')) {
+      if (wide()) work.showArchived = true; else work.mCol = '已封存';
+      if (!work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      renderWork();
+      return workBox.querySelector('[data-col="已封存"]')?.scrollIntoView({ inline: 'end', block: 'nearest' });
+    }
     if (t.closest('[data-goto-inbox]')) { showPage('inbox'); return; }
     const tt = t.closest('[data-team-tab]');
     if (tt) { work.teamTab = tt.dataset.teamTab; renderTeamPage(); return; }
@@ -1710,8 +1784,16 @@
     const sb = t.closest('[data-sugg-basis]');
     if (sb) { const id = sb.dataset.suggBasis; showPage('messages'); return void jumpTo(id); }
     const mc = t.closest('[data-mcol]');
-    if (mc) { work.mCol = mc.dataset.mcol; return renderWork(); }
-    if (t.closest('#toggle-archived')) { work.showArchived = !work.showArchived; return renderWork(); }
+    if (mc) {
+      work.mCol = mc.dataset.mcol;
+      if (work.mCol === '已封存' && !work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      return renderWork();
+    }
+    if (t.closest('#toggle-archived')) {
+      work.showArchived = !work.showArchived;
+      if (work.showArchived && !work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      return renderWork();
+    }
     if (t.closest('#card-new')) return openNewCard();
     const c = t.closest('[data-card]');
     if (c) openCard(c.dataset.card);
@@ -1720,7 +1802,7 @@
     const c = e.target.closest?.('.ctile');
     if (c && e.key === 'Enter') openCard(c.dataset.card);
   });
-  workBox.addEventListener('input', e => { if (e.target.id === 'card-q') { work.q = e.target.value; renderWork(); } });
+  workBox.addEventListener('input', e => { if (e.target.id === 'card-q') { work.q = e.target.value; searchArchived(); renderWork(); } });
   workBox.addEventListener('change', e => {
     if (e.target.id === 'card-owner') { work.owner = e.target.value; renderWork(); }
     if (e.target.id === 'card-type') { work.type = e.target.value; renderWork(); }
@@ -1733,7 +1815,7 @@
   });
   // 看板拖曳（桌面）
   workBox.addEventListener('dragstart', e => {
-    const c = e.target.closest?.('.ctile');
+    const c = e.target.closest?.('.ctile, .cmini');
     if (!c) return;
     work.dragId = c.dataset.card;
     e.dataTransfer.setData('text/plain', c.dataset.card);
@@ -1930,6 +2012,14 @@
             ${canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
             ${d.status === '已完成' && !d.verified ? `<button class="btn small primary" type="button" data-act="verify" ${mine ? 'disabled title="完成者不能自己驗證"' : ''}>標為已驗證</button>` : ''}
           </div>
+          ${d.status === '已封存' ? (() => {
+            const sys = (d.log || []).find(l => /^系統自動封存/.test(l.text));
+            const why = sys ? `${mmdd(sys.at)} 系統自動封存（${mmdd(d.verified?.at || d.done?.at || sys.at)} 驗證完成，滿 ${ARCHIVE_DAYS} 天）。` : `${mmdd(d.updatedAt)} 已封存。`;
+            return `<div class="arch-note" role="status">${why}內容和紀錄都還在，只是不在看板與 AI 預設查詢裡。
+              <div class="row"><button class="btn small" type="button" data-act="reopen">重新打開（改回待處理）</button></div>
+              <span class="muted small">重新打開後照一般卡片流程；再次完成＋驗證後重新計 ${ARCHIVE_DAYS} 天。</span></div>`;
+          })() : ''}
+          ${d.status === '已完成' && doneTag(d) ? `<div class="dmarks">${doneTag(d)}<span class="muted small">${d.verified ? '已驗證：明天會自動收進已封存' : pendingDays(d) > ARCHIVE_DAYS ? '超過 7 天沒驗證，請驗證或退回' : '待驗證的卡不會自動收起'}</span></div>` : ''}
           ${d.done || d.verified ? `<div class="dmarks">
             ${d.done ? `<span class="cmark ok-bg">已完成 · ${esc(d.done.by?.name || '')} · ${shortTime(d.done.at)}</span>` : ''}
             ${d.verified ? `<span class="cmark ver-bg">已驗證 · ${esc(d.verified.by?.name || '')} · ${shortTime(d.verified.at)}</span>` : ''}
@@ -1999,6 +2089,7 @@
     if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
+    else if (a.dataset.act === 'reopen') { await patchCard(id, { status: '待處理' }); refreshArchivedCount().then(renderWork); }
     else if (a.dataset.act === 'verify') {
       try {
         work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/verify`, { method: 'POST' }));

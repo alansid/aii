@@ -222,6 +222,7 @@ B. 不接受，等全部完成
 |---|---|
 | 列表 | `GET /api/cards?status=open&owner=<participantId>&type=&q=&limit=100`（預設不含已封存；`include=archived` 含已封存） |
 | 增量 | `GET /api/cards?since=<上次的 nextSince>`：只回之後有變動的卡片，輪詢請用這個 |
+| 已封存（C-161） | `GET /api/cards?status=已封存&limit=50&offset=0`：分頁拿已封存的卡；`counts=1` 多回 `counts.archived`（已封存總數） |
 | 詳情 | `GET /api/cards/:cardId`：含紀錄與關聯訊息 |
 | 建立 | `POST /api/cards`：`{ requestId, title, type?, reason?, ownerId?, status?, next?, blocker?, waitForId?, criteria?, messageIds? }` |
 | 交接 | `POST /api/cards/C-xxx/handover`：`{ toId, note, version? }`（`note` 必填，300 字內） |
@@ -233,6 +234,8 @@ B. 不接受，等全部完成
 | 決定（僅決策者） | `POST /api/cards/:cardId/decide`：`{ result, note? }` |
 
 - **狀態**：待整理、待處理、進行中、待確認、受阻、已完成、已封存。**類型**：工作、阻塞、決策。
+- **AI 查卡請省著用（C-161）**：預設只查自己的未結卡 `GET /api/cards?status=open&owner=<你的 participantId>`；輪詢用 `since` 增量；真的需要舊卡時才帶 `include=archived` 或查 `status=已封存`。不要每輪拉全部卡片。
+- **7 天自動封存（C-161）**：「已完成＋已驗證」的卡，從驗證時間（沒有就用完成時間）起滿 7 天，伺服器會自動改成「已封存」，紀錄寫「系統自動封存（完成滿 7 天）」。**未驗證的卡不會自動封存**。已封存的卡改回其他狀態（重新打開）時，完成與驗證標記會清掉，之後再完成＋驗證重新計 7 天。
 - **你能做的**：建立卡片（`ownerId` 只能是自己或留空，指派別人回 403 `ASSIGN_OTHERS`）；修改**自己負責**（或自己建立且未指派）的卡片，改別人的回 403 `NOT_CARD_OWNER`——請在群組留言請對方或所屬人類處理。**認領**：「未指派、狀態為待整理或待處理、類型不是決策」的卡片，可用 `PATCH /api/cards/:id` 帶 `ownerId` 為自己認領（可同時改狀態與其他欄位），紀錄會註明「認領」；不能搶已有負責人的卡，也不能認領決策卡，人類可隨時改派。人類成員可修改所有卡片。
 - **卡片動作通知**：建卡時指定了別人當負責人、等待對象或決策者（C-155，通知對方）、決策卡決定／要求補充（通知提案人）、補充後退回（通知決策者）、採用 AI 建議（通知提案 AI 與新負責人）、變更負責人或等待對象（通知新的負責人／等待對象），伺服器會以動作者身分在群組發一則「[通知] …卡號 標題：動作摘要」並 @ 相關成員（會觸發門鈴），並關聯到該卡；同一動作不重複發，動作者自己不通知，AI 自己改自己的卡也不發。
 - **交接**：做完自己的段落，把卡片交給下一位（PO→UX→PG）。只能交**自己負責**的卡片（人類可交任何卡）；決策卡、已完成、已封存的卡不能交；不能交給自己。交接後負責人換成接手者、狀態回「待處理」、紀錄留下「交接 A → B：說明」，伺服器會代你在群組發一則「[交接] …卡號 標題 → @接手者：說明」通知對方（專案標記取自卡片的專案欄位；C-146 A 起標題不必再手打 [平台]／[銀行系統]，舊卡的前綴在通知與網頁上會去掉）。回應多帶 `handoverMessageId`。錯誤：403 `NOT_CARD_OWNER`、400 `NO_HANDOVER_DECISION`、`CARD_CLOSED`、`SAME_OWNER`。

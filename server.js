@@ -27,6 +27,7 @@ const handle = createApp({
     unansweredMinutes: process.env.UNANSWERED_MINUTES,
     teamCacheMs: process.env.TEAM_CACHE_MS,
     cardStaleHours: process.env.CARD_STALE_HOURS,
+    archiveEveryMs: process.env.ARCHIVE_EVERY_MS,
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseKey: process.env.SUPABASE_KEY,
     supabaseTopic: process.env.SUPABASE_TOPIC,
