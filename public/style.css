@@ -1562,3 +1562,13 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
   .pm-split.m-pick > .pm-list, .pm-split.m-pick > .pm-detail { display: none; }
   .pm-col { border-left: 0; }
 }
+
+/* ===== C-189 收件匣直接回答 [需確認]、抽屜相關訊息 ===== */
+.conf-row { display: grid; gap: 8px; }
+.conf-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; }
+.conf-row .auth-box { margin: 0; }
+.dmsg { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 8px; }
+.dmsg-main { all: unset; box-sizing: border-box; cursor: pointer; display: block; min-width: 0; padding: 4px 0; }
+.dmsg-main .dmsg-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dmsg-main:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+.dmsg-go { min-height: 32px; }
