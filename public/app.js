@@ -117,6 +117,7 @@
 
   // ---------- 加入 / 登入 ----------
   async function showJoin() {
+    $('#boot').hidden = true;
     $('#app').hidden = true;
     $('#join').hidden = false;
     if (store.get('aigile-switch-login-tab') === 'token' && $('#token-form').hidden) {
@@ -263,8 +264,7 @@
       $('#join-error').textContent = '這是 AI 助手的 Token，只能透過 API 存取，不能登入網頁。';
       return showJoin();
     }
-    $('#join').hidden = true;
-    $('#app').hidden = false;
+    $('#join').hidden = true; // C-195：主畫面等資料載完才顯示（先留在「載入中」）
     drawMe();
     await loadProjectList().catch(() => {});
     const route = parseRoute();
@@ -279,7 +279,10 @@
     connectEvents();
     // C-169：網址帶專案與頁面；多專案成員打開 / 先到第一層「我的專案」，只屬一個專案的人直接進自己的專案
     const savedPage = store.get(PAGE_KEY);
-    showPage(route.page || (projectView() === 'hub' ? 'hub' : ['work', 'inbox', 'team'].includes(savedPage) ? savedPage : 'messages'), { replace: true });
+    await showPage(route.page || (projectView() === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(savedPage) ? savedPage : 'messages'), { replace: true });
+    $('#boot').hidden = true;
+    $('#app').hidden = false;
+    if (state.page === 'messages') scrollBottom();
   }
 
   async function loadParticipants() {
@@ -575,7 +578,7 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', myai: '我的 AI', perm: '成員與權限' };
+  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限' };
   const TOP_PAGES = { myai: '/my-ai', perm: '/members' }; // C-182：第一層頁面（不分專案）
   const isTop = p => p === 'myai' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
@@ -891,6 +894,7 @@
     const stick = nearBottom() || isMine(m);
     const parent = m.replyToMessageId && state.byId.get(m.replyToMessageId);
     if (parent && /^\s*\[需確認\]/.test(parent.text) && (state.participants.get(m.author.participantId) || m.author).memberType === 'human') {
+      work.answered?.add(parent.messageId); updateTodoBadge(); if (state.page === 'inbox') setTimeout(renderWork, 1500); // C-195：先看到「已回覆」，再從收件匣移走
       loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox' || state.page === 'hub') renderWork(); }).catch(() => {}); // C-173：回覆後收件匣移除
     }
     state.messages.push(m);
@@ -1197,7 +1201,7 @@
   // 在「團隊」頁時，團隊狀態／成員名單／我的 AI 這三個畫面直接畫在頁面的分頁區，不再跳對話框（C-134 第二版）
   const TEAM_PANES = ['團隊狀態', '成員名單', '我的 AI'];
   function openModal(title, bodyHtml, opts = {}) {
-    const pane = (state.page === 'team' && TEAM_PANES.includes(title) && $('#team-pane')) || (state.page === 'myai' && title === '我的 AI' && $('#myai-pane')) || null;
+    const pane = (state.page === 'team' && TEAM_PANES.includes(title) && $('#team-pane')) || (state.page === 'myai' && title === '我的 AI' && $('#myai-pane')) || (state.page === 'files' && title === '文件' && $('#files-pane')) || null;
     if (pane) {
       const sc = $('#page-work'), top = sc.scrollTop;
       pane.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
@@ -1828,7 +1832,7 @@
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); showPage(page, { replace, noHistory }); }); // C-182：有未儲存的變更先提醒
     if (work.openId) closeCard();
     const v = projectView();
-    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
+    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
     if (state.page !== 'team') work.teamScrollTab = null; // C-157：離開團隊頁就不再保留捲動位置（UX 第 1010 則），回來從頂端開始
     if (state.page !== 'hub' && !TOP_PAGES[state.page]) store.set(PAGE_KEY, state.page);
     if (!noHistory) syncUrl(replace);
@@ -1846,6 +1850,10 @@
       renderTeamPage();
     } else if (state.page === 'hub') {
       return Promise.all([work.loaded ? null : loadCards(), loadTeam().catch(() => {})]).then(renderWork).catch(err => toast(err.message));
+    } else if (state.page === 'files') {
+      const box = $('#page-work'); box.classList.remove('is-board');
+      box.innerHTML = '<div id="files-pane" class="inline-pane"></div>';
+      return openFiles(); // C-195：文件改成頁面，不再用彈窗擋住左側選單
     } else if (state.page === 'myai') {
       return renderMyAiPage();
     } else if (state.page === 'perm') {
@@ -1873,12 +1881,42 @@
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  // C-195：看板放不下時，右邊顯示「還有 N 欄 →」，點了往右捲；捲到底就收起
+  function boardMore() {
+    const board = $('#page-work .board');
+    if (!board || !wide()) return;
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'board-more';
+    board.parentElement.style.position = 'relative';
+    board.after(btn);
+    const update = () => {
+      const cols = [...board.querySelectorAll('.bcol')], right = board.getBoundingClientRect().right;
+      const hidden = cols.filter(c => c.getBoundingClientRect().left > right - 40).length;
+      btn.hidden = board.scrollLeft + board.clientWidth >= board.scrollWidth - 4;
+      btn.textContent = hidden ? `→ 還有 ${hidden} 欄` : '→';
+      board.classList.toggle('has-more', !btn.hidden);
+      btn.setAttribute('aria-label', '看板往右捲，看其他欄位');
+    };
+    btn.onclick = () => board.scrollTo({ left: board.scrollWidth, behavior: 'smooth' }); // 點了捲到底
+    board.addEventListener('scroll', update, { passive: true });
+    requestAnimationFrame(update);
+  }
+  // C-195：從「我的專案」點進來的那一項，重畫後仍標著並捲到它
+  function applyFocusItem() {
+    const f = work.focusItem;
+    if (!f || Date.now() > f.until || state.page !== 'inbox') return false;
+    const el = document.querySelector('#page-work ' + f.sel);
+    if (!el) return false;
+    el.classList.add('focus-item');
+    if (!f.scrolled) { f.scrolled = true; el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); }
+    return true;
+  }
   function renderWork() {
     const box = $('#page-work');
     if (state.page === 'perm') return drawPerm();
     if (!['work', 'inbox', 'hub'].includes(state.page) || !work.loaded) return;
     box.classList.remove('is-board');
-    if (state.page === 'inbox') { box.innerHTML = inboxHtml(); return; }
+    if (state.page === 'inbox') { box.innerHTML = inboxHtml(); applyFocusItem(); return; }
     if (state.page === 'hub') { box.innerHTML = hubHtml(); return; }
     const all = visibleCards();
     const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView()); // C-180
@@ -1899,6 +1937,7 @@
       </div>
       ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
     box.classList.toggle('is-board', work.view === 'B'); // 看板：高度＝頁面剩餘高度，欄內各自捲動（C-142）
+    if (work.view === 'B') boardMore();
     if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
@@ -2049,9 +2088,8 @@
     if (r.closest('.modal')) closeModal();
     const key = r.dataset.hubTodo, id = key.slice(2);
     await setProjectView(r.dataset.hubProj, 'inbox');
-    const el = document.querySelector(`#page-work [${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row' }[key[0]]}="${CSS.escape(id)}"]`);
-    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
-    else if (key[0] === 'c') openCard(id);
+    work.focusItem = { sel: `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
+    if (!applyFocusItem() && key[0] === 'c') openCard(id);
   });
   $('#m-todo').addEventListener('click', () => openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }));
   function inboxHtml() {
@@ -2065,7 +2103,7 @@
   }
 
   // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議（C-107）
-  const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId && !cardOfConfirm(d) && inView(d.project));
+  const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId && !cardOfConfirm(d) && inView(d.project) && !work.answered.has(d.messageId));
   function updateTodoBadge() {
     const counts = todoByView(), n = counts[projectView()] || 0, total = counts.hub; // 收件匣徽章＝所在專案；分頁標題＝全部
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
@@ -2092,7 +2130,8 @@
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
   function boardHtml(all) {
-    const cols = wide() ? CARD_ST.filter(s => s !== '已封存' || work.showArchived) : [work.mCol];
+    const BOARD_ORDER = ['待整理', '待處理', '進行中', '受阻', '待確認', '已完成', '已封存']; // C-195：受阻提前到第三欄（待整理有卡才顯示）
+    const cols = wide() ? BOARD_ORDER.filter(s => (s !== '已封存' || work.showArchived) && (s !== '待整理' || all.some(c => c.status === '待整理'))) : [work.mCol];
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
         <div class="ctile-top"><span class="cid">${esc(c.cardId)}</span>${typeTag(c)}${c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
@@ -2122,7 +2161,7 @@
         ${cols.map(s => {
           const list = all.filter(c => c.status === s);
           return `<section class="bcol" data-col="${esc(s)}" aria-label="${esc(s)}">
-            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(s)}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount">${s === '已封存' ? work.archived.count : list.length}</span></div>
+            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(s)}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount${s === '受阻' && list.length ? ' bad' : ''}">${s === '已封存' ? work.archived.count : list.length}</span></div>
             <div class="bcol-list">${colBody(s, list)}</div>
           </section>`;
         }).join('')}
@@ -2533,16 +2572,20 @@
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
     const p0 = singleProject() ? myProjects()[0] : [sg?.project, srcMsg?.project, projectView()].find(x => myProjects().includes(x)) || '';
     const opts = none => (p0 ? peopleOpts(p0, '', none) : `<option value="">${none}</option>`); // C-180：先選專案才列人
+    const inProjNew = !!p0 && myProjects().includes(projectView()) && (!srcMsg?.project || srcMsg.project === projectView()) && (!sg?.project || sg.project === projectView()); // C-195：在專案內建卡，專案就是本專案
     const body = openModal(sg ? '編輯後採用建議' : srcMsg ? '從訊息建立卡片' : '新增卡片', `
       <form id="card-new-form" class="stack">
         ${srcMsg ? `<div class="info-box">來源訊息「${esc(srcMsg.author.name)} · ${shortTime(srcMsg.createdAt)}」會自動關聯到這張卡，無法移除。</div>` : ''}
         ${sg ? `<div class="warn-box">${esc(sg.from?.name || 'AI')} 的建議：${esc(sg.why)}</div>` : ''}
+        <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
+        ${inProjNew ? `<p class="muted small nc-proj">建在「${esc(projName(p0))}」</p>` : ''}
+        <label ${inProjNew ? 'hidden' : ''}>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${esc(p)}" ${(inProjNew ? p0 : srcMsg?.project || projectView()) === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
+        <label>負責人<select name="ownerId">${opts('未指派')}</select></label>
         <div class="field"><span class="field-label" id="nt-label">類型</span>
           <div class="seg-scope full" role="group" aria-labelledby="nt-label">
             <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button>
           </div><input type="hidden" name="type" value="工作"></div>
-        <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
-        <label>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${esc(p)}" ${(srcMsg?.project || projectView()) === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
+        <details id="nc-more" ${sg || srcMsg || store.get('aigile-switch-nc-more') === '1' ? 'open' : ''}><summary>更多欄位 ▾（原因、狀態、下一步、完成條件、等誰）</summary><div class="stack nc-more-body">
         <div id="nc-decision" class="stack" hidden>
           <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
           <label>建議方案<textarea name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
@@ -2555,13 +2598,11 @@
           <label>決定後<input name="afterNext" maxlength="300" placeholder="決定後下一步是什麼"></label>
         </div>
         <label>原因<textarea name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
-        <div class="two-col">
-          <label>負責人<select name="ownerId">${opts('未指派')}</select></label>
-          <label>狀態<select name="status">${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
-        </div>
+        <label>狀態<select name="status">${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
         <label>下一步<textarea name="next" rows="2" maxlength="300"></textarea></label>
         <label>完成條件<textarea name="criteria" rows="2" maxlength="500"></textarea></label>
         <label>等誰<select name="waitForId">${opts('不用等人')}</select></label>
+        </div></details>
         <p class="muted small">卡片內容所有成員都看得到，請勿填入內部路徑、程式碼或客戶個資。</p>
         <p class="error" id="card-new-error" role="alert"></p>
       </form>`, {
@@ -2569,12 +2610,14 @@
       foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="card-new-form">建立卡片</button>',
     });
     const form = body.querySelector('#card-new-form');
+    body.querySelector('#nc-more').addEventListener('toggle', e => store.set('aigile-switch-nc-more', e.target.open ? '1' : '0')); // C-195：展開狀態記在瀏覽器
     body.querySelectorAll('[data-nt]').forEach(b => b.addEventListener('click', () => {
       form.type.value = b.dataset.nt;
       body.querySelectorAll('[data-nt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
       const t = b.dataset.nt;
       form.status.disabled = t !== '工作'; // 阻塞固定為受阻、決策固定為待確認
       body.querySelector('#nc-decision').hidden = t !== '決策';
+      if (t === '決策') body.querySelector('#nc-more').open = true; // 選「決策」自動展開決策欄位
       form.waitForId.closest('label').hidden = t === '決策'; // 決策卡固定等決策者
       for (const k of ['next', 'criteria']) form[k].closest('label').hidden = t === '決策';
     }));
@@ -2734,8 +2777,17 @@
     try {
       const r = await postMsg({ text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] });
       quickMap.delete(id);
-      onNewMessage(r); refreshMsg(id);
-      toast('已送出');
+      if (state.page === 'inbox') { // C-195：收件匣裡回答：該項立刻淡出移走
+        work.answered.add(id);
+        const row = document.querySelector(`#page-work [data-conf-row="${CSS.escape(id)}"]`);
+        if (row) row.classList.add('fading');
+        setTimeout(() => { renderWork(); updateTodoBadge(); }, 250);
+        onNewMessage(r);
+        const t = $('#toast');
+        t.innerHTML = '已回覆 <button type="button" class="link toast-undo" id="toast-go">到訊息看</button>';
+        t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 5000);
+        t.querySelector('#toast-go').onclick = () => { t.hidden = true; showPage('messages'); jumpTo(r.messageId); };
+      } else { onNewMessage(r); refreshMsg(id); toast('已送出'); }
       loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox') renderWork(); }).catch(() => {});
     } catch (err) {
       q.busy = false; q.error = err.message; refreshMsg(id);
@@ -2925,7 +2977,7 @@
       ({ 'team-status': openTeam, members: openMembers, 'my-ai': openMyAi })[b.dataset.hub]();
     });
   }
-  const openers = { team: openTeamHub, members: openMembers, 'my-ai': () => goTop('myai'), inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr, 'proj-admin': () => goTop('perm') }; // C-182：專案管理併入「成員與權限」
+  const openers = { team: openTeamHub, members: openMembers, 'my-ai': () => goTop('myai'), inbox: openInbox, files: () => showPage('files'), api: openApi, settings: openSettings, qr: openQr, 'proj-admin': () => goTop('perm') }; // C-182：專案管理併入「成員與權限」
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
   // 手機選單（底部滑出）
   const sheet = $('#sheet');
@@ -2943,7 +2995,8 @@
   // ---------- 團隊狀態 ----------
   const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定', todo: '待處理' };
   // 「等你決定」：訊息型的所有人都看；決策卡只給指定的決策者看
-  const myDecisions = t => t.decisions.filter(d => (!d.cardId && !cardOfConfirm(d)) || d.deciderId === meId());
+  work.answered = new Set(); // C-195：已經有人類回覆的 [需確認]，不等團隊狀態快取（約 1 分鐘）就先移走
+  const myDecisions = t => t.decisions.filter(d => ((!d.cardId && !cardOfConfirm(d)) || d.deciderId === meId()) && !(d.messageId && work.answered.has(d.messageId)));
   const agoText = iso => {
     if (!iso) return '從未上線';
     const min = Math.floor((Date.now() - new Date(iso)) / 60000);
@@ -4346,4 +4399,5 @@
   state.token = store.get(TOKEN_KEY);
   if (state.token) start().catch(() => { store.del(TOKEN_KEY); state.token = null; showJoin(); });
   else showJoin();
+  if (!state.token) $('#boot').hidden = true;
 })();

@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <!-- C-195：載入中（有登入碼時，資料載完才顯示主畫面） -->
+  <div id="boot" class="boot" role="status" aria-live="polite"><b class="boot-name" data-group-name>昱志的血汗勞工</b><span class="boot-line"><span class="boot-dot" aria-hidden="true"></span>載入中…</span></div>
   <!-- 加入群組 -->
   <section id="join" class="join" hidden>
     <div class="join-card">
@@ -67,7 +69,7 @@
           <button type="button" data-team-go="members">成員名單</button>
         </div>
         </div>
-        <button type="button" data-open="files" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
+        <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
       </nav>
     </aside>
 
@@ -156,7 +158,7 @@
           <button type="button" data-team-go="members">成員名單</button>
         </div>
         </div>
-        <button type="button" data-open="files" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
+        <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
       </div>
     </div>
   </section>

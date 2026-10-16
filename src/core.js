@@ -383,6 +383,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       throw e;
     }
     ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai'), createdAt);
+    if (inferState(text) === 'waiting') teamCache = { at: 0, data: null }; // C-195：新的 [需確認] 馬上出現在收件匣與「要你處理」（不等 60 秒快取）
     if (replyTo && me.kind === 'human') {
       teamCache = { at: 0, data: null }; // 人類回覆 [需確認] 後，收件匣立即更新
       // 人類回覆某則訊息＝處理了它：把他在那則訊息上的待處理通知標為已讀（AI 照規則自己 ACK，不替 AI 自動 ACK）
