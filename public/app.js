@@ -656,11 +656,11 @@
     for (const m of items) state.byId.set(m.messageId, m);
   }
   async function loadWindow() {
-    const d = await api(`/api/messages?limit=100&span=${WIN_H}&min=${WIN_MIN}`);
+    const d = await api(`/api/messages?limit=${WIN_MAX}&span=${WIN_H}&min=${WIN_MIN}`);
     state.byId = state.byId || new Map();
     setMessages(d.items);
     state.nextCursor = state.nextCursor && !state.ctx ? state.nextCursor : d.nextCursor;
-    Object.assign(state, { hasOlder: d.hasMore, winFrom: d.from, winExpanded: false, ctx: null, newCount: 0, newMention: 0, firstNewId: null });
+    Object.assign(state, { hasOlder: d.hasMore, winFrom: d.from, winExpanded: false, winTruncated: d.hasMore && d.items.length >= WIN_MAX, ctx: null, newCount: 0, newMention: 0, firstNewId: null });
     renderMessages(true); drawNewPill();
   }
   function headHtml(list) {
@@ -673,7 +673,10 @@
     const first = state.messages[0];
     const top = state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）</button>`
       : state.messages.length ? '<div class="msg-start muted small">這是最早的訊息</div>' : '';
-    const since = state.winExpanded || !state.winFrom ? (first ? `從 ${hm(first.createdAt)} 起` : '') : `最近 ${WIN_H} 小時 · ${hm(first && first.createdAt < state.winFrom ? first.createdAt : state.winFrom)}`;
+    const since = !first ? '' : state.winExpanded || !state.winFrom ? `從 ${hm(first.createdAt)} 起`
+      : first.createdAt < state.winFrom ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時不足 ${WIN_MIN} 則，往前補）`
+      : state.winTruncated ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時還有更早的）`
+      : `最近 ${WIN_H} 小時 · 從 ${hm(first.createdAt)}`;
     return top + (state.messages.length ? `<div class="win-divider"><span>${esc(since)} · ${list.length} 則</span></div>` : '');
   }
   function renderMessages(toBottom) {
@@ -698,7 +701,7 @@
     const d = await api(`/api/messages?limit=100&span=${WIN_H}&beforeId=${encodeURIComponent(first.messageId)}`);
     const fresh = d.items.filter(m => !state.messages.some(x => x.messageId === m.messageId));
     setMessages(fresh.concat(state.messages));
-    Object.assign(state, { hasOlder: d.hasMore, winExpanded: true, lastOlderAt: Date.now() });
+    Object.assign(state, { hasOlder: d.hasMore, winExpanded: true, winTruncated: false, lastOlderAt: Date.now() });
     renderMessages(false);
     box.scrollTop = prevTop + (box.scrollHeight - prevHeight);
   }
@@ -752,7 +755,7 @@
     p.innerHTML = `<span class="np-long">有 ${state.newCount} 則新訊息${state.newMention ? `（${state.newMention} 則提到你）` : ''} ↓</span><span class="np-short" aria-hidden="true">↓${state.newCount}</span>`;
     p.setAttribute('aria-label', `有 ${state.newCount} 則新訊息${state.newMention ? `，${state.newMention} 則提到你` : ''}，跳到最新`);
   }
-  function clearNew() { if (!state.newCount) return; Object.assign(state, { newCount: 0, newMention: 0 }); drawNewPill(); }
+  function clearNew() { if (!state.newCount) return; Object.assign(state, { newCount: 0, newMention: 0, firstNewId: null }); $('#new-line')?.remove(); drawNewPill(); }
 
   function onNewMessage(m) {
     if (state.byId.has(m.messageId) && (state.ctx || state.messages.some(x => x.messageId === m.messageId))) return;

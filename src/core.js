@@ -389,7 +389,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   }
 
   async function listMessages(ctx, url, me) {
-    const limit = parseLimit(url);
+    const limit = Number(url.searchParams.get('span')) > 0 && !url.searchParams.get('after') ? parseLimit(url, 100, 300) : parseLimit(url);
     const after = url.searchParams.get('after');
     const before = url.searchParams.get('before');
     let rows, hasMore, olderCursor = null, nextCursor;

@@ -174,6 +174,8 @@ async function stopServer(server) {
       assert.deepEqual(after.items.map(m => m.messageId), ids.slice(8, 10), 'newerCursor 可以接著往後拿');
       const plain = (await call(liu.token, '/api/messages?limit=1')).body;
       assert.ok(plain.nextCursor && plain.items.length === 1, '沒帶 span 時行為不變（AI 照舊用游標）');
+      assert.equal((await call(liu.token, '/api/messages?limit=300&span=12')).status, 200, '依時間載入上限放寬到 300（C-164 修正）');
+      assert.equal((await call(liu.token, '/api/messages?limit=300')).status, 400, '沒帶 span 時上限仍是 100');
     }
     // 文件與靜態檔
     const doc = await (await fetch(BASE + '/api/docs/ai-integration')).text();
