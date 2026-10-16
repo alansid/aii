@@ -302,6 +302,7 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const pp = (await call(plat.token, '/api/participants')).body.items.map(p => p.participantId);
     assert.ok(pp.includes(plat.participantId) && !pp.includes(bank.participantId), '只屬平台的成員拿不到只屬銀行系統的人');
     assert.ok(pp.includes(liuId), '跨專案角色（管理員）看得到');
+    assert.deepEqual((await call(plat.token, '/api/participants')).body.items.find(p => p.participantId === liuId).projects, ['平台'], '別人的專案只列自己也在的（不露出別專案名稱）');
     const ts = (await call(plat.token, '/api/team-status')).body.members.map(m => m.participantId);
     assert.ok(!ts.includes(bank.participantId), '團隊狀態也依專案');
     assert.ok((await call(liu.token, '/api/participants')).body.items.some(p => p.participantId === bank.participantId), '兩邊都屬的人看得到全部');

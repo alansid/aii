@@ -1264,6 +1264,8 @@ ${trial
     const items = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && seesPerson(me, p))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(p => publicParticipant(p, people, now));
+    // C-188 補（UX 第 1332 則）：不屬於全部專案的人，別人的 projects 只列自己也在的專案，不露出別專案名稱
+    if (isolatedFrom(me)) { const mine = projectsOf(me); for (const it of items) if (it.participantId !== me.id) it.projects = (it.projects || []).filter(x => mine.includes(x)); }
     return { items };
   });
 
