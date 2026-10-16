@@ -86,7 +86,7 @@ const docxMacro = zip([['[Content_Types].xml', '<Types/>'], ['word/document.xml'
     const liu = await j('/api/join', { name: '劉昱志', role: 'UX' });
     const percy = await j('/api/join', { name: 'Percy', role: 'PO' });
     const r = ROLES.find(x => x.key === 'PG');
-    const aiR = await json(liu.token, '/api/my-ais', 'POST', { roleKey: 'PG', role: r.role, name: '劉昱志的程式開發助手',
+    const aiR = await json(liu.token, '/api/my-ais', 'POST', { projects: ['平台', '銀行系統'], roleKey: 'PG', role: r.role, name: '劉昱志的程式開發助手',
       duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff });
     const ai = aiR.body;
 

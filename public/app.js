@@ -210,6 +210,7 @@
     $('#join').hidden = true;
     $('#app').hidden = false;
     drawMe();
+    await loadProjectList().catch(() => {});
     drawProjSwitch();
     await loadParticipants();
     const d = await api('/api/messages?limit=100');
@@ -447,23 +448,35 @@
   }
   // ---------- 專案（C-111）：平台／銀行系統 ----------
   const PROJ_KEY = 'aigile-switch-project';
-  const PROJECTS = ['平台', '銀行系統'];
-  const myProjects = () => (state.me?.projects?.length ? state.me.projects : PROJECTS);
+  // 專案清單來自伺服器（可新增、改名、封存）；PROJECTS 是未封存專案的 id，專案顯示名稱用 projName
+  const PROJECTS = [];
+  state.projectList = [];
+  state.projMeta = { adminId: null, adminName: '', crossRoleIds: [] };
+  const projName = id => state.projectList.find(p => p.id === id)?.name || id;
+  async function loadProjectList() {
+    const d = await api('/api/projects');
+    state.projectList = d.items;
+    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [] };
+    PROJECTS.length = 0;
+    PROJECTS.push(...state.projectList.filter(p => !p.archived).map(p => p.id));
+  }
+  const myProjects = () => (state.me?.projects || []).filter(p => PROJECTS.includes(p));
   const singleProject = () => myProjects().length === 1;
   // 目前檢視：單一專案成員固定自己的專案；兩邊成員可切換（記在瀏覽器，不存伺服器）
   function projectView() {
     if (singleProject()) return myProjects()[0];
     const v = store.get(PROJ_KEY);
-    return PROJECTS.includes(v) ? v : 'all';
+    return myProjects().includes(v) ? v : 'all';
   }
-  const projTag = p => (p ? `<span class="ptag" data-p="${esc(p)}">${esc(p)}</span>` : '');
+  const projTag = p => (p ? `<span class="ptag" data-p="${esc(p)}">${esc(projName(p))}</span>` : '');
   const msgInView = p => { const v = projectView(); return v === 'all' || !p || p === v; }; // 「全部專案」的訊息人人可見
   const cardInView = c => { const v = projectView(); return v === 'all' || c.project === v; };
   function drawProjSwitch() {
     document.querySelectorAll('.proj-switch').forEach(el => {
       el.innerHTML = singleProject()
-        ? `<span class="proj-fixed">專案：${esc(myProjects()[0])}</span>`
-        : `<div class="seg-scope full" role="group" aria-label="專案">${[['all', '全部'], ...PROJECTS.map(p => [p, p])].map(([k, t]) => `<button type="button" data-proj="${k}" aria-pressed="${projectView() === k}">${t}</button>`).join('')}</div>`;
+        ? `<span class="proj-fixed">專案：${esc(projName(myProjects()[0]))}</span>`
+        : !myProjects().length ? '<span class="proj-fixed">尚未加入任何專案（只看得到「全部專案」）</span>'
+        : `<div class="seg-scope full" role="group" aria-label="專案">${[['all', '全部'], ...myProjects().map(p => [p, projName(p)])].map(([k, t]) => `<button type="button" data-proj="${k}" aria-pressed="${projectView() === k}">${t}</button>`).join('')}</div>`;
     });
     drawProjSel();
   }
@@ -473,7 +486,7 @@
   function drawProjSel() {
     const sel = $('#proj-sel');
     if (!sel) return;
-    const opts = [['', '專案：預設'], ...myProjects().map(p => [p, p]), ['all', '全部專案']];
+    const opts = [['', '專案：預設'], ...myProjects().map(p => [p, projName(p)]), ['all', '全部專案']];
     sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
     sel.value = projTouched ? sel.value : defaultProj();
   }
@@ -541,7 +554,7 @@
     const draw = () => {
       body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
       const pg = body.querySelector('#fs-proj-g');
-      if (pg) pg.innerHTML = [['all', '全部'], ...PROJECTS.map(p => [p, p])].map(([k, t]) => `<button type="button" data-fs-proj="${k}" aria-pressed="${draft.project === k}">${t}</button>`).join('');
+      if (pg) pg.innerHTML = [['all', '全部'], ...PROJECTS.map(p => [p, projName(p)])].map(([k, t]) => `<button type="button" data-fs-proj="${k}" aria-pressed="${draft.project === k}">${t}</button>`).join('');
       body.querySelector('#fs-member').value = draft.member;
       body.querySelector('#fs-tag').value = draft.tag;
     };
@@ -1754,7 +1767,7 @@
   }
   function openHandover() {
     const d = work.detail;
-    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && (p.projects || PROJECTS).includes(d.project));
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && (p.projects || []).includes(d.project));
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
         <div class="info-box">${esc(d.cardId)} ${esc(d.title)}<br>交接後負責人換成對方，狀態回到「待處理」，並在群組 @ 對方通知。</div>
@@ -1848,7 +1861,7 @@
             <label>影響<input name="impact" maxlength="200" value="${esc(d.decision.impact)}"></label>
             <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
             <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
-            <label>專案<select name="project">${PROJECTS.map(p => `<option ${d.project === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+            <label>專案<select name="project">${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
             <label>原因<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
             <label>負責人<select name="ownerId">${opts(d.owner?.participantId, '未指派')}</select></label>
             <label>下一步<textarea name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
@@ -1858,7 +1871,7 @@
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
           </form>` : `
           <dl class="dfields">
-            <dt>專案</dt><dd>${esc(d.project || '')}</dd>
+            <dt>專案</dt><dd>${esc(projName(d.project) || '')}</dd>
             <dt>原因</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
             <dt>負責人</dt><dd>${ownerHtml(d)}</dd>
             <dt>下一步</dt><dd class="${d.next ? '' : 'muted'}">${esc(d.next || '未填寫')}</dd>
@@ -1919,7 +1932,7 @@
             <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button>
           </div><input type="hidden" name="type" value="工作"></div>
         <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
-        <label>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${p}" ${(srcMsg?.project || projectView()) === p ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+        <label>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${esc(p)}" ${(srcMsg?.project || projectView()) === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
         <div id="nc-decision" class="stack" hidden>
           <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
           <label>建議方案<textarea name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
@@ -2616,6 +2629,8 @@
           <select name="roleKey">${roleOptionsHtml(roles)}</select>
           <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
         </label>
+        ${editing ? '' : `<div class="field"><span class="field-label">所屬專案（至少選一個）</span>
+          <div class="proj-row new-ai-proj">${myProjects().map(p => `<label class="chk"><input type="checkbox" name="proj" value="${esc(p)}" ${myProjects().length === 1 ? 'checked' : ''}> ${esc(projName(p))}</label>`).join('') || '<span class="muted small">你還沒有加入任何專案，請群組管理員把你加入專案。</span>'}</div></div>`}
         <div class="two-col">
           <div class="field">
             <label>角色顯示名稱<input name="role" required maxlength="30"></label>
@@ -2716,7 +2731,12 @@
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form));
+      delete data.proj;
       for (const [k, v] of Object.entries(data)) data[k] = v.trim();
+      if (!editing) {
+        data.projects = [...form.querySelectorAll('input[name="proj"]:checked')].map(i => i.value);
+        if (!data.projects.length) return toast('請至少選一個所屬專案');
+      }
       try {
         const saved = editing ? await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data })
           : await api('/api/my-ais', { method: 'POST', body: data });
@@ -3038,27 +3058,141 @@
   }
 
   // 進階設定
-  // 設定頁：每位成員（我與我名下的 AI）一列，勾選所屬專案
-  function projRowsHtml() {
+  // 所屬專案（C-146 B）：一般成員只能看；群組管理員在「專案管理」調整
+  const isProjAdmin = () => state.projMeta.adminId === meId();
+  function projMineHtml() {
     const rows = [state.me, ...[...state.participants.values()].filter(p => p.ownerParticipantId === meId() && p.status !== 'disabled')];
-    return rows.map(p => {
-      const cur = p.projects?.length ? p.projects : PROJECTS;
-      return `<div class="proj-row" data-pid="${esc(p.participantId)}"><b>${esc(p.name)}${p.participantId === meId() ? '（我）' : ''}</b>${PROJECTS.map(x => `<label class="chk"><input type="checkbox" value="${x}" ${cur.includes(x) ? 'checked' : ''}> ${x}</label>`).join('')}</div>`;
-    }).join('');
+    return rows.map(p => `<div class="proj-row"><b>${esc(p.name)}${p.participantId === meId() ? '（我）' : ''}</b><span class="muted small">${(p.projects || []).filter(x => PROJECTS.includes(x)).map(projName).map(esc).join('、') || '尚未加入任何專案'}</span></div>`).join('');
   }
-  async function projRowChange(e) {
-    const row = e.target.closest('.proj-row');
-    if (!row) return;
-    const list = [...row.querySelectorAll('input:checked')].map(i => i.value);
-    const pid = row.dataset.pid;
-    if (!list.length) { e.target.checked = true; return toast('至少要選一個專案'); }
-    try {
-      const r = await api(`/api/participants/${encodeURIComponent(pid)}/projects`, { method: 'PUT', body: { projects: list } });
-      if (pid === meId()) state.me.projects = r.projects;
-      const p = state.participants.get(pid); if (p) p.projects = r.projects;
-      toast(`已更新 ${r.name} 的所屬專案`);
+
+  // 專案管理（只有群組管理員）：左邊專案清單與異動紀錄，右邊勾選成員
+  function openProjAdmin(selected = state.projectList.find(p => !p.archived)?.id) {
+    const pm = { sel: selected, draft: null, events: [] };
+    const body = openModal('專案管理', '<div class="pa-grid"><section class="pa-col" id="pa-left"></section><section class="pa-col" id="pa-right"></section></div>',
+      { size: 'wide', sub: `僅群組管理員（${esc(state.projMeta.adminName || '')}）可操作` });
+    const people = () => [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const fixed = p => state.projMeta.crossRoleIds.includes(p.participantId);
+    // 跨專案角色一律算在內（固定在所有專案），儲存時順便補齊
+    const resetDraft = () => { pm.draft = new Set(people().filter(p => fixed(p) || (p.projects || []).includes(pm.sel)).map(p => p.participantId)); };
+    async function loadEvents() {
+      pm.events = pm.sel ? (await api(`/api/projects/${encodeURIComponent(pm.sel)}/events?limit=10`).catch(() => ({ items: [] }))).items : [];
+    }
+    function drawLeft() {
+      const rows = state.projectList.map(p => {
+        const blocked = p.openCards > 0;
+        return `<div class="pa-row${p.id === pm.sel ? ' sel' : ''}${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}">
+          <button type="button" class="pa-pick" data-pa="pick" aria-pressed="${p.id === pm.sel}"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}
+            <span class="muted small">成員 ${p.memberCount} · 未結案卡 ${p.openCards}</span></button>
+          ${p.archived ? '<button type="button" class="btn small" data-pa="unarchive">還原</button>'
+            : `<button type="button" class="btn small" data-pa="rename">改名</button>
+               <button type="button" class="btn small danger-outline" data-pa="archive" ${blocked ? `aria-disabled="true" title="還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案"` : ''}>封存</button>`}
+        </div>`;
+      }).join('');
+      const selP = state.projectList.find(p => p.id === pm.sel);
+      body.querySelector('#pa-left').innerHTML = `<div class="pa-head"><b>專案</b></div>${rows}
+        ${state.projectList.some(p => !p.archived && p.openCards) ? '<p class="muted small pa-note">「封存」不能按：還有未結案卡，請先結案或把卡移到別的專案。</p>' : ''}
+        <div class="pm-new"><input id="pa-new-name" maxlength="20" placeholder="新專案名稱" aria-label="新專案名稱"><button type="button" class="btn small primary" data-pa="create">新增專案</button></div>
+        <p class="muted small">新專案一開始只有你與跨專案角色（PO、SM），其他成員請在成員清單勾選加入。</p>
+        ${selP ? `<div class="pa-head"><b>異動紀錄（${esc(selP.name)}）</b></div>
+        <ul class="pa-log">${pm.events.map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul>` : ''}`;
+    }
+    function memberRow(p, archived) {
+      const on = pm.draft.has(p.participantId);
+      const owner = p.memberType === 'ai' ? state.participants.get(p.ownerParticipantId) : null;
+      const ownerOut = owner && !pm.draft.has(owner.participantId);
+      let dis = '', why = '';
+      if (archived) dis = 'disabled';
+      else if (fixed(p)) dis = 'disabled'; // 標籤已說明是跨專案角色
+      else if (ownerOut && !on) { dis = 'disabled'; why = `所屬人類 ${owner.name} 不在此專案`; }
+      const sub = fixed(p) ? '<span class="pill-tag blue">跨專案角色</span>'
+        : !(p.projects || []).filter(x => PROJECTS.includes(x)).length ? '<span class="muted small">· 新加入，尚未指派專案</span>'
+        : p.environment ? `<span class="muted small">· ${esc(p.environment)}</span>` : '';
+      return `<div class="pa-mem"><span class="pa-mem-name">${esc(p.name)} ${sub}${why ? `<span class="muted small pa-why">${esc(why)}</span>` : ''}</span>
+        <label class="check"><input type="checkbox" data-mem="${esc(p.participantId)}" ${on || fixed(p) ? 'checked' : ''} ${dis}> ${fixed(p) ? '成員（固定）' : '成員'}</label></div>`;
+    }
+    function drawRight() {
+      const selP = state.projectList.find(p => p.id === pm.sel);
+      const box = body.querySelector('#pa-right');
+      if (!selP) { box.innerHTML = '<p class="muted">選一個專案來管理成員。</p>'; return; }
+      const list = people(), humans = list.filter(p => p.memberType === 'human'), ais = list.filter(p => p.memberType === 'ai');
+      box.innerHTML = `<div class="pa-head"><b>${esc(selP.name)} · 成員</b><span class="muted small">勾選＝可看到並參與此專案</span></div>
+        <div class="pa-group">人類</div>${humans.map(p => memberRow(p, selP.archived)).join('')}
+        <div class="pa-group">AI</div>${ais.map(p => memberRow(p, selP.archived)).join('') || '<p class="muted small">沒有 AI</p>'}
+        <p class="muted small pa-note">AI 的專案不能超出所屬人類的專案。一般成員在「進階設定」只能看自己的專案，不能自己加入。取消勾選時，該成員在這個專案負責的未結案卡會退回待處理。</p>
+        ${selP.archived ? '<p class="muted small">專案已封存，請先還原再調整成員。</p>' : '<div class="pa-save"><button type="button" class="btn primary" data-pa="save">儲存</button></div>'}`;
+    }
+    async function refresh() {
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      const m = await api('/api/me').catch(() => null);
+      if (m) state.me = { ...state.me, ...m };
+      if (!state.projectList.some(p => p.id === pm.sel)) pm.sel = state.projectList.find(p => !p.archived)?.id;
+      resetDraft(); await loadEvents(); drawLeft(); drawRight();
       drawProjSwitch(); renderMessages(false); if (state.page === 'work') renderWork();
-    } catch (err) { toast(err.message); }
+    }
+    body.addEventListener('change', e => {
+      const c = e.target.closest('[data-mem]');
+      if (!c) return;
+      if (c.checked) pm.draft.add(c.dataset.mem); else pm.draft.delete(c.dataset.mem);
+      // 所屬人類被取消時，他名下還沒勾的 AI 要跟著停用；重畫右欄即可
+      if (state.participants.get(c.dataset.mem)?.memberType === 'human') drawRight();
+    });
+    body.addEventListener('click', async e => {
+      const b = e.target.closest('[data-pa]');
+      if (!b) return;
+      const row = b.closest('.pa-row'), id = row?.dataset.pj, act = b.dataset.pa;
+      try {
+        if (act === 'pick') { pm.sel = id; resetDraft(); await loadEvents(); drawLeft(); drawRight(); return; }
+        if (act === 'archive' && b.getAttribute('aria-disabled') === 'true') return toast(b.title);
+        if (act === 'create') {
+          const name = body.querySelector('#pa-new-name').value.trim();
+          if (!name) return toast('請輸入專案名稱');
+          const r = await api('/api/projects', { method: 'POST', body: { name } });
+          pm.sel = r.id; toast('已新增專案，你和 PO、SM 已加入');
+        } else if (act === 'rename') {
+          const p = state.projectList.find(x => x.id === id);
+          const name = await promptName('改名', p?.name || '');
+          if (!name || name === p?.name) return;
+          await api(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } });
+          toast('已改名');
+        } else if (act === 'archive') {
+          if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(id))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以還原。` })) return;
+          await api(`/api/projects/${encodeURIComponent(id)}/archive`, { method: 'POST' });
+          toast('已封存');
+        } else if (act === 'unarchive') {
+          await api(`/api/projects/${encodeURIComponent(id)}/unarchive`, { method: 'POST' });
+          toast('已還原');
+        } else if (act === 'save') {
+          const memberIds = [...pm.draft];
+          const path = `/api/projects/${encodeURIComponent(pm.sel)}/members`;
+          const dry = await api(path, { method: 'PUT', body: { memberIds, dryRun: true } });
+          if (!dry.impact.length) return toast('沒有變更');
+          const back = dry.impact.filter(x => x.returnedCards.length);
+          if (back.length && !await confirmDialog({ title: '移出成員？', confirmText: '確認儲存', danger: true,
+            message: back.map(x => `<b>${esc(x.name)}</b> 負責的 ${x.returnedCards.length} 張卡（${esc(x.returnedCards.join('、'))}）會退回待處理、改為未指派。`).join('<br>') })) return;
+          await api(path, { method: 'PUT', body: { memberIds } });
+          toast(`已更新 ${projName(pm.sel)} 的成員`);
+        }
+        await refresh();
+      } catch (err) { toast(err.message); }
+    });
+    resetDraft();
+    loadEvents().then(() => { drawLeft(); drawRight(); });
+    drawLeft(); drawRight();
+  }
+  // 小對話框：輸入名稱（改名用）
+  function promptName(title, value) {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title, size: 'narrow', body: `<label class="field"><span class="field-label">專案名稱</span><input id="pn-input" maxlength="20" value="${esc(value)}"></label>`,
+        foot: '<button class="btn" type="button" data-pn="0">取消</button><button class="btn primary" type="button" data-pn="1">確定</button>' });
+      document.body.appendChild(host);
+      const input = host.querySelector('#pn-input');
+      input.focus(); input.select();
+      const done = ok => { const v = input.value.trim(); host.remove(); resolve(ok ? v : null); };
+      host.addEventListener('click', e => { const b = e.target.closest('[data-pn]'); if (b) done(b.dataset.pn === '1'); else if (e.target === host.firstElementChild || e.target.closest('[data-close]')) done(false); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+    });
   }
   function openSettings() {
     const theme = store.get(THEME_KEY) || 'system';
@@ -3073,8 +3207,9 @@
         <button class="btn small" type="button" data-change-avatar>更換</button>
       </div>
       <div class="field"><span class="field-label">所屬專案</span>
-        <p class="muted small">平台、銀行系統可複選，至少選一個。單一專案成員預設只看自己專案與「全部專案」的訊息與卡片，建卡固定為自己的專案。你只能改自己和你名下 AI。</p>
-        <div id="proj-rows" class="proj-rows">${projRowsHtml()}</div></div>
+        <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在「專案管理」調整，這裡只能看。</p>
+        <div class="proj-rows">${projMineHtml()}</div>
+        ${isProjAdmin() ? '<button class="btn small" type="button" id="set-proj-admin">專案管理（新增、改名、封存、成員）</button>' : ''}</div>
       <div class="switch-row">
         <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
         <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
@@ -3084,7 +3219,7 @@
         <p class="muted small">會停用你和你名下的所有 AI，其他成員將看不到你們，Token 全部失效。</p>
         <button class="btn small danger-outline" type="button" id="set-leave">離開群組</button>
       </div>`);
-    body.querySelector('#proj-rows').addEventListener('change', projRowChange);
+    body.querySelector('#set-proj-admin')?.addEventListener('click', () => openProjAdmin());
     body.querySelectorAll('[data-theme-opt]').forEach(b => b.addEventListener('click', () => {
       const v = b.dataset.themeOpt;
       if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);

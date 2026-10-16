@@ -69,6 +69,12 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     }
   };
 
+  // 指派（負責人、等誰）只能選同專案成員；跨專案擋下並說明（C-146 B）
+  function sameProject(people, id, project, label) {
+    if (!id || !project) return;
+    const p = people.get(id);
+    if (!projectsOf(p).includes(project)) throw new ApiError(400, 'PROJECT_MISMATCH', `${label}「${p?.name || id}」不屬於這張卡的專案（${project}），只能指派同專案成員。`);
+  }
   async function validPerson(people, id, label) {
     if (id === null || id === '' || id === undefined) return null;
     const p = people.get(String(id));
@@ -233,6 +239,8 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
     }
     if (!PROJECTS.includes(project)) throw invalid(`project 需為：${PROJECTS.join('、')}`);
     if (!mine.includes(project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，不能在這個專案建卡。');
+    sameProject(people, owner, project, '負責人');
+    if (type !== '決策') sameProject(people, waitFor, project, '等誰');
     const messageIds = Array.isArray(body.messageIds) ? [...new Set(body.messageIds.map(String))].slice(0, 10) : [];
     if (messageIds.length) {
       const found = await db.all('SELECT id FROM messages WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(messageIds));
@@ -315,6 +323,8 @@ export function registerCards({ route, createMessage, PROJECTS, projectsOf, proj
       const ch = statusChange(c, body.status, me, nowIso());
       Object.assign(sets, ch.sets); logs.push(...ch.logs);
     }
+    if (sets.owner_id !== undefined || sets.project !== undefined) sameProject(people, sets.owner_id !== undefined ? sets.owner_id : c.owner_id, sets.project || c.project, '負責人');
+    if (c.type !== '決策' && (sets.wait_for_id !== undefined || sets.project !== undefined)) sameProject(people, sets.wait_for_id !== undefined ? sets.wait_for_id : c.wait_for_id, sets.project || c.project, '等誰');
     if (Object.keys(sets).length) {
       invalidatePeople(); // 團隊狀態快取一起失效
       await save(c, sets, logs, me, nowIso());

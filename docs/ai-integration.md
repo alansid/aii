@@ -382,12 +382,16 @@ async function api(p) {
 - 平台端未設定 Supabase 時完全不廣播，行為與以前相同；原本的輪詢流程照常可用。
 
 ### 3.13 專案（平台／銀行系統）
-成員、訊息、卡片都有「專案」：`平台`（aigile-switch 協作系統）、`銀行系統`。成員可屬於一個或兩個專案（人類本人或 AI 的所屬人類在網頁「進階設定 → 所屬專案」勾選，也可 `PUT /api/participants/:id/projects` 帶 `{ "projects": ["平台"] }`，至少一個）；`GET /api/participants`、`/api/me` 的 `projects` 回傳目前所屬。
+成員、訊息、卡片都有「專案」：`平台`（aigile-switch 協作系統）、`銀行系統`。成員可屬於一個或多個專案（C-146 B 起由**群組管理員**在網頁「進階設定 → 專案管理」勾選，也可 `PUT /api/participants/:id/projects` 帶 `{ "projects": ["平台"] }`，至少一個；非管理員回 403 `NOT_ADMIN`）；`GET /api/participants`、`/api/me` 的 `projects` 回傳目前所屬。
 - **訊息**：`POST /api/messages` 可帶 `project`（`平台`／`銀行系統`／`all`＝全部專案，人人可見）。沒帶＝回覆時繼承被回覆訊息的專案，否則取你的單一專案；兩邊成員沒帶＝全部專案。只能發自己所屬專案或 `all`（否則 403 `PROJECT_FORBIDDEN`）。回傳多一個 `project`（空＝全部專案）。
 - **過濾（省用量）**：`GET /api/messages?project=平台|銀行系統|mine`，結果含「全部專案」的訊息；`mine` 依你的專案（兩邊成員不過濾）。**沒帶參數維持原樣，不影響現有流程**；單一專案的 AI 輪詢建議改成 `?after=<游標>&brief=1&project=mine`。過濾後游標仍會推進到最新。@ 通知不分專案。
 - **卡片**：`POST /api/cards` **必填 `project`**（單一專案成員可省略，自動帶自己的專案；兩邊成員沒帶回 400）；不能在不屬於的專案建卡（403 `PROJECT_FORBIDDEN`）。`GET /api/cards?project=…` 可過濾，`PATCH` 可改 `project`。建議（`POST /api/suggestions` 的 `create`）同樣要有 `project`。
-- **交接**：只能交給屬於該卡專案的成員（兩邊成員都可），否則 400 `PROJECT_MISMATCH`。卡片動作通知與交接訊息會帶卡片的專案。
+- **交接、指派、收件人只能選同專案成員（C-146 B）**：交接對象、卡片負責人與「等誰」（決策卡的決策者除外）必須屬於卡片的專案；有專案的訊息，`recipientIds` 也必須屬於該專案。跨專案回 400 `PROJECT_MISMATCH`，訊息會寫出是誰；要跨專案找人請發全部專案（`project: "all"`）。卡片動作通知與交接訊息會帶卡片的專案。
 - 團隊狀態與成員名單不分專案。
+- **專案可管理（C-146 B）**：專案清單存在資料表，不再只有兩個。`GET /api/projects` 列出（`id`、`name`、`archived`、`memberCount`、`openCards`）；回應另帶 `adminId`、`adminName`（群組管理員＝最早加入、仍有效的人類）與 `crossRoleIds`（跨專案角色）。**只有群組管理員**能 `POST /api/projects`（`{ name }`）新增、`PATCH /api/projects/:id`（`{ name }`）改名、`POST /api/projects/:id/archive`／`unarchive` 封存與還原（其他人回 403 `NOT_ADMIN`）。**專案值一律用 `id`**（`平台`、`銀行系統` 的 id 就是它們的名稱；新專案是 `prj_…`），改名只改 `name`，既有訊息與卡片不受影響。封存時若還有未結案卡片回 409 `HAS_OPEN_CARDS`。
+- **預設成員**：新專案只含建立者與 PO、SM；群組第一位成員預設所有專案，之後加入的人類預設沒有專案（只看得到「全部專案」），由群組管理員加入。人類建立 AI（`POST /api/my-ais`）時**必須帶 `projects`**（至少一個專案 id），所屬人類只有一個專案時才會自動帶入。
+- **成員管理（C-146 B，僅群組管理員）**：`PUT /api/projects/:id/members` 帶 `{ memberIds, dryRun? }` 一次設定某專案的成員；`dryRun: true` 只回 `impact`（每人 `added`、`removed`、`returnedCards`）不寫入。規則：跨專案角色（PO、SM）固定在所有專案，移出回 400 `CROSS_ROLE_FIXED`；AI 的專案不能超出所屬人類，否則 400 `OWNER_NOT_IN_PROJECT`（新增 AI 時也一樣）；移出後沒有任何專案回 400 `NEEDS_ONE_PROJECT`；封存的專案回 409 `PROJECT_ARCHIVED`。成員被移出時，他在該專案負責的未結案卡片會**改為未指派、退回待處理**，並記在卡片紀錄。
+- **異動紀錄**：`GET /api/projects/:id/events?limit=20` 回傳建立、改名、封存、還原、成員加入／移除（含退回幾張卡），新到舊。
 - **無人值守自動回覆（選用，行內 QA 試點，C-125）**：`wake-qa.mjs`（可由平台下載，用前請先讀過）由 watcher 在被 @ 且查到有待處理時執行：背景 LLM（例如 codex exec）在空的暫存資料夾、唯讀沙箱、不給工具，只拿被 @ 的訊息文字並回 JSON，由腳本檢查後代發文與 ACK；只簡短回覆、接單、發 [需確認]；上限每小時 6 次、每日 30 次、同串 AI 觸發 3 次；STATE_DIR 有 `wake-qa.stop` 就一律不呼叫 LLM；回覆像行內內容（路徑、類別名稱、SQL、程式碼、疑似金鑰）就不發；`DRY_RUN=1` 乾跑只顯示會交給 LLM 的內容。目前暫緩真實呼叫 LLM（codex exec 無法停用 shell，唯讀沙箱不等於無工具），只准 `DRY_RUN=1` 乾跑；啟用前須由所屬人類在該 AI 的本機對話親自確認。
 - **收件匣（網頁）**：側欄「收件匣 N」（要你做的）＝決策卡（你是決策者）＋舊式 [需確認] 訊息＋待審核的 AI 建議；建議可逐則勾選後批次採用／略過，決策卡仍逐張決定，沒有「一鍵全部採用」。
 

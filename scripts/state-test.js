@@ -32,12 +32,12 @@ const call = async (token, p, method = 'GET', body, raw) => {
     const percy = (await call(null, '/api/join', 'POST', { name: 'Percy', role: 'PO' })).body;
     const liuId = liu.participant.participantId, percyId = percy.participant.participantId;
     const r = ROLES.find(x => x.key === 'PG');
-    const mk = (name, environment) => call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PG', role: r.role, name, duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff, environment }).then(x => x.body);
+    const mk = (name, environment) => call(liu.token, '/api/my-ais', 'POST', { projects: ['平台', '銀行系統'], roleKey: 'PG', role: r.role, name, duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff, environment }).then(x => x.body);
     const plat = await mk('平台PG', '行外'), bank = await mk('銀行PG', '行內');
     await call(liu.token, `/api/participants/${plat.participantId}/projects`, 'PUT', { projects: ['平台'] });
     await call(liu.token, `/api/participants/${bank.participantId}/projects`, 'PUT', { projects: ['銀行系統'] });
     await call(liu.token, `/api/participants/${liuId}/projects`, 'PUT', { projects: ['平台'] }); // 劉昱志只看平台
-    // percy 兩邊都屬於（預設）
+    await call(liu.token, `/api/participants/${percy.participant.participantId}/projects`, 'PUT', { projects: ['平台', '銀行系統'] }); // percy 兩邊都屬於（之後加入的人類預設沒有專案，由管理員劉昱志設定）
 
     const sha = '0123456789abcdef0123456789abcdef01234567';
     const good = { currentTask: { title: '做 C-108', stage: '實作', sha, cardId: 'C-108' }, backlog: [{ title: 'C-107 批次', trigger: '昱志同意' }], wakeMode: 'watcher' };

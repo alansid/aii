@@ -52,6 +52,8 @@ async function stopServer(server) {
     const percy = (await call(null, '/api/join', 'POST', { name: 'Percy', role: 'PO' })).body;
     const liu = (await call(null, '/api/join', 'POST', { name: '劉昱志', role: 'UX' })).body;
     assert.ok(percy.token && liu.token, 'join');
+    // C-146 B：之後加入的人類預設沒有專案，由群組管理員（最早加入的 Percy）加入
+    assert.equal((await call(percy.token, `/api/participants/${liu.participant.participantId}/projects`, 'PUT', { projects: ['平台', '銀行系統'] })).status, 200, '管理員把劉昱志加入專案');
     assert.equal(errCode(await call(null, '/api/join', 'POST', { name: 'percy' })), 'NAME_TAKEN');
 
     // 角色範本
@@ -67,7 +69,7 @@ async function stopServer(server) {
 
     // 建立 AI：六題必填
     const ux = ROLES.find(r => r.key === 'UX');
-    const aiBody = { roleKey: 'UX', role: ux.role, name: '劉昱志的使用體驗助手', duties: ux.duties, style: ux.style,
+    const aiBody = { projects: ['平台', '銀行系統'], roleKey: 'UX', role: ux.role, name: '劉昱志的使用體驗助手', duties: ux.duties, style: ux.style,
       autonomy: ux.autonomy, mustConfirm: ux.mustConfirm, handoff: ux.handoff };
     assert.equal(errCode(await call(liu.token, '/api/my-ais', 'POST', { ...aiBody, style: '   ' })), 'INVALID_REQUEST', '空白題目被拒');
     const ai = (await call(liu.token, '/api/my-ais', 'POST', aiBody)).body;

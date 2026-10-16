@@ -45,7 +45,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
   try {
     const liu = (await call(null, '/api/join', 'POST', { name: '劉昱志', role: 'UX' })).body;
     const r = ROLES.find(x => x.key === 'PG');
-    const mk = name => call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PG', role: r.role, name, duties: r.duties,
+    const mk = name => call(liu.token, '/api/my-ais', 'POST', { projects: ['平台', '銀行系統'], roleKey: 'PG', role: r.role, name, duties: r.duties,
       style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff }).then(x => x.body);
     const pg = await mk('劉昱志的程式開發助手');
     const po = await mk('劉昱志的產品規劃助手');
@@ -146,7 +146,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
 
     // 「等你決定」清除規則（方案 B）
     const poR = ROLES.find(x => x.key === 'PO');
-    const realPo = (await call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PO', role: poR.role, name: '劉昱志的PO', duties: poR.duties,
+    const realPo = (await call(liu.token, '/api/my-ais', 'POST', { projects: ['平台', '銀行系統'], roleKey: 'PO', role: poR.role, name: '劉昱志的PO', duties: poR.duties,
       style: poR.style, autonomy: poR.autonomy, mustConfirm: poR.mustConfirm, handoff: poR.handoff })).body;
     const ask1 = await post(realPo.token, '[需確認] 提案一');
     const ask2 = await post(realPo.token, '[需確認] 提案二');
@@ -194,7 +194,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     const roles = (await call(null, '/api/roles')).body;
     const inside = roles.environments.find(e => e.key === '行內');
     assert.ok(inside && inside.note.includes('必須先確認'), '有行內環境範本');
-    const ba = (await call(liu.token, '/api/my-ais', 'POST', { roleKey: 'BA', role: '需求分析', name: '劉昱志的需求分析助手',
+    const ba = (await call(liu.token, '/api/my-ais', 'POST', { projects: ['平台', '銀行系統'], roleKey: 'BA', role: '需求分析', name: '劉昱志的需求分析助手',
       environment: '行內', duties: 'd', style: 's', autonomy: 'a', mustConfirm: `m\n${inside.note}`, handoff: 'h' })).body;
     assert.equal(ba.environment, '行內');
     assert.equal((await call(ba.token, '/api/me')).body.environment, '行內', '/api/me 帶環境');

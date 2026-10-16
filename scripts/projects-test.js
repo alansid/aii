@@ -35,22 +35,25 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const liu = (await call(null, '/api/join', 'POST', { name: '劉昱志', role: 'UX' })).body;
     const percy = (await call(null, '/api/join', 'POST', { name: 'Percy', role: 'PO' })).body;
     const liuId = liu.participant.participantId, percyId = percy.participant.participantId;
-    assert.deepEqual(liu.participant.projects, ['平台', '銀行系統'], '人類預設兩邊都屬於');
+    assert.deepEqual(liu.participant.projects, ['平台', '銀行系統'], '群組第一位（建立者）預設所有專案');
+    assert.deepEqual(percy.participant.projects, [], '之後加入的人類預設沒有專案');
+    await call(liu.token, `/api/participants/${percyId}/projects`, 'PUT', { projects: ['平台', '銀行系統'] }); // 管理員（最早加入的劉昱志）加入 Percy
 
     const r = ROLES.find(x => x.key === 'PG');
-    const mk = name => call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PG', role: r.role, name, duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff }).then(x => x.body);
+    const mk = name => call(liu.token, '/api/my-ais', 'POST', { projects: ['平台', '銀行系統'], roleKey: 'PG', role: r.role, name, duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff }).then(x => x.body);
     const plat = await mk('平台PG'), bank = await mk('銀行PG'), both = await mk('兩邊PO');
-    assert.deepEqual(plat.participantId && (await call(liu.token, '/api/participants')).body.items.find(p => p.participantId === plat.participantId).projects, ['平台', '銀行系統'], 'AI 預設沿用所屬人類的專案');
+    assert.deepEqual(plat.participantId && (await call(liu.token, '/api/participants')).body.items.find(p => p.participantId === plat.participantId).projects, ['平台', '銀行系統'], '新增 AI 時選的專案（這裡選兩邊）');
 
-    // 設定成員專案：本人或 AI 的所屬人類；至少一個；只能是平台／銀行系統
+    // 設定成員專案：只有群組管理員（C-146 B）；至少一個；只能是現有專案
     const put = (tok, id, projects) => call(tok, `/api/participants/${id}/projects`, 'PUT', { projects });
-    assert.equal((await put(liu.token, plat.participantId, ['平台'])).body.projects[0], '平台', '所屬人類可改 AI 的專案');
+    assert.equal((await put(liu.token, plat.participantId, ['平台'])).body.projects[0], '平台', '管理員可改 AI 的專案');
     assert.equal((await put(liu.token, bank.participantId, ['銀行系統'])).status, 200);
     assert.equal((await put(percy.token, plat.participantId, ['平台'])).status, 403, '別人不能改');
     assert.equal((await put(plat.token, plat.participantId, ['銀行系統'])).status, 403, 'AI 不能改自己');
     assert.equal((await put(liu.token, plat.participantId, [])).status, 400, '至少選一個');
     assert.equal((await put(liu.token, plat.participantId, ['別的'])).status, 400, '只能是平台或銀行系統');
-    assert.equal((await put(percy.token, percyId, ['平台', '銀行系統'])).status, 200, '人類可改自己');
+    assert.equal((await put(percy.token, percyId, ['平台', '銀行系統'])).body.error?.code, 'NOT_ADMIN', '一般成員不能自己改（只能看）');
+    assert.equal((await put(liu.token, percyId, ['平台', '銀行系統'])).status, 200, '管理員可改別人');
 
     // 訊息：預設專案與繼承
     const m1 = (await msg(plat.token, '[進度] 平台訊息')).body;
@@ -97,8 +100,9 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal((await call(plat.token, '/api/cards', 'POST', { requestId: rid(), title: '越界', project: '銀行系統' })).body.error.code, 'PROJECT_FORBIDDEN');
     const lf = (await call(liu.token, '/api/cards?project=平台')).body.items.map(c => c.cardId);
     assert.ok(lf.includes(c1.cardId) && !lf.includes(c2.cardId), '卡片依專案過濾');
-    assert.equal((await call(liu.token, `/api/cards/${c1.cardId}`, 'PATCH', { project: '銀行系統' })).body.project, '銀行系統', '人類可改卡片專案');
-    await call(liu.token, `/api/cards/${c1.cardId}`, 'PATCH', { project: '平台' });
+    assert.equal((await call(liu.token, `/api/cards/${c1.cardId}`, 'PATCH', { project: '銀行系統' })).body.error?.code, 'PROJECT_MISMATCH', 'C-146 B：負責人不屬於新專案時擋下');
+    assert.equal((await call(liu.token, `/api/cards/${c1.cardId}`, 'PATCH', { project: '銀行系統', ownerId: null })).body.project, '銀行系統', '人類可改卡片專案（同時改負責人）');
+    await call(liu.token, `/api/cards/${c1.cardId}`, 'PATCH', { project: '平台', ownerId: plat.participantId });
 
     // 交接：只能交給同專案成員或兩邊成員
     const H = (tok, id, toId) => call(tok, `/api/cards/${id}/handover`, 'POST', { toId, note: '交接測試' });
@@ -108,6 +112,77 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal((await call(liu.token, `/api/messages/${ho.handoverMessageId}`)).body.project, '平台', '交接訊息帶卡片的專案');
     assert.ok(both.participantId);
 
+
+    // ===== C-146 B：專案管理 =====
+    const pl = (await call(liu.token, '/api/projects')).body.items;
+    assert.deepEqual(pl.map(p => p.id), ['平台', '銀行系統'], '預設兩個專案，id 沿用名稱');
+    assert.equal((await call(bank.token, '/api/projects', 'POST', { name: 'AI 不能建' })).status, 403, 'AI 不能新增專案');
+    assert.equal((await call(liu.token, '/api/projects', 'POST', { name: '平台' })).body.error.code, 'NAME_TAKEN', '同名擋下');
+    assert.equal((await call(liu.token, '/api/projects', 'POST', { name: '' })).status, 400, '名稱不能空');
+    const mkp = await call(liu.token, '/api/projects', 'POST', { name: '新專案甲' });
+    assert.equal(mkp.status, 201); const newId = mkp.body.id;
+    const withNew = (await call(liu.token, '/api/participants')).body.items;
+    assert.ok(withNew.find(p => p.participantId === liuId).projects.includes(newId), '建立者在新專案');
+    assert.ok(!withNew.find(p => p.participantId === plat.participantId).projects.includes(newId), '一般成員不會自動加入新專案');
+    // 新專案可用：設成員專案、發卡片
+    assert.equal((await put(liu.token, plat.participantId, ['平台', newId])).status, 200, '可把成員加入新專案');
+    const nc = (await call(liu.token, '/api/cards', 'POST', { requestId: 'req_np1', title: '新專案的卡', project: newId })).body;
+    assert.equal(nc.project, newId, '新專案可以建卡');
+    // 改名：只改 name，id 不變，卡片仍屬於它
+    assert.equal((await call(liu.token, `/api/projects/${newId}`, 'PATCH', { name: '新專案乙' })).status, 200);
+    assert.equal((await call(liu.token, '/api/projects')).body.items.find(p => p.id === newId).name, '新專案乙');
+    assert.equal((await call(liu.token, `/api/cards/${nc.cardId}`)).body.project, newId, '改名後卡片仍屬同一專案');
+    // 封存：有未結案卡擋下；結案後可封存；封存後不能再選、可還原
+    assert.equal((await call(liu.token, `/api/projects/${newId}/archive`, 'POST')).body.error.code, 'HAS_OPEN_CARDS', '有未結案卡不能封存');
+    await call(liu.token, `/api/cards/${nc.cardId}`, 'PATCH', { status: '已完成' });
+    assert.equal((await call(liu.token, `/api/projects/${newId}/archive`, 'POST')).status, 200, '卡片結案後可封存');
+    assert.equal((await call(liu.token, '/api/cards', 'POST', { requestId: 'req_np2', title: '封存後建卡', project: newId })).status, 400, '封存的專案不能再建卡');
+    assert.equal((await call(liu.token, `/api/projects/${newId}/unarchive`, 'POST')).status, 200, '可還原');
+    // 新增 AI 必須選專案：人類有兩個以上專案又沒帶 → 400
+    const noProj = await call(liu.token, '/api/my-ais', 'POST', { roleKey: 'PG', role: r.role, name: '沒選專案', duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff });
+    assert.equal(noProj.status, 400, '多個專案又沒選 → 要求必選');
+    // ===== C-146 B（UX 第 857 則、PO 第 889 則）=====
+    // ① 只有群組管理員（最早加入的人類）能管理專案與成員
+    const pr = (await call(percy.token, '/api/projects')).body;
+    assert.equal(pr.adminId, liuId, '群組管理員＝最早加入的人類');
+    assert.ok(pr.crossRoleIds.includes(percyId), 'PO 是跨專案角色');
+    assert.equal((await call(percy.token, '/api/projects', 'POST', { name: '非管理員' })).body.error?.code, 'NOT_ADMIN', '非管理員不能新增專案');
+    assert.equal((await call(percy.token, `/api/projects/${newId}`, 'PATCH', { name: 'x' })).body.error?.code, 'NOT_ADMIN', '非管理員不能改名');
+    // ③ 跨專案角色固定，不能移出
+    assert.equal((await put(liu.token, percyId, ['平台'])).body.error?.code, 'CROSS_ROLE_FIXED', 'PO 不能被移出專案');
+    // ⑥ AI 的專案不能超出所屬人類
+    const lone = (await call(null, '/api/join', 'POST', { name: '王小明', role: 'UX' })).body;
+    const loneId = lone.participant.participantId;
+    await put(liu.token, loneId, ['平台']);
+    const loneAi = (await call(lone.token, '/api/my-ais', 'POST', { projects: ['平台'], roleKey: 'PG', role: r.role, name: '小明PG', duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff })).body;
+    assert.equal((await call(lone.token, '/api/my-ais', 'POST', { projects: ['銀行系統'], roleKey: 'PG', role: r.role, name: '小明PG2', duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff })).body.error?.code, 'OWNER_NOT_IN_PROJECT', '新增 AI 不能超出自己的專案');
+    assert.equal((await put(liu.token, loneAi.participantId, ['平台', '銀行系統'])).body.error?.code, 'OWNER_NOT_IN_PROJECT', '管理員也不能讓 AI 超出所屬人類');
+    // ⑦ 一般成員只能看
+    assert.equal((await put(lone.token, loneId, ['平台', '銀行系統'])).body.error?.code, 'NOT_ADMIN', '一般成員不能自己加入專案');
+    // ④ 移出前預告退回幾張卡；移出後卡片退回待處理、未指派
+    const oc = (await call(liu.token, '/api/cards', 'POST', { requestId: 'req_mv1', title: '小明PG 的平台卡', project: '平台', ownerId: loneAi.participantId, status: '進行中' })).body;
+    const dry = (await call(liu.token, '/api/projects/平台/members', 'PUT', { dryRun: true, memberIds: pr.items.length && (await call(liu.token, '/api/participants')).body.items.filter(p => (p.projects || []).includes('平台') && p.participantId !== loneId).map(p => p.participantId) })).body;
+    assert.equal(dry.error?.code, 'NEEDS_ONE_PROJECT', '只屬於這個專案的人不能直接移出');
+    await put(liu.token, loneId, ['平台', '銀行系統']);
+    await put(liu.token, loneAi.participantId, ['平台', '銀行系統']);
+    const keep = (await call(liu.token, '/api/participants')).body.items.filter(p => (p.projects || []).includes('平台') && p.participantId !== loneAi.participantId).map(p => p.participantId);
+    const dry2 = (await call(liu.token, '/api/projects/平台/members', 'PUT', { dryRun: true, memberIds: keep })).body;
+    assert.deepEqual(dry2.impact.map(x => [x.name, x.returnedCards]), [['小明PG', [oc.cardId]]], '預告：1 張卡會退回待處理');
+    assert.equal((await call(liu.token, `/api/cards/${oc.cardId}`)).body.owner?.participantId, loneAi.participantId, 'dryRun 不改資料');
+    assert.equal((await call(liu.token, '/api/projects/平台/members', 'PUT', { memberIds: keep })).status, 200);
+    const oc2 = (await call(liu.token, `/api/cards/${oc.cardId}`)).body;
+    assert.ok(!oc2.owner && oc2.status === '待處理', '移出後卡片未指派、退回待處理');
+    // ⑤ 異動紀錄
+    const ev = (await call(percy.token, '/api/projects/平台/events')).body.items.map(e => e.text);
+    assert.ok(ev.some(t => t.includes('移除 小明PG（1 張卡退回待處理）')) && ev.some(t => t.includes('加入 王小明')), '異動紀錄記下加入與移除');
+    assert.ok((await call(liu.token, `/api/projects/${newId}/events`)).body.items.some(e => e.text.includes('改名：新專案甲 → 新專案乙')), '異動紀錄記下改名');
+    // PO 第 889 則：指派、收件人只能選同專案成員，跨專案擋下並說明
+    assert.equal((await call(liu.token, '/api/cards', 'POST', { requestId: 'req_x1', title: '跨專案指派', project: '平台', ownerId: bank.participantId })).body.error?.code, 'PROJECT_MISMATCH', '負責人不同專案擋下');
+    assert.equal((await call(liu.token, '/api/cards', 'POST', { requestId: 'req_x2', title: '跨專案等誰', project: '平台', waitForId: bank.participantId })).body.error?.code, 'PROJECT_MISMATCH', '等誰不同專案擋下');
+    const xm = await msg(plat.token, '[回覆] 指定銀行 PG', { project: '平台', recipientIds: [bank.participantId] });
+    assert.equal(xm.body.error?.code, 'PROJECT_MISMATCH', '收件人不同專案擋下');
+    assert.ok(xm.body.error.message.includes('銀行PG'), '錯誤訊息說明是誰');
+    assert.equal((await msg(plat.token, '[回覆] 全部專案可指定', { project: 'all', recipientIds: [bank.participantId] })).status, 201, '全部專案的訊息可指定任何人');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);

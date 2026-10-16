@@ -1210,3 +1210,29 @@ body.drawer-docked #app { padding-right: 400px; }
 .stale-note { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 8px 10px; border-radius: 8px; background: #fef3c7; color: #92400e; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cmark.stale, :root:not([data-theme="light"]) .stale-note { background: #451a03; color: #fde68a; } }
 :root[data-theme="dark"] .cmark.stale, :root[data-theme="dark"] .stale-note { background: #451a03; color: #fde68a; }
+
+/* ===== C-146 B 專案管理 ===== */
+.ptag { background: var(--surface-2); color: var(--muted); }
+.ptag[data-p="平台"] { background: var(--human-bg); color: var(--human-text); }
+.ptag[data-p="銀行系統"] { background: var(--ai-bg); color: var(--ai-text); }
+.pill-tag.blue { background: var(--human-bg); color: var(--human-text); }
+.pa-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 16px; align-items: start; }
+.pa-col { display: grid; gap: 6px; min-width: 0; }
+.pa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.pa-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 8px; border: 1px solid transparent; }
+.pa-row.sel { background: var(--surface-2); border-color: var(--border); }
+.pa-row.archived .pa-pick b { opacity: .6; }
+.pa-pick { all: unset; cursor: pointer; flex: 1; min-width: 0; min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+.pa-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+.pa-row [aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.pa-group { font-size: 12px; color: var(--muted); background: var(--surface-2); padding: 4px 8px; border-radius: 6px; margin-top: 6px; }
+.pa-mem { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; border-bottom: 1px solid var(--border); }
+.pa-mem-name { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.pa-why { flex-basis: 100%; }
+.pa-mem .check { white-space: nowrap; }
+.pa-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.pa-note { margin: 6px 0 0; }
+.pa-save { display: flex; justify-content: flex-end; margin-top: 8px; }
+@media (max-width: 720px) { .pa-grid { grid-template-columns: 1fr; } }
+.pm-new { display: flex; gap: 8px; margin-top: 8px; }
+.pm-new input { flex: 1; min-width: 0; min-height: 40px; }

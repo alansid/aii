@@ -97,15 +97,27 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < (p.kind === 'ai' ? AI_ACTIVE_WINDOW_MS : ACTIVE_WINDOW_MS);
 
   // 專案：成員可屬於一或兩個；訊息 project 為空＝全部專案（人人可見）；卡片必填
-  const PROJECTS = ['平台', '銀行系統'];
+  // 專案清單存在資料表（C-146 B）；PROJECTS 是「未封存專案 id」的陣列，原地更新（cards.js 拿的是同一個陣列）
+  const PROJECTS = [];
+  let projectRows = [], projectsAt = 0;
+  async function loadProjects(force = false) {
+    if (!force && Date.now() - projectsAt < 10_000 && projectRows.length) return;
+    projectRows = await db.all('SELECT * FROM projects ORDER BY created_at, id');
+    PROJECTS.length = 0;
+    PROJECTS.push(...projectRows.filter(r => !r.archived).map(r => r.id));
+    projectsAt = Date.now();
+  }
+  const invalidateProjects = () => { projectsAt = 0; };
+  // 成員所屬專案：欄位是空字串＝沒有任何專案（只看得到「全部專案」）；沒有欄位值（舊資料）＝所有專案
   const projectsOf = p => {
-    const list = String(p?.projects || '').split(',').map(x => x.trim()).filter(x => PROJECTS.includes(x));
-    return list.length ? list : [...PROJECTS];
+    const raw = p?.projects;
+    if (raw === undefined || raw === null) return [...PROJECTS];
+    return String(raw).split(',').map(x => x.trim()).filter(x => PROJECTS.includes(x));
   };
   function readProjects(raw) {
     if (!Array.isArray(raw)) throw invalid('projects 需為陣列，例如 ["平台"]');
     const list = [...new Set(raw.map(x => String(x).trim()))];
-    if (!list.length || list.some(x => !PROJECTS.includes(x))) throw invalid(`projects 至少選一個，且只能是：${PROJECTS.join('、')}`);
+    if (!list.length || list.some(x => !PROJECTS.includes(x))) throw invalid(`projects 至少選一個，且只能是（專案編號）：${PROJECTS.join('、')}`);
     return PROJECTS.filter(x => list.includes(x)); // 固定順序
   }
   // ?project= 過濾：平台｜銀行系統｜mine（我的專案）；回傳 SQL 片段（含「全部專案」的訊息）；兩邊成員的 mine 不過濾
@@ -116,6 +128,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     else if (PROJECTS.includes(raw)) list = [raw];
     else throw invalid(`project 需為：${PROJECTS.join('、')}、mine`);
     if (list.length === PROJECTS.length) return null;
+    if (!list.length) return { sql: withNull ? `(${col} IS NULL)` : '(1 = 0)', args: [] };
     return { sql: `(${col} = ?${withNull ? ` OR ${col} IS NULL` : ''})`, args: list };
   }
   function identity(p, people) {
@@ -250,7 +263,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   };
 
   // ---------- 訊息 ----------
-  async function createMessage(ctx, me, body, { fileId = null } = {}) {
+  // checkProject：成員發文時檢查收件人是否屬於訊息的專案；伺服器代發的通知不檢查
+  async function createMessage(ctx, me, body, { fileId = null, checkProject = false } = {}) {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text || text.length > MAX_TEXT) throw invalid(`text 需為 1～${MAX_TEXT} 字`);
     const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
@@ -302,6 +316,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       if (!mine.includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，只能發自己專案或全部專案（project: "all"）的訊息。');
       project = body.project;
     } else throw invalid(`project 需為：${PROJECTS.join('、')}、all`);
+    if (checkProject && project && !audience) {
+      const outside = [...recipientIds].map(rid => people.get(rid)).filter(p => !projectsOf(p).includes(project));
+      if (outside.length) throw new ApiError(400, 'PROJECT_MISMATCH', `${outside.map(p => p.name).join('、')} 不屬於「${project}」專案，不能指定；跨專案請改發全部專案（project: "all"）。`);
+    }
     const id = randId('msg');
     const createdAt = nowIso();
     const reasons = new Map();
@@ -440,8 +458,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const token = newToken();
     const ts = nowIso();
     invalidatePeople();
-    await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`, id, 'human', name, role, await newCode(), token, Date.now() + HUMAN_TOKEN_TTL_MS, ts, ts, Date.now());
+    // 新加入的人類：群組裡第一位（建立者）預設所有專案；之後加入的預設沒有專案，只看得到「全部專案」，等被指派（C-146 B）
+    const first = !(await db.get("SELECT id FROM participants WHERE kind = 'human' AND status = 'active' LIMIT 1"));
+    await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, 'human', name, role, await newCode(), token, Date.now() + HUMAN_TOKEN_TTL_MS, ts, ts, Date.now(), first ? PROJECTS.join(',') : '');
     const p = await db.get('SELECT * FROM participants WHERE id = ?', id);
     return { token, participant: publicParticipant(p, await peopleMap(ctx)) };
   }
@@ -493,12 +513,18 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const s = readSettings(body);
     const ts = nowIso();
     const id = randId('p');
+    // 新增 AI 必須選專案（至少一個）；沒帶時，所屬人類只有一個專案才自動帶入
+    const mineP = projectsOf(me);
+    const aiProjects = body.projects !== undefined ? readProjects(body.projects).join(',') : mineP.length === 1 ? mineP[0] : null;
+    if (aiProjects === null) throw invalid(`projects 為必填：這位 AI 屬於哪些專案（至少一個，專案編號：${PROJECTS.join('、')}）`);
+    const outside = aiProjects.split(',').filter(x => !mineP.includes(x));
+    if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `你不在「${outside.join('、')}」，AI 的專案不能超出所屬人類。`);
     invalidatePeople();
     await db.run(`INSERT INTO participants (id, kind, name, role, role_key, code, owner_id, duties, style, autonomy, must_confirm, handoff,
       env, avatar, token, token_expires_at, created_at, updated_at, projects) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, 'ai', name, s.role, s.roleKey, await newCode(), me.id, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff,
       s.environment, s.avatar, newToken(), Date.now() + AI_TOKEN_TTL_MS, ts, ts,
-      body.projects !== undefined ? readProjects(body.projects).join(',') : projectsOf(me).join(','));
+      aiProjects);
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', id), await peopleMap(ctx));
   }
 
@@ -750,18 +776,178 @@ ${autoStandby
     await db.run('UPDATE participants SET avatar = ?, updated_at = ? WHERE id = ?', avatar, nowIso(), me.id);
     return identity({ ...me, avatar }, await peopleMap(ctx));
   });
-  // 設定所屬專案：人類改自己，AI 由所屬人類改；至少選一個
-  route('PUT', '/api/participants/:id/projects', async ({ ctx, me, req, params }) => {
+  // ---------- 專案與成員管理（C-146 B）：只有群組管理員能新增／改名／封存專案、調整成員所屬專案 ----------
+  // 群組管理員＝最早加入、仍有效的人類（建立群組的人）
+  const adminOf = people => [...people.values()].filter(p => p.kind === 'human' && p.status === 'active')
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)))[0] || null;
+  async function requireAdmin(ctx, me) {
+    const admin = adminOf(await peopleMap(ctx));
+    if (!admin || admin.id !== me.id) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員（${admin?.name || '未設定'}）能管理專案與成員所屬專案。`);
+  }
+  // 跨專案角色（PO、SM，含人類 PO）：固定屬於所有專案，不能移出
+  const crossRole = p => p.status === 'active' && p.kind !== 'system' && (['PO', 'SM'].includes(p.role_key) || ['PO', 'SM'].includes(String(p.role || '').trim().toUpperCase()));
+  const listOf = p => String(p?.projects ?? '').split(',').map(x => x.trim()).filter(Boolean);
+  const projEvent = (projectId, actorId, text, at) => ['INSERT INTO project_events (project_id, at, actor_id, text) VALUES (?,?,?,?)', [projectId, at, actorId, text]];
+  const nameOf = id => projectRows.find(r => r.id === id)?.name || id;
+
+  async function projectViews(ctx) {
+    await loadProjects(true);
     const people = await peopleMap(ctx);
-    const target = people.get(params.id);
-    if (!target || target.status !== 'active' || target.kind === 'system') throw new ApiError(404, 'NOT_FOUND', '找不到成員');
-    if (me.kind !== 'human' || !(target.id === me.id || (target.kind === 'ai' && target.owner_id === me.id))) {
-      throw new ApiError(403, 'FORBIDDEN', '只有本人（人類）或 AI 的所屬人類能修改所屬專案。');
+    const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status NOT IN ('已完成','已封存') GROUP BY project")).map(r => [r.project, r.n]));
+    return projectRows.map(r => ({ id: r.id, name: r.name, archived: !!r.archived, createdAt: r.created_at,
+      memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id)).length,
+      openCards: counts.get(r.id) || 0 }));
+  }
+  async function projectsResponse(ctx, extra = {}) {
+    const people = await peopleMap(ctx);
+    const admin = adminOf(people);
+    const crossRoleIds = [...people.values()].filter(crossRole).map(p => p.id);
+    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, ...extra };
+  }
+
+  // 改成員所屬專案（單人或批次）。移出某專案時，他在該專案負責的未結案卡片退回「待處理」、改為未指派。
+  // changes: [{ id, projects: [...] }]；dryRun 只回影響，不寫入
+  async function applyMembership(ctx, me, changes, { dryRun = false } = {}) {
+    await loadProjects(true);
+    const people = await peopleMap(ctx);
+    const plan = [];
+    for (const ch of changes) {
+      const target = people.get(String(ch.id));
+      if (!target || target.status !== 'active' || target.kind === 'system') throw new ApiError(404, 'NOT_FOUND', `找不到成員 ${ch.id}`);
+      const next = readProjects(ch.projects);
+      const cur = listOf(target).filter(x => PROJECTS.includes(x));
+      const added = next.filter(x => !cur.includes(x)), removed = cur.filter(x => !next.includes(x));
+      if (crossRole(target) && removed.length) {
+        throw new ApiError(400, 'CROSS_ROLE_FIXED', `${target.name} 是跨專案角色（PO／SM），固定屬於所有專案，不能移出「${removed.map(nameOf).join('、')}」。`);
+      }
+      if (target.kind === 'ai' && added.length) {
+        // AI 的專案不能超出所屬人類；所屬人類同一批被加入也算
+        const owner = people.get(target.owner_id);
+        const ownerNext = changes.find(c => String(c.id) === target.owner_id)?.projects ?? listOf(owner);
+        const outside = added.filter(x => !ownerNext.includes(x));
+        if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `${target.name} 的所屬人類 ${owner?.name || ''} 不在「${outside.map(nameOf).join('、')}」，AI 的專案不能超出所屬人類。`);
+      }
+      const cards = removed.length ? await db.all(
+        `SELECT seq, project FROM cards WHERE owner_id = ? AND status NOT IN ('已完成','已封存') AND project IN (${removed.map(() => '?').join(',')}) ORDER BY seq`,
+        target.id, ...removed) : [];
+      if (added.length || removed.length) plan.push({ target, next, added, removed, cards });
     }
-    const list = readProjects((await readJson(req)).projects);
+    const impact = plan.map(x => ({ participantId: x.target.id, name: x.target.name, added: x.added, removed: x.removed, returnedCards: x.cards.map(c => 'C-' + (c.seq + 100)) }));
+    if (dryRun || !plan.length) return impact;
+    const at = nowIso(), stmts = [];
+    for (const x of plan) {
+      stmts.push(['UPDATE participants SET projects = ?, updated_at = ? WHERE id = ?', [x.next.join(','), at, x.target.id]]);
+      for (const c of x.cards) {
+        stmts.push(["UPDATE cards SET owner_id = NULL, status = '待處理', updated_at = ?, version = version + 1 WHERE seq = ?", [at, c.seq]]);
+        stmts.push(['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, '網頁', `${x.target.name} 已移出「${nameOf(c.project)}」，改為未指派（狀態改為待處理）`]]);
+      }
+      for (const pj of x.added) stmts.push(projEvent(pj, me.id, `${me.name} 加入 ${x.target.name}`, at));
+      for (const pj of x.removed) {
+        const n = x.cards.filter(c => c.project === pj).length;
+        stmts.push(projEvent(pj, me.id, `${me.name} 移除 ${x.target.name}${n ? `（${n} 張卡退回待處理）` : ''}`, at));
+      }
+    }
+    await db.batch(stmts);
     invalidatePeople();
-    await db.run('UPDATE participants SET projects = ?, updated_at = ? WHERE id = ?', list.join(','), nowIso(), target.id);
-    return identity({ ...target, projects: list.join(',') }, await peopleMap(ctx));
+    return impact;
+  }
+
+  // 單人：人人可看自己的專案；只有管理員能改（C-146 B 起一般成員不能自己加入）
+  route('PUT', '/api/participants/:id/projects', async ({ ctx, me, req, params }) => {
+    await requireAdmin(ctx, me);
+    const body = await readJson(req);
+    const impact = await applyMembership(ctx, me, [{ id: params.id, projects: body.projects }], { dryRun: body.dryRun === true });
+    if (body.dryRun === true) return { dryRun: true, impact };
+    const people = await peopleMap(ctx);
+    return { ...identity(people.get(params.id), people), impact };
+  });
+  // 批次：某專案的成員名單（專案管理畫面的「儲存」）；memberIds 以外的人移出此專案
+  route('PUT', '/api/projects/:id/members', async ({ ctx, me, req, params }) => {
+    await requireAdmin(ctx, me);
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    if (row.archived) throw new ApiError(409, 'PROJECT_ARCHIVED', '專案已封存，請先還原再調整成員');
+    const body = await readJson(req);
+    if (!Array.isArray(body.memberIds)) throw invalid('memberIds 需為陣列');
+    const want = new Set(body.memberIds.map(String));
+    const changes = [];
+    for (const p of (await peopleMap(ctx)).values()) {
+      if (p.status !== 'active' || p.kind === 'system') continue;
+      const cur = listOf(p).filter(x => PROJECTS.includes(x));
+      const has = cur.includes(row.id);
+      if (has === want.has(p.id)) continue;
+      const next = has ? cur.filter(x => x !== row.id) : PROJECTS.filter(x => cur.includes(x) || x === row.id);
+      if (!next.length) throw new ApiError(400, 'NEEDS_ONE_PROJECT', `${p.name} 只屬於這個專案，移出後就沒有任何專案；請先把他加入別的專案。`);
+      changes.push({ id: p.id, projects: next });
+    }
+    const impact = await applyMembership(ctx, me, changes, { dryRun: body.dryRun === true });
+    return projectsResponse(ctx, { dryRun: body.dryRun === true, impact });
+  });
+
+  route('GET', '/api/projects', async ({ ctx }) => projectsResponse(ctx));
+  route('GET', '/api/projects/:id/events', async ({ params, url }) => {
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
+    const rows = await db.all('SELECT * FROM project_events WHERE project_id = ? ORDER BY id DESC LIMIT ?', params.id, limit);
+    return { items: rows.map(r => ({ at: r.at, actorId: r.actor_id, text: r.text })) };
+  });
+  const readProjectName = raw => {
+    const name = String(raw ?? '').trim();
+    if (!name || name.length > 20 || /[,\n]/.test(name)) throw invalid('name 需為 1～20 字，不可含逗號或換行');
+    return name;
+  };
+  route('POST', '/api/projects', async ({ ctx, me, req }) => {
+    await requireAdmin(ctx, me);
+    const name = readProjectName((await readJson(req)).name);
+    await loadProjects(true);
+    if (projectRows.some(r => !r.archived && r.name === name)) throw new ApiError(409, 'NAME_TAKEN', '已有同名的專案');
+    const id = randId('prj'), at = nowIso();
+    const stmts = [['INSERT INTO projects (id, name, archived, created_by, created_at) VALUES (?,?,0,?,?)', [id, name, me.id, at]], projEvent(id, me.id, `${me.name} 建立專案`, at)];
+    // 新專案只含建立者＋跨專案角色（PO、SM）；其他人由管理員在專案成員勾選加入
+    for (const p of (await peopleMap(ctx)).values()) {
+      if (p.kind === 'system' || p.status !== 'active' || !(p.id === me.id || crossRole(p))) continue;
+      stmts.push(['UPDATE participants SET projects = ?, updated_at = ? WHERE id = ?', [[...listOf(p), id].join(','), at, p.id]]);
+    }
+    await db.batch(stmts);
+    invalidatePeople(); invalidateProjects();
+    return { __status: 201, ...(await projectsResponse(ctx)), id };
+  });
+  route('PATCH', '/api/projects/:id', async ({ ctx, me, req, params }) => {
+    await requireAdmin(ctx, me);
+    const name = readProjectName((await readJson(req)).name);
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    if (projectRows.some(r => !r.archived && r.id !== row.id && r.name === name)) throw new ApiError(409, 'NAME_TAKEN', '已有同名的專案');
+    if (name !== row.name) {
+      await db.batch([['UPDATE projects SET name = ? WHERE id = ?', [name, row.id]], projEvent(row.id, me.id, `${me.name} 改名：${row.name} → ${name}`, nowIso())]);
+      invalidateProjects();
+    }
+    return projectsResponse(ctx);
+  });
+  route('POST', '/api/projects/:id/archive', async ({ ctx, me, params }) => {
+    await requireAdmin(ctx, me);
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    if (row.archived) return projectsResponse(ctx);
+    if (projectRows.filter(r => !r.archived).length <= 1) throw new ApiError(409, 'LAST_PROJECT', '至少要保留一個專案');
+    const open = (await db.get("SELECT COUNT(*) AS n FROM cards WHERE project = ? AND status NOT IN ('已完成','已封存')", row.id)).n;
+    if (open) throw new ApiError(409, 'HAS_OPEN_CARDS', `這個專案還有 ${open} 張未結案的卡片，請先結案或把卡片移到別的專案。`);
+    await db.batch([['UPDATE projects SET archived = 1 WHERE id = ?', [row.id]], projEvent(row.id, me.id, `${me.name} 封存專案`, nowIso())]);
+    invalidateProjects();
+    return projectsResponse(ctx);
+  });
+  route('POST', '/api/projects/:id/unarchive', async ({ ctx, me, params }) => {
+    await requireAdmin(ctx, me);
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    if (row.archived) {
+      await db.batch([['UPDATE projects SET archived = 0 WHERE id = ?', [row.id]], projEvent(row.id, me.id, `${me.name} 還原專案`, nowIso())]);
+      invalidateProjects();
+    }
+    return projectsResponse(ctx);
   });
   // ---------- AI 工作記憶（C-108）：換電腦或關機後可從雲端讀回；依專案可見 ----------
   const STATE_MAX_BYTES = 16 * 1024;
@@ -871,7 +1057,7 @@ ${autoStandby
       cardSeq = m ? Number(m[1]) - 100 : NaN;
       if (!Number.isInteger(cardSeq) || cardSeq < 1 || !(await db.get('SELECT seq FROM cards WHERE seq = ?', cardSeq))) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
     }
-    const r = await createMessage(ctx, me, body);
+    const r = await createMessage(ctx, me, body, { checkProject: true });
     let cardLinked;
     if (cardSeq) {
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
@@ -994,7 +1180,7 @@ ${autoStandby
       replyToMessageId: q.get('replyToMessageId') || undefined,
       recipientIds: recipientIds.length ? recipientIds : undefined,
       audience: q.get('audience') === 'all' ? 'all' : undefined,
-    }, { fileId: id });
+    }, { fileId: id, checkProject: true });
     await db.run('UPDATE files SET message_id = ? WHERE id = ?', message.messageId, id);
     return { __status: 201, file: fileView(file), message };
   }
@@ -1254,6 +1440,7 @@ ${autoStandby
         if (!m) continue;
         const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
         const ctx = {};
+        await loadProjects();
         const me = r.open ? null : await authenticate(req, url);
         const out = await r.handler({ req, url, params, me, ctx, base });
         if (out instanceof Response) return out;
