@@ -2156,7 +2156,7 @@
     const mLabel = st => (st === '已完成' ? '已完成（7 天）' : st);
     return `
       ${wide() ? `<div class="board-tools"><span class="muted small">拖曳卡片到其他欄可以改狀態</span><span class="grow"></span><span class="muted small">已封存 ${work.archived.count} 張（完成滿 7 天自動收起）</span><button type="button" class="link small" id="toggle-archived">${work.showArchived ? '隱藏已封存' : '顯示已封存'}</button></div>`
-        : `<div class="wchips" role="group" aria-label="狀態">${CARD_ST.map(st => `<button type="button" data-mcol="${esc(st)}" aria-pressed="${work.mCol === st}"${st === '已封存' ? ' class="dashed"' : ''}>${mLabel(st)}<span>${st === '已封存' ? work.archived.count : all.filter(c => c.status === st).length}</span></button>`).join('')}</div>`}
+        : `<div class="wchips" role="group" aria-label="狀態">${BOARD_ORDER.map(st => `<button type="button" data-mcol="${esc(st)}" aria-pressed="${work.mCol === st}"${st === '已封存' ? ' class="dashed"' : ''}>${mLabel(st)}<span>${st === '已封存' ? work.archived.count : all.filter(c => c.status === st).length}</span></button>`).join('')}</div>`}
       <div class="board">
         ${cols.map(s => {
           const list = all.filter(c => c.status === s);
