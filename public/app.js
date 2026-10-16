@@ -2625,8 +2625,6 @@
         <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
       </button>`;
     }).join('');
-    const abnormal = t.members.filter(mb => ['yellow', 'red'].includes(health(mb).cls));
-    document.querySelectorAll('.presence-alert').forEach(el => { el.hidden = !abnormal.length; el.title = abnormal.length ? '需要注意：' + abnormal.map(mb => `${mb.name}（${health(mb).text}）`).join('、') : ''; });
     const mdec = myDecisions(t);
     updateTodoBadge();
     // 收件匣開著時，團隊狀態更新（例如新的 [需確認]）也要反映；正在輸入時不重畫，避免失去焦點

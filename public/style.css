@@ -992,8 +992,6 @@ body.drawer-docked #app { padding-right: 400px; }
 
 /* ===== C-126 手機訊息頁（≤600px）===== */
 .f-mobile { display: none; }
-.presence-alert { display: inline-block; width: 10px; height: 10px; margin-left: 6px; border-radius: 50%; background: #dc2626; box-shadow: 0 0 0 2px rgba(220, 38, 38, .25); }
-.presence-alert[hidden] { display: none; }
 @media (max-width: 600px) {
   /* 頂欄 52px：群組名＋「N 人在線」＋通知＋選單 */
   .mobile-top { min-height: 52px; box-sizing: border-box; padding: 0 8px 0 14px; }
