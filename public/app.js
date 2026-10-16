@@ -680,6 +680,17 @@
   $('#reply-cancel').addEventListener('click', () => setReply(null));
 
   // ---------- 輸入與 @提及 ----------
+  // @ 選單候選（C-150）：不截斷，清單可捲動；所有人在最前，再來是跟我同專案的成員
+  function mentionCandidates(raw) {
+    const q = raw.toLowerCase();
+    const mine = myProjects();
+    const near = p => (p.projects?.length ? p.projects : PROJECTS).some(x => mine.includes(x));
+    const people = [...state.participants.values()]
+      .filter(p => p.participantId !== meId() && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q)));
+    return [...(!q || ALL.name.includes(q) || ALL.role.includes(q) ? [ALL] : []), ...people.filter(near), ...people.filter(p => !near(p))];
+  }
+  // 鍵盤上下移動時，讓選中的那一列留在可視範圍
+  const scrollPicked = list => list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   const input = $('#input');
   const sendBtn = $('#send');
   const mentionList = $('#mention-list');
@@ -697,10 +708,7 @@
     const pos = input.selectionStart;
     const m = input.value.slice(0, pos).match(/@([^\s@]*)$/);
     if (!m) return closeMention();
-    const q = m[1].toLowerCase();
-    const items = [ALL, ...[...state.participants.values()].filter(p => p.participantId !== meId())]
-      .filter(p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q))
-      .slice(0, 8);
+    const items = mentionCandidates(m[1]);
     if (!items.length) return closeMention();
     mentionState = { start: pos - m[0].length, end: pos, items, index: 0 };
     renderMention();
@@ -712,6 +720,7 @@
         <span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}
       </li>`).join('');
     mentionList.hidden = false;
+    scrollPicked(mentionList);
   }
   function closeMention() { mentionState = null; mentionList.hidden = true; }
   function pickMention(i) {
@@ -2871,13 +2880,12 @@
     const render = () => {
       list.innerHTML = st.items.map((p, i) => `<li role="option" data-i="${i}" aria-selected="${i === st.index}"><span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.name)}</b><span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}</li>`).join('');
       list.hidden = false;
+      scrollPicked(list);
     };
     const update = () => {
       const pos = ta.selectionStart, m = ta.value.slice(0, pos).match(/@([^\s@]*)$/);
       if (!m) return close();
-      const q = m[1].toLowerCase();
-      const items = [ALL, ...[...state.participants.values()].filter(p => p.participantId !== meId())]
-        .filter(p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q)).slice(0, 8);
+      const items = mentionCandidates(m[1]);
       if (!items.length) return close();
       st = { start: pos - m[0].length, end: pos, items, index: 0 };
       render();
