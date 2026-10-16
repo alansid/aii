@@ -3075,7 +3075,7 @@
   }
 
   // 角色範本：常用的排前面，其餘收進「其他角色」群組（只是選單分組，角色定義不變；既有成員的角色照常顯示已選）
-  const COMMON_ROLES = ['PO', 'SM', 'BA', 'UX', 'PG', 'QA', 'custom'];
+  const COMMON_ROLES = ['PO', 'SM', 'BA', 'UX', 'PG', 'QA', 'TRY', 'custom'];
   function roleOptionsHtml(roles) {
     const opt = r => `<option value="${r.key}">${esc(r.option)}</option>`;
     const common = COMMON_ROLES.map(k => roles.find(r => r.key === k)).filter(Boolean);
@@ -3156,8 +3156,17 @@
       counts();
     };
     const roleHint = key => {
-      body.querySelector('#role-hint').textContent = editing ? '切換範本會覆蓋下方六題內容（名稱不變）。' : '選取後自動預填下方六題，可再修改。';
-      return roles.find(r => r.key === key);
+      const r = roles.find(x => x.key === key);
+      body.querySelector('#role-hint').textContent = (editing ? '切換範本會覆蓋下方六題內容（名稱不變）。' : '選取後自動預填下方六題，可再修改。')
+        + (r?.resident === false ? '試用者不常駐，被叫醒才跑一輪；回饋只發給 PO。' : '');
+      return r;
+    };
+    // C-171：範本帶預設專案（試用者只勾平台）；換回沒有預設專案的範本時，恢復原本的預設勾選
+    let projAuto = false;
+    const applyRoleProjects = r => {
+      if (editing || (!r?.projects && !projAuto)) return;
+      form.querySelectorAll('input[name="proj"]').forEach(c => { c.checked = r?.projects ? r.projects.includes(c.value) : myProjects().length === 1; });
+      projAuto = !!r?.projects;
     };
     setEnv('');
     if (editing) {
@@ -3186,6 +3195,7 @@
       const keepName = editing || form.name.value !== lastAutoName;
       const env = form.environment.value;
       fill({ ...r, name: autoName }, !keepName);
+      applyRoleProjects(r);
       setEnv(env);
       if (!keepName) lastAutoName = autoName;
       applyEnvNote(); // 換角色範本後補回環境限制

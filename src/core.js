@@ -624,7 +624,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const roster = members.map(p => `- ${p.name}${p.id === ai.id ? '（你）' : ''}：${p.kind === 'ai' ? 'AI' : '人類'}，角色 ${p.role || '未設定'}，所在環境 ${p.env || '未設定'}${p.kind === 'ai' ? '，所屬 ' + (byId.get(p.owner_id)?.name || '?') : ''}（participantId ${p.id}）`).join('\n');
     const agent = ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI';
     const insideEnv = ['行內', '投信'].includes(ai.env);
-    const autoStandby = consent && !insideEnv;
+    const trial = ROLES.find(r => r.key === ai.role_key)?.resident === false; // C-171 試用者：不常駐、不開 watcher
+    const po = members.find(p => p.kind === 'ai' && p.role_key === 'PO');
+    const autoStandby = consent && !insideEnv && !trial;
     const envFile = `.aigile/${agent}/watcher.env`;
     const watcherEnv = [`AIGILE_BASE=${base}`, `AIGILE_ME=${ai.id}`, `AIGILE_TOKEN_FILE=.aigile/${agent}/.token`,
       ...(SB_URL && SB_KEY ? [`SUPABASE_URL=${SB_URL}`, `SUPABASE_KEY=${SB_KEY}`, `SUPABASE_TOPIC=${SB_TOPIC}`] : []),
@@ -633,7 +635,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     return `# 昱志血汗勞工 接入設定：${ai.name}
 
 你即將以 AI 成員身分加入「昱志血汗勞工」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
-
+${trial ? `
+> **你是試用者：不常駐。** 不開 watcher、不用 wait-for-bell、不建排程；${owner.name} 叫醒你時才跑一輪：依「主要職責」的每輪任務實際操作網頁，跑完把回饋發給 PO（recipientIds 只放 ${po ? `${po.name}，participantId ${po.id}` : 'PO'}）就結束。回饋只發給 PO；不回覆別人的協調訊息、不改卡片、不交辦正式工作。
+` : ''}
 ## 一、你的身分與角色設定
 - AI 名稱：${ai.name}
 - 角色：${ai.role}
@@ -662,11 +666,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 5. 處理既有通知：GET /api/notifications?status=pending，與你無關的靜默 ACK。
 6. 簽到一次：POST /api/messages，requestId 固定為 "req_checkin_${ai.id}"，內容例如「[AI 簽到] 我是 ${owner.name} 的 ${shortName}，角色為 ${ai.role}。已成功連線，目前可接受指定任務。」之後重連不再簽到。
 7. 建立狀態檔 .aigile/${agent}/state.json（見第五節），記錄游標與工作狀態，中斷後才能接續。可直接使用規格文件第 7 節的 poll.js：node poll.js --agent ${agent}。
-${autoStandby
+${trial
+  ? `8. 回報 ${owner.name}：接入結果，並說明你是試用者，不常駐、不開 watcher，之後由他叫醒才跑一輪。`
+  : autoStandby
   ? `8. 啟動待命（見第四節）：${owner.name} 已在網頁勾選「允許 AI 自動啟動待命」，所屬人類已同意自動啟動待命。依你的能力選一種並確認實際啟動成功，再一次回報 ${owner.name}：接入結果、用哪種方式待命、日誌在哪、怎麼停止。`
   : `8. 回報 ${owner.name}：接入結果、你打算用哪種方式待命（見第四節），並詢問是否同意啟動。${askWhy}`}
 
-## 四、待命與輪詢（${autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
+## 四、待命與輪詢（${trial ? '試用者不待命：被叫醒才跑一輪，下方「每一輪」照做；watcher、wait-for-bell 不用設定' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 待命方式依你的能力擇一，由上往下選第一個做得到的：
   1. 能在背景常駐程式、又能監看它的輸出（例如 Claude Code 的背景指令＋Monitor）→ watcher：平時只查未讀數，幾乎不耗用量，被 @ 才叫醒你。
   2. 只能在回合內執行指令（例如 Codex）→ wait-for-bell（見第十三節）。
@@ -758,7 +764,9 @@ ${roster}
 ## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）
 - 處理完手上的事，執行 node wait-for-bell.js（零依賴，可由平台 /wait-for-bell.js 下載；先讀過再用；建議 --max-min=5 起步）。依輸出最後一行：PENDING <N> → 收訊息、處理、回覆，做完再執行一次；TIMEOUT → 再執行一次；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}，不要自行重試或繞過。需要設定 AIGILE_BASE 與 AIGILE_TOKEN_FILE（Token 絕不印出）。細節見規格 3.12。
 
-${autoStandby
+${trial
+  ? `請從「初次接入」第 1 步開始，做到第 8 步後回報 ${owner.name}；之後等他叫醒再跑一輪。`
+  : autoStandby
   ? `請從「初次接入」第 1 步開始，做到第 8 步（啟動待命）後，一次回報 ${owner.name}。`
   : `請先回覆 ${owner.name}：你是否具備 HTTP 與背景執行（watcher）或排程能力，然後從「初次接入」第 1 步開始。`}`;
   }
