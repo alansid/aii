@@ -209,13 +209,17 @@
 
   // ---------- C-182 右上頭像選單（每個畫面都有）：我的 AI、成員與權限（管理員）、個人設定、API 資訊與登入碼、登出 ----------
   const isAdmin = () => !!state.projMeta.adminId && state.projMeta.adminId === state.me?.participantId;
+  // C-183：專案 leader（每個專案可多位、只能人類）
+  const leadersOf = pj => state.projMeta.leaders?.[pj] || [];
+  const myLeadProjects = () => (state.me ? PROJECTS.filter(pj => leadersOf(pj).includes(state.me.participantId)) : []);
+  const leaderTag = (id, pj) => (leadersOf(pj).includes(id) ? '<span class="lead-tag" title="專案 leader">★ leader</span>' : '');
   state.myAiCount = null;
   function drawAvatarMenu() {
     if (!state.me) return;
     document.querySelectorAll('.av-btn').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
     $('#av-menu').innerHTML = `<div class="av-head"><b>${esc(state.me.name)}</b><span class="muted small">${esc([state.me.role, isAdmin() ? '管理員' : ''].filter(Boolean).join(' · '))}</span></div>
       <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
-      ${isAdmin() ? '<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">管理員</span></button>' : ''}
+      ${isAdmin() || myLeadProjects().length ? `<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
       <button type="button" role="menuitem" data-av="settings">個人設定</button>
       <button type="button" role="menuitem" data-av="api">API 資訊與登入碼</button>
       <div class="av-sep" role="separator"></div>
@@ -519,12 +523,12 @@
   // 專案清單來自伺服器（可新增、改名、封存）；PROJECTS 是未封存專案的 id，專案顯示名稱用 projName
   const PROJECTS = [];
   state.projectList = [];
-  state.projMeta = { adminId: null, adminName: '', crossRoleIds: [] };
+  state.projMeta = { adminId: null, adminName: '', crossRoleIds: [], leaders: {} };
   const projName = id => state.projectList.find(p => p.id === id)?.name || id;
   async function loadProjectList() {
     const d = await api('/api/projects');
     state.projectList = d.items;
-    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [] };
+    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {} };
     document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
     if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
     PROJECTS.length = 0;
@@ -567,7 +571,7 @@
   }
   const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', myai: '我的 AI', perm: '成員與權限' };
   const TOP_PAGES = { myai: '/my-ai', perm: '/members' }; // C-182：第一層頁面（不分專案）
-  const isTop = p => p === 'myai' || (p === 'perm' && isAdmin());
+  const isTop = p => p === 'myai' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
   const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
   const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc([...projName(p)][0] || '?')}</span>`;
@@ -1983,7 +1987,7 @@
       const n = projStats(p), m = lastMsgOf(p);
       const st = (label, v, cls) => `<span class="hs${v && cls ? ' ' + cls : ''}">${label}<b>${v}</b></span>`;
       return `<button type="button" class="hub-card" data-proj="${esc(p)}" aria-label="進入 ${esc(projName(p))}">
-        <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}</span></span>${counts[p] ? `<span class="hc-todo">要你做 ${counts[p]}</span>` : ''}</span>
+        <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}${leadersOf(p).length ? ` · ★ leader：${esc(leadersOf(p).map(id => state.participants.get(id)?.name).filter(Boolean).join('、'))}` : ''}</span></span>${counts[p] ? `<span class="hc-todo">要你做 ${counts[p]}</span>` : ''}</span>
         <span class="hc-stats">${st('今日完成', n.done)}${st('進行中', n.doing)}${st('受阻', n.blocked, 'bad')}${st('待驗收', n.verify, 'warn')}</span>
         <span class="hc-last">${m ? `最新：${esc(m.author.name)}「${esc(oneLine(m.text, 50))}」` : '最近 12 小時沒有新訊息'}</span>
         <span class="hc-go">進入 ›</span></button>`;
@@ -3060,7 +3064,7 @@
       return `<div class="mem-row">
         ${avatarDot(p)}
         <div class="mem-main">
-          <div class="mem-name"><b title="代號（AI 用來找你）：${esc(p.shortCode)}">${esc(p.name)}</b><span class="muted small">${esc(p.role || '')}</span></div>
+          <div class="mem-name"><b title="代號（AI 用來找你）：${esc(p.shortCode)}">${esc(p.name)}</b>${myProjects().includes(projectView()) ? leaderTag(p.participantId, projectView()) : ''}<span class="muted small">${esc(p.role || '')}</span></div>
           <div class="muted small">${esc(line2)}</div>
           ${p.duties ? `<div class="mem-duty muted small">${esc(p.duties)}</div>` : ''}
         </div>
@@ -3858,12 +3862,14 @@
       .then(ok => { if (ok) go(); });
   }
   const permPeople = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && p.status !== 'deleted' && p.memberType !== 'system');
-  const permBase = p => ({ projects: new Set((p.projects || []).filter(x => PROJECTS.includes(x))), cross: state.projMeta.crossRoleIds.includes(p.participantId) });
+  const permBase = p => ({ projects: new Set((p.projects || []).filter(x => PROJECTS.includes(x))), cross: state.projMeta.crossRoleIds.includes(p.participantId), leaders: new Set(PROJECTS.filter(pj => leadersOf(pj).includes(p.participantId))) });
+  const permCanEdit = pj => isAdmin() || myLeadProjects().includes(pj); // leader 只能改自己當 leader 的專案欄
   const permCur = p => perm.draft.get(p.participantId) || permBase(p);
   const sameSet = (a, b) => a.size === b.size && [...a].every(x => b.has(x));
   function permSet(p, next) {
     const b = permBase(p);
-    if (next.cross === b.cross && (next.cross || sameSet(next.projects, b.projects))) perm.draft.delete(p.participantId);
+    next.leaders = new Set([...(next.leaders || b.leaders)].filter(pj => next.cross || next.projects.has(pj))); // 移出專案，leader 身分一起拿掉
+    if (next.cross === b.cross && (next.cross || sameSet(next.projects, b.projects)) && sameSet(next.leaders, b.leaders)) perm.draft.delete(p.participantId);
     else perm.draft.set(p.participantId, next);
   }
   // AI 所屬人類不在那個專案時鎖住（以畫面上的變更後狀態判斷）
@@ -3883,6 +3889,8 @@
         for (const x of d.projects) if (!b.projects.has(x) || b.cross) out.push(`${p.name}加入${projName(x)}`);
         if (!b.cross) for (const x of b.projects) if (!d.projects.has(x)) out.push(`${p.name}離開${projName(x)}`);
       }
+      for (const x of d.leaders || []) if (!b.leaders.has(x)) out.push(`${p.name}成為${projName(x)} leader`);
+      for (const x of b.leaders) if (!(d.leaders || new Set()).has(x)) out.push(`${p.name}不再是${projName(x)} leader`);
     }
     return out;
   }
@@ -3892,28 +3900,35 @@
     const humans = all.filter(p => p.memberType === 'human');
     const ownerName = p => state.participants.get(p.ownerParticipantId)?.name || '';
     const ais = all.filter(p => p.memberType === 'ai').sort((a, b) => ownerName(a).localeCompare(ownerName(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant'));
-    const adminId = state.projMeta.adminId;
+    const adminId = state.projMeta.adminId, admin = isAdmin(), led = myLeadProjects();
     const sw = (on, attrs, chg, label, extra = '') => `<button type="button" class="pm-sw${chg ? ' chg' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" ${attrs} ${extra}></button>`;
     const row = p => {
       const c = permCur(p), b = permBase(p), id = esc(p.participantId);
-      const tags = p.participantId === adminId ? '<span class="pill-tag blue">管理員</span>' : '';
+      const tags = (p.participantId === adminId ? '<span class="pill-tag blue">管理員</span>' : '') + (p.participantId === meId() && !admin ? '<span class="muted small"> · 你</span>' : '');
       const sub = p.memberType === 'ai' ? [`${ownerName(p)}的`, p.environment].filter(Boolean).join(' · ') : (!c.cross && !c.projects.size ? '還沒有專案' : p.environment || '');
       const cells = PROJECTS.map(pj => {
         if (c.cross) return `<td class="pm-c"><span class="pm-lock">全部專案</span></td>`;
         const on = c.projects.has(pj), why = ownerBlocks(p, pj);
         if (why && !on) return `<td class="pm-c"><span class="pm-lock" title="${esc(why)}" tabindex="0" aria-label="${esc(why)}">🔒 ${esc(state.participants.get(p.ownerParticipantId)?.name || '')}不在</span></td>`;
         const chg = b.cross || on !== b.projects.has(pj);
-        return `<td class="pm-c">${sw(on, `data-pm="${id}" data-pj="${esc(pj)}"`, chg, `${p.name} ${projName(pj)}`)}${p.memberType === 'human' ? '<span class="pm-star" aria-hidden="true"></span>' : ''}</td>`;
+        const ro = !permCanEdit(pj) || p.participantId === adminId && !admin ? 'aria-disabled="true" title="你不是這個專案的 leader，只能看"' : p.participantId === meId() && !admin && on ? 'aria-disabled="true" title="leader 不能把自己移出專案"' : '';
+        const self = !admin && p.participantId === meId() && on && permCanEdit(pj) ? '<span class="muted small pm-self">（自己不能移出）</span>' : '';
+        // ★／☆：只有管理員、只在人類且已在該專案的格子
+        const lead = (c.leaders || b.leaders).has(pj), lchg = lead !== b.leaders.has(pj);
+        const star = p.memberType !== 'human' ? '' : admin && on ? `<button type="button" class="pm-star on-${lead}${lchg ? ' chg' : ''}" data-pm-star="${id}" data-pj="${esc(pj)}" aria-pressed="${lead}" aria-label="${esc(p.name)} ${esc(projName(pj))} leader" title="${lead ? '取消 leader' : '設為 leader'}">${lead ? '★' : '☆'}</button>` : !admin && lead ? '<span class="pm-star on-true" aria-label="leader">★</span>' : '<span class="pm-star" aria-hidden="true"></span>';
+        return `<td class="pm-c">${sw(on, `data-pm="${id}" data-pj="${esc(pj)}"`, chg, `${p.name} ${projName(pj)}`, ro)}${star}${self}</td>`;
       }).join('');
       const self = p.participantId === adminId;
-      const crossCell = `<td class="pm-c">${sw(c.cross, `data-pm-cross="${id}"`, c.cross !== b.cross, `${p.name} 跨專案角色`, self && c.cross ? 'aria-disabled="true" title="管理員本人不能關掉自己的跨專案角色（避免沒人能管）"' : '')}</td>`;
+      const crossCell = !admin ? '' : `<td class="pm-c">${sw(c.cross, `data-pm-cross="${id}"`, c.cross !== b.cross, `${p.name} 跨專案角色`, self && c.cross ? 'aria-disabled="true" title="管理員本人不能關掉自己的跨專案角色（避免沒人能管）"' : '')}</td>`;
       return `<tr><th scope="row"><b>${esc(p.name)}</b> ${tags}${sub ? `<span class="muted small"> · ${esc(sub)}</span>` : ''}</th>${cells}${crossCell}</tr>`;
     };
-    const head = `<tr><th scope="col">成員</th>${PROJECTS.map(pj => `<th scope="col" class="pm-c">${esc(projName(pj))}</th>`).join('')}<th scope="col" class="pm-c">跨專案角色</th></tr>`;
-    const grp = t => `<tr class="pm-grp"><td colspan="${PROJECTS.length + 2}">${t}</td></tr>`;
-    return `<div class="pm-tools"><input id="pm-q" type="search" placeholder="搜尋成員" aria-label="搜尋成員" value="${esc(perm.q)}"><span class="muted small">一眼看完誰在哪些專案；點開關就改，最後一次儲存所有專案</span></div>
-      <div class="table-scroll"><table class="pm-table"><thead>${head}</thead><tbody>${grp('人類')}${humans.map(row).join('')}${grp('AI（排在所屬人類底下）')}${ais.map(row).join('') || `<tr><td colspan="${PROJECTS.length + 2}" class="muted small">沒有 AI</td></tr>`}</tbody></table></div>
-      <p class="muted small pm-note">跨專案角色＝自動在所有專案，那幾格寫「全部專案」不能點。AI 的鎖頭格：所屬人類不在那個專案，滑過看原因。</p>`;
+    const head = `<tr><th scope="col">成員</th>${PROJECTS.map(pj => `<th scope="col" class="pm-c">${esc(projName(pj))}${!admin && led.includes(pj) ? ' ★' : ''}</th>`).join('')}${admin ? '<th scope="col" class="pm-c">跨專案角色</th>' : ''}</tr>`;
+    const cols = PROJECTS.length + (admin ? 2 : 1);
+    const grp = t => `<tr class="pm-grp"><td colspan="${cols}">${t}</td></tr>`;
+    const banner = admin ? '' : `<div class="pm-banner">你是 <b>${esc(led.map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(led.map(projName).join('、'))}的成員。其他專案只能看。</div>`;
+    return `${banner}<div class="pm-tools"><input id="pm-q" type="search" placeholder="搜尋成員" aria-label="搜尋成員" value="${esc(perm.q)}"><span class="muted small">一眼看完誰在哪些專案；點開關就改，最後一次儲存所有專案</span></div>
+      <div class="table-scroll"><table class="pm-table"><thead>${head}</thead><tbody>${grp('人類')}${humans.map(row).join('')}${grp('AI（排在所屬人類底下）')}${ais.map(row).join('') || `<tr><td colspan="${cols}" class="muted small">沒有 AI</td></tr>`}</tbody></table></div>
+      <p class="muted small pm-note">跨專案角色＝自動在所有專案，那幾格寫「全部專案」不能點。AI 的鎖頭格：所屬人類不在那個專案，滑過看原因。${admin ? '人類格右邊的 ☆ 可指定專案 leader（要先在該專案）；leader 可以代管那個專案的成員。' : ''}</p>`;
   }
   function permProjectsHtml() {
     return `<div class="pm-projs">${state.projectList.map(p => {
@@ -3941,9 +3956,9 @@
     const box = $('#page-work');
     if (state.page !== 'perm') return;
     const keep = document.activeElement?.id, top = box.scrollTop;
-    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}</span></div>
-        <div class="seg-scope" role="tablist" aria-label="分頁">${[['members', '成員'], ['projects', '專案']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div></div>
-      <section class="wpanel pm-panel">${perm.tab === 'members' ? permMembersHtml() : permProjectsHtml()}</section>
+    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${isAdmin() ? '' : ' · 你是 leader'}</span></div>
+        <div class="seg-scope" role="tablist" aria-label="分頁">${(isAdmin() ? [['members', '成員'], ['projects', '專案']] : [['members', '成員']]).map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div></div>
+      <section class="wpanel pm-panel">${perm.tab === 'members' || !isAdmin() ? permMembersHtml() : permProjectsHtml()}</section>
       <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
     box.scrollTop = top;
     drawPermBar();
@@ -3955,7 +3970,7 @@
     drawPerm();
   }
   async function permToggle(p, pj) {
-    const c = permCur(p), next = { projects: new Set(c.projects), cross: c.cross };
+    const c = permCur(p), next = { projects: new Set(c.projects), cross: c.cross, leaders: new Set(c.leaders || permBase(p).leaders) };
     const on = !next.projects.has(pj);
     if (on) next.projects.add(pj); else next.projects.delete(pj);
     permSet(p, next);
@@ -3964,19 +3979,19 @@
       const mine = permPeople().filter(a => a.memberType === 'ai' && a.ownerParticipantId === p.participantId && !permCur(a).cross && !permCur(a).projects.has(pj));
       if (mine.length) {
         const pick = await new Promise(res => {
-          const body = openModal('也讓他的 AI 加入？', `<p>${esc(p.name)} 加入「${esc(projName(pj))}」。要不要讓他名下的 AI 一起加入？</p>
+          const body = openModal('也讓這位成員的 AI 加入？', `<p>${esc(p.name)} 加入「${esc(projName(pj))}」。要不要讓這位成員名下的 AI 一起加入？</p>
             <div class="stack">${mine.map(a => `<label class="chk"><input type="checkbox" name="pm-ai" value="${esc(a.participantId)}"> ${esc(a.name)}<span class="muted small">${esc(a.role || '')}</span></label>`).join('')}</div>`,
             { size: 'narrow', foot: '<button class="btn" type="button" id="pm-ai-no">都不用</button><button class="btn primary" type="button" id="pm-ai-ok">加入勾選的 AI</button>' });
           body.modal.querySelector('#pm-ai-no').onclick = () => { closeModal(); res([]); };
           body.modal.querySelector('#pm-ai-ok').onclick = () => { const ids = [...body.querySelectorAll('input[name="pm-ai"]:checked')].map(i => i.value); closeModal(); res(ids); };
         });
-        for (const id of pick) { const a = state.participants.get(id), ac = permCur(a); permSet(a, { projects: new Set([...ac.projects, pj]), cross: ac.cross }); }
+        for (const id of pick) { const a = state.participants.get(id), ac = permCur(a); permSet(a, { projects: new Set([...ac.projects, pj]), cross: ac.cross, leaders: ac.leaders }); }
       }
     }
     // 人類離開專案時，他的 AI 也不能留在那裡：一併移出（畫面上看得到）
     if (!on && p.memberType === 'human') {
       for (const a of permPeople().filter(a => a.memberType === 'ai' && a.ownerParticipantId === p.participantId && !permCur(a).cross && permCur(a).projects.has(pj))) {
-        const ac = permCur(a); const np = new Set(ac.projects); np.delete(pj); permSet(a, { projects: np, cross: ac.cross });
+        const ac = permCur(a); const np = new Set(ac.projects); np.delete(pj); permSet(a, { projects: np, cross: ac.cross, leaders: ac.leaders });
       }
     }
     drawPerm();
@@ -3988,12 +4003,15 @@
       const p = state.participants.get(id), d = perm.draft.get(id), b = permBase(p), ch = { id };
       if (d.cross !== b.cross) ch.crossRole = d.cross;
       if (!d.cross) ch.projects = PROJECTS.filter(x => d.projects.has(x));
+      if (isAdmin() && d.leaders && !sameSet(d.leaders, b.leaders)) ch.leaderOf = PROJECTS.filter(x => d.leaders.has(x));
+      if (!isAdmin() && sameSet(d.projects, b.projects) && d.cross === b.cross) continue;
       changes.push(ch);
     }
     try {
       const dry = await api('/api/members/matrix', { method: 'PUT', body: { changes, dryRun: true } });
       const lines = [
         ...(dry.crossChanges || []).map(c => `${c.name}：${c.crossRole ? '設為跨專案角色（自動在所有專案）' : '取消跨專案角色'}`),
+        ...(dry.leaderChanges || []).map(c => `${c.name}：${c.leader ? '成為' : '不再是'}${projName(c.project)} leader${c.auto ? '（已移出專案）' : ''}`),
         ...dry.impact.map(x => `${x.name}：${[x.added.length ? '加入 ' + x.added.map(projName).join('、') : '', x.removed.length ? '離開 ' + x.removed.map(projName).join('、') : ''].filter(Boolean).join('；')}${x.returnedCards.length ? `（<b>${x.returnedCards.length} 張卡退回待處理</b>：${x.returnedCards.join('、')}）` : ''}`),
       ];
       if (!await confirmDialog({ title: '確定儲存這些變更？', confirmText: '確定儲存', danger: dry.impact.some(x => x.returnedCards.length),
@@ -4011,12 +4029,19 @@
     const tab = t.closest('[data-pm-tab]');
     if (tab) { perm.tab = tab.dataset.pmTab; return drawPerm(); }
     const s = t.closest('[data-pm]');
-    if (s) return permToggle(state.participants.get(s.dataset.pm), s.dataset.pj);
+    if (s) { if (s.getAttribute('aria-disabled') === 'true') return toast(s.title); return permToggle(state.participants.get(s.dataset.pm), s.dataset.pj); }
+    const st = t.closest('[data-pm-star]');
+    if (st) {
+      const p = state.participants.get(st.dataset.pmStar), c = permCur(p), l = new Set(c.leaders || permBase(p).leaders);
+      if (l.has(st.dataset.pj)) l.delete(st.dataset.pj); else l.add(st.dataset.pj);
+      permSet(p, { projects: new Set(c.projects), cross: c.cross, leaders: l });
+      return drawPerm();
+    }
     const cr = t.closest('[data-pm-cross]');
     if (cr) {
       if (cr.getAttribute('aria-disabled') === 'true') return toast(cr.title);
       const p = state.participants.get(cr.dataset.pmCross), c = permCur(p), b = permBase(p);
-      permSet(p, { projects: c.cross ? (b.cross ? new Set(PROJECTS) : new Set(b.projects.size ? b.projects : PROJECTS)) : new Set(PROJECTS), cross: !c.cross });
+      permSet(p, { projects: c.cross ? (b.cross ? new Set(PROJECTS) : new Set(b.projects.size ? b.projects : PROJECTS)) : new Set(PROJECTS), cross: !c.cross, leaders: c.leaders });
       return drawPerm();
     }
     const act = t.closest('[data-pm-act]')?.dataset.pmAct;

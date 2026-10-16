@@ -1490,3 +1490,17 @@ button.cap-miss { cursor: pointer; font: inherit; font-size: 13px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pill-tag.blue { background: #172554; color: #bfdbfe; } }
 :root[data-theme="dark"] .pill-tag.blue { background: #172554; color: #bfdbfe; }
 @media (max-width: 600px) { .pm-c { width: 88px; } .pm-table th, .pm-table td { padding: 0 8px; } .pm-projs .pa-row { grid-template-columns: 1fr; } }
+
+/* ===== C-183 專案 leader ===== */
+button.pm-star { all: unset; box-sizing: border-box; cursor: pointer; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; color: var(--muted); border-radius: 6px; vertical-align: middle; }
+.pm-star.on-true { color: #b45309; }
+button.pm-star:focus-visible { outline: 2px solid var(--primary); }
+button.pm-star.chg { outline: 3px solid #f59e0b; outline-offset: 0; }
+span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: center; font-size: 18px; vertical-align: middle; }
+.pm-self { display: block; }
+.pm-banner { padding: 10px 14px; background: #fff8e1; border-bottom: 1px solid #e8cf86; font-size: 13px; color: #1f2937; }
+.lead-tag { margin-left: 6px; padding: 0 8px; border-radius: 10px; background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 600; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pm-banner { background: #451a03; color: #fde68a; border-color: #78350f; } :root:not([data-theme="light"]) .pm-star.on-true { color: #fbbf24; } :root:not([data-theme="light"]) .lead-tag { background: #451a03; color: #fde68a; } }
+:root[data-theme="dark"] .pm-banner { background: #451a03; color: #fde68a; border-color: #78350f; }
+:root[data-theme="dark"] .pm-star.on-true { color: #fbbf24; }
+:root[data-theme="dark"] .lead-tag { background: #451a03; color: #fde68a; }

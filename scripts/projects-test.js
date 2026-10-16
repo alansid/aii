@@ -275,6 +275,28 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const asave = (await call(liu.token, `/api/my-ais/${bank.participantId}`, 'PATCH', { projects: ['平台', '銀行系統'] })).body;
     assert.deepEqual(asave.projects, ['平台', '銀行系統'], '所屬人類可改自己 AI 的專案');
     assert.equal((await call(percy.token, `/api/my-ais/${bank.participantId}`, 'PATCH', { projects: ['平台'] })).status, 404, '不能改別人的 AI');
+    // ===== C-183：專案 leader =====
+    await M(liu.token, [{ id: percyId, projects: ['平台', '銀行系統'] }]);
+    assert.equal((await M(percy.token, [{ id: bank.participantId, projects: ['平台', '銀行系統'] }])).status, 403, '還不是 leader 不能改');
+    assert.equal((await M(liu.token, [{ id: bank.participantId, leaderOf: ['平台'] }])).body.error?.code, 'INVALID_REQUEST', 'leader 只能是人類');
+    const kang = (await call(null, '/api/join', 'POST', { name: '康旭', role: 'BA' })).body;
+    assert.equal((await M(liu.token, [{ id: kang.participant.participantId, leaderOf: ['平台'] }])).body.error?.code, 'LEADER_NOT_MEMBER', '要先在專案才能當 leader');
+    const setL = (await M(liu.token, [{ id: percyId, leaderOf: ['平台'] }])).body;
+    assert.deepEqual(setL.leaders['平台'], [percyId], '管理員指定 Percy 為平台 leader');
+    assert.equal((await M(percy.token, [{ id: bank.participantId, projects: ['銀行系統'] }], true)).status, 200, 'leader 可以看影響');
+    const lAdd = (await M(percy.token, [{ id: kang.participant.participantId, projects: ['平台'] }])).body;
+    assert.equal(lAdd.impact[0].added[0], '平台', 'leader 可以把人加入自己的專案');
+    assert.equal((await M(percy.token, [{ id: kang.participant.participantId, projects: ['平台', '銀行系統'] }])).body.error?.code, 'NOT_PROJECT_LEADER', 'leader 不能改別的專案');
+    assert.equal((await M(percy.token, [{ id: plat.participantId, crossRole: true }])).body.error?.code, 'NOT_PROJECT_LEADER', 'leader 不能設跨專案角色');
+    assert.equal((await M(percy.token, [{ id: kang.participant.participantId, leaderOf: ['平台'] }])).body.error?.code, 'NOT_PROJECT_LEADER', 'leader 不能指定 leader');
+    assert.equal((await M(percy.token, [{ id: percyId, projects: ['銀行系統'] }])).body.error?.code, 'NOT_PROJECT_LEADER', 'leader 不能把自己移出');
+    assert.equal((await M(percy.token, [{ id: liuId, projects: ['銀行系統'] }])).body.error?.code, 'NOT_PROJECT_LEADER', 'leader 不能改管理員／跨專案角色');
+    const lev = (await call(liu.token, '/api/projects/平台/events?limit=10')).body.items.map(e => e.text);
+    assert.ok(lev.some(t => /Percy（平台 leader） 加入 康旭/.test(t)), 'leader 的變更記在異動紀錄');
+    assert.ok((await call(liu.token, '/api/messages?limit=20')).body.items.some(m => /Percy（平台 leader）把 康旭 加入平台/.test(m.text) && m.project === '平台'), '通知管理員');
+    await M(liu.token, [{ id: percyId, projects: ['銀行系統'] }]);
+    assert.deepEqual((await call(liu.token, '/api/projects')).body.leaders['平台'], [], '移出專案時 leader 身分一起拿掉');
+    assert.equal((await M(percy.token, [{ id: kang.participant.participantId, projects: ['平台'] }])).status, 403, '不再是 leader 就不能改');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);
