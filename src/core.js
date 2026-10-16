@@ -879,9 +879,9 @@ ${trial
   // 群組管理員＝最早加入、仍有效的人類（建立群組的人）
   const adminOf = people => [...people.values()].filter(p => p.kind === 'human' && p.status === 'active')
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)))[0] || null;
-  async function requireAdmin(ctx, me) {
+  async function requireAdmin(ctx, me, what = '管理專案與成員所屬專案') {
     const admin = adminOf(await peopleMap(ctx));
-    if (!admin || admin.id !== me.id) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員（${admin?.name || '未設定'}）能管理專案與成員所屬專案。`);
+    if (!admin || admin.id !== me.id) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員（${admin?.name || '未設定'}）能${what}。`);
   }
   // 跨專案角色：固定屬於所有專案，不能移出。預設是 PO、SM（含人類 PO）；C-182 起管理員可在「成員與權限」開關，
   // 覆寫存在 app_settings 的 cross_roles（{ add: [...], remove: [...] }），不用改資料表結構
@@ -1111,7 +1111,7 @@ ${trial
   // C-193：群組名稱（登入頁也要顯示，所以讀取不用登入）；只有管理員能改
   route('GET', '/api/group', async () => ({ name: await groupName() }), { open: true });
   route('PUT', '/api/group', async ({ ctx, me, req }) => {
-    await requireAdmin(ctx, me);
+    await requireAdmin(ctx, me, '改群組名稱');
     const name = String((await readJson(req)).name ?? '').trim();
     if (!name || name.length > 30 || /\n/.test(name)) throw invalid('name 需為 1～30 字，不可換行');
     await db.run("INSERT INTO app_settings (key, value) VALUES ('group_name', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", name);
