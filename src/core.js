@@ -629,7 +629,17 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
     const members = await db.all("SELECT * FROM participants WHERE status = 'active' AND kind != 'system' ORDER BY created_at");
     const byId = new Map(members.map(p => [p.id, p]));
-    const roster = members.map(p => `- ${p.name}${p.id === ai.id ? '（你）' : ''}：${p.kind === 'ai' ? 'AI' : '人類'}，角色 ${p.role || '未設定'}，所在環境 ${p.env || '未設定'}${p.kind === 'ai' ? '，所屬 ' + (byId.get(p.owner_id)?.name || '?') : ''}（participantId ${p.id}）`).join('\n');
+    const line = p => `- ${p.name}${p.id === ai.id ? '（你）' : ''}：${p.kind === 'ai' ? 'AI' : '人類'}，角色 ${p.role || '未設定'}，所在環境 ${p.env || '未設定'}${p.kind === 'ai' ? '，所屬 ' + (byId.get(p.owner_id)?.name || '?') : ''}（participantId ${p.id}）`;
+    // C-175：名冊只列這個 AI 所屬專案的成員（兩邊都屬的人本來就在每個專案）；兩邊都屬的 AI 分專案列出
+    const aiProj = projectsOf(ai).filter(x => PROJECTS.includes(x));
+    const projOf = p => projectsOf(p).filter(x => PROJECTS.includes(x));
+    const inMine = members.filter(p => p.id === ai.id || projOf(p).some(x => aiProj.includes(x)));
+    const groups = aiProj.length > 1
+      ? [['兩邊都屬', inMine.filter(p => aiProj.every(x => projOf(p).includes(x)))], ...aiProj.map(x => [`只屬${nameOf(x)}`, inMine.filter(p => projOf(p).includes(x) && !aiProj.every(y => projOf(p).includes(y)))])]
+      : [[aiProj.length ? nameOf(aiProj[0]) : '全部', inMine]];
+    const hidden = members.length - inMine.length;
+    const roster = groups.filter(([, l]) => l.length).map(([t, l]) => (groups.length > 1 ? `【${t}】\n` : '') + l.map(line).join('\n')).join('\n')
+      + (hidden ? `\n- 其他專案的成員（${hidden} 位）不在名冊上；要找他們請發跨專案頻道（project: "all"）。` : '');
     const agent = ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI';
     const insideEnv = ['行內', '投信'].includes(ai.env);
     const trial = ROLES.find(r => r.key === ai.role_key)?.resident === false; // C-171 試用者：不常駐、不開 watcher
@@ -729,6 +739,7 @@ ${watcherEnv}
 - requestId 固定格式：req_<階段>_<來源messageId>，階段用 ack（接單）、progress（進度）、result（結果）。重試時沿用同一個 requestId 與相同內容；伺服器會去重，不同內容用同一 requestId 會得到 409。
 - 回覆一律帶 replyToMessageId。要通知誰就放進 recipientIds（participantId 可從 GET /api/participants 查）；正文裡的 @名字只是文字，不會通知。要通知全體用 audience: "all"（不可與 recipientIds 同時用）。
 - ACK 只用通知的 notificationId（POST /api/notifications/ack），絕不用 messageId。發文成功但 ACK 失敗時，只重試 ACK，不重複發文。
+- 每則發文都要帶 project（C-172）：你的專案${aiProj.length ? `（${aiProj.map(nameOf).join('、')}）` : ''}，或 "all"＝全部專案（所有人看得到，只用在規則公告、跨團隊協調）。屬於多個專案的成員沒帶會被擋 400 PROJECT_REQUIRED；開頭寫【專案名】的訊息，project 必須是那個專案（否則 400 PROJECT_TEXT_MISMATCH）。
 - 訊息上限 2000 字，但請盡量控制在 600 字內、一件事一則：每則訊息所有 AI 都會讀到，越長越耗用量。規格文件讀一次就存在本機，不要每輪重讀。
 - 中文內容用 UTF-8 送出；在 Windows Git Bash 不要用 curl -d "中文"，改用 Node fetch 或 --data-binary @file.json。
 - Windows Git Bash 會把 "/api/me" 這類以 / 開頭的參數自動改寫成 Windows 路徑；把路徑當參數傳給腳本時，先設 MSYS_NO_PATHCONV=1，或在腳本內直接組完整網址。
@@ -750,7 +761,7 @@ ${watcherEnv}
 - 不自行宣稱完成；未完成、限制與未驗證的部分要直接寫出來。
 - 規則優先順序：${owner.name} 的明確指示與環境限制 ＞ 本設定第八節與群組規格 ＞ 角色設定。
 
-## 九、團隊成員與所在環境（產生設定當下）
+## 九、團隊成員與所在環境（產生設定當下，只列你所屬專案的人）
 ${roster}
 - 分工時請看對方的所在環境：不要請行內或投信成員把程式碼、檔案或內部資料傳出來；需要他們環境裡的資訊時，請他們用文字摘要回報。
 - 名冊會變動，最新狀況請以 GET /api/participants（environment 欄位）為準。
