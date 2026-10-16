@@ -153,6 +153,8 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
         if (to === '待確認') Object.assign(sets, { wait_for_id: c.decider_id });
       }
     }
+    // C-168：人類標「已完成」就是最終驗收，同時記為已驗證（驗證人＝本人）；AI 完成的卡、決策卡照舊要別人驗
+    if (to === '已完成' && me.kind === 'human' && c.type !== '決策' && (leaving || !c.verified_by)) { Object.assign(sets, { verified_by: me.id, verified_at: at }); logs.push('人類完成即驗收'); }
     return { sets, logs };
   }
   async function save(c, sets, logs, me, at) {

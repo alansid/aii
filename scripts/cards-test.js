@@ -389,6 +389,14 @@ const rid = () => 'req_c' + (++n);
     const back = (await call(pc.token, `/api/cards/${oldV.cardId}`)).body;
     assert.ok(back.log.some(l => l.text === '重新打開'), '紀錄寫重新打開');
     sqlDb.close();
+    // C-168：人類標「已完成」＝最終驗收，同時記為已驗證；AI 完成的卡照舊要別人驗
+    const hc = (await call(pc.token, '/api/cards', 'POST', { requestId: rid(), title: '人類完成的卡', ownerId: percy.participant.participantId })).body;
+    const hd = (await call(pc.token, `/api/cards/${hc.cardId}`, 'PATCH', { status: '已完成' })).body;
+    assert.ok(hd.done && hd.verified && hd.verified.by?.participantId === percy.participant.participantId, 'C-168：人類完成 → 自動記為已驗證（驗證人＝本人）');
+    assert.ok((await call(pc.token, `/api/cards/${hc.cardId}`)).body.log.some(l => l.text === '人類完成即驗收'), '紀錄寫「人類完成即驗收」');
+    const ac = (await call(pc.token, '/api/cards', 'POST', { requestId: rid(), title: 'AI 完成的卡', ownerId: pg.participantId })).body;
+    const ad = (await call(pg.token, `/api/cards/${ac.cardId}`, 'PATCH', { status: '已完成' })).body;
+    assert.ok(ad.done && !ad.verified, 'AI 完成 → 仍待別人驗證');
     console.log('cards: all checks passed');
   } catch (e) {
     console.error(e);
