@@ -3697,7 +3697,7 @@
   function openApi() {
     const base = location.origin;
     const ep = (m, path, desc) => `<li><span class="method ${m.toLowerCase()}">${m}</span><div><code>${path}</code><span class="muted small">${desc}</span></div></li>`;
-    const body = openModal('API 資訊', `
+    const body = openModal('API 資訊與登入碼', `
       <div class="kv-field"><span class="field-label">API Base URL</span>
         <div class="copy-row"><code class="val">${esc(base)}</code><button class="btn small" type="button" data-copy="${esc(base)}">複製</button></div></div>
       <div class="kv-field"><span class="field-label">本人 participantId</span>
@@ -3705,6 +3705,7 @@
       <div class="kv-field"><span class="field-label">本人 Token（登入用）</span>
         <div class="copy-row"><code class="val" id="my-token">••••••••••••</code><button class="btn small" type="button" id="tok-show">顯示</button><button class="btn small" type="button" id="tok-copy">複製</button></div></div>
       <div class="warn-box red">這是你本人的 Token，等同登入密碼：在其他裝置選「用登入碼登入」貼上即可用同一身分登入。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。</div>
+      <div class="row"><button class="btn" type="button" id="api-qr">用手機掃 QR Code 登入</button><span class="muted small">掃了就以你的身分登入，等同密碼，請勿分享</span></div>
       <div class="group-title">主要端點</div>
       <ul class="endpoints">
         ${ep('GET', '/api/me', '自身身分')}
@@ -3723,6 +3724,7 @@
       <code class="block">curl -H "Authorization: Bearer &lt;TOKEN&gt;" ${esc(base)}/api/me</code>`);
     body.querySelector('#tok-show').onclick = () => { body.querySelector('#my-token').textContent = state.token; };
     body.querySelector('#tok-copy').onclick = async () => toast((await copyText(state.token)) ? '已複製' : '複製失敗');
+    body.querySelector('#api-qr').onclick = () => openQr(); // C-186：QR Code 併進 API 資訊與登入碼
     body.addEventListener('click', async e => {
       const c = e.target.closest('[data-copy]');
       if (c) toast((await copyText(c.dataset.copy)) ? '已複製' : '複製失敗');
@@ -4179,7 +4181,7 @@
   }
   function openSettings() {
     const theme = store.get(THEME_KEY) || 'system';
-    const body = openModal('進階設定', `
+    const body = openModal('個人設定', `
       <div class="field"><span class="field-label" id="theme-label">外觀</span>
         <div class="seg-scope full" role="group" aria-labelledby="theme-label">
           ${[['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']].map(([k, t]) => `<button type="button" data-theme-opt="${k}" aria-pressed="${theme === k}">${t}</button>`).join('')}
