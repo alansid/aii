@@ -141,7 +141,7 @@
     } catch (err) {
       if (err.code === 'NAME_TAKEN') {
         showLoginTab('token');
-        $('#token-error').textContent = `${err.message}。如果是你本人，請貼上你的 Token 登入。`;
+        $('#token-error').textContent = `${err.message}。如果是你本人，請改用「用登入碼登入」。`;
       } else {
         $('#join-error').textContent = err.message;
       }
@@ -178,13 +178,13 @@
     state.token = token;
     try {
       const me = await api('/api/me');
-      if (me.memberType !== 'human') throw new Error('這是 AI 助手的 Token，只能透過 API 使用。請貼「你本人」的 Token（API 資訊 → 本人 Token）。');
+      if (me.memberType !== 'human') throw new Error('這是 AI 助手的登入碼，只能給 AI 透過 API 使用。請貼「你本人」的登入碼（設定 ▸ API 資訊 → 本人 Token）。');
       store.set(TOKEN_KEY, token);
       await start();
     } catch (err) {
       state.token = null;
       $('#token-error').textContent = err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED'
-        ? 'Token 無效或已過期。請確認是從同一個網站（網址相同）複製的。'
+        ? '登入碼無效或已過期。請確認是從同一個網站（網址相同）複製的。'
         : err.message;
     }
   });
@@ -200,7 +200,7 @@
   document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
 
   function drawMe() {
-    const meCard = `<button type="button" class="me-avatar-btn" data-change-avatar title="更換頭像" aria-label="更換頭像">${avatar(state.me)}<span class="pen" aria-hidden="true">✎</span></button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · #${esc(state.me.shortCode)} · 本人</span></div>`;
+    const meCard = `<button type="button" class="me-avatar-btn" data-change-avatar title="更換頭像" aria-label="更換頭像">${avatar(state.me)}<span class="pen" aria-hidden="true">✎</span></button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · 本人</span></div>`;
     $('#me-line').innerHTML = meCard;
     $('#sheet-me').innerHTML = meCard;
   }
@@ -383,7 +383,7 @@
   // 訊息內的 C-xxx 轉成膠囊：卡號＋狀態文字（不只靠顏色）；清單載入後找不到的卡號灰字不可點
   function capsuleHtml(id) {
     const c = work.cards.get(id);
-    if (!c) return work.loaded ? `<span class="cap cap-miss">${id} 找不到</span>` : id;
+    if (!c) return work.loaded ? `<button type="button" class="cap cap-miss" data-cap="${id}" title="點一下查看">${id}</button>` : id; // C-181：點了再問伺服器（別專案／已封存／不存在）
     return `<button type="button" class="cap" data-cap="${id}" data-st="${esc(c.status)}">${id}<i class="cdot" aria-hidden="true"></i>${esc(c.status)}</button>`;
   }
 
@@ -424,7 +424,7 @@
         <div class="msg-head">
           ${avatar(state.participants.get(a.participantId) || a)}
           <div class="msg-who">
-            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time>${projTag(m.project)}</div>
+            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time>${m.project === projectView() ? '' : projTag(m.project)}</div>
             <div class="msg-line2">${esc(subLine(a))}</div>
           </div>
         </div>
@@ -500,7 +500,15 @@
   }
   const projTag = p => (p ? `<span class="ptag" data-p="${esc(p)}">${esc(projName(p))}</span>` : '');
   // 卡片標題（C-146 A）：不再手打「[平台]」，舊卡的前綴顯示時去掉，改看專案標籤
-  const cardTitle = c => { const m = /^\s*\[([^\]\n]{1,20})\]\s*/.exec(c.title || ''); return m && state.projectList.some(p => p.id === m[1] || p.name === m[1]) ? c.title.slice(m[0].length) || c.title : c.title; };
+  // C-181：開頭【X】一律不顯示；[X] 是專案名時不顯示（[需確認] 這類保留）
+  const cardTitle = c => {
+    const t = c.title || '';
+    const m = /^\s*【[^】\n]{1,20}】\s*/.exec(t) || /^\s*\[([^\]\n]{1,20})\]\s*/.exec(t);
+    const strip = m && (m[0].includes('【') || state.projectList.some(p => p.id === m[1] || p.name === m[1]));
+    return strip ? t.slice(m[0].length) || t : t;
+  };
+  // 卡片的專案標籤：專案內整頁都是同一專案，不顯示；第一層、跨專案頻道才顯示
+  const cardPTag = c => (myProjects().includes(projectView()) ? '' : projTag(c.project));
   // 訊息：跨專案頻道只看「全部專案」的訊息；專案內只看該專案（單一專案成員沒有第一層，另外看得到跨專案頻道）
   const msgInView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v || (!p && singleProject())); };
   const cardInView = c => { const v = projectView(); return v === 'hub' || (v !== 'cross' && c.project === v); };
@@ -952,7 +960,7 @@
     }
     return out;
   }
-  const outsideText = (names, scope = mentionScope()) => (names.length ? `${names.join('、')} 不在${projName(scope)}專案，請到跨專案頻道找他` : '');
+  const outsideText = (names, scope = mentionScope()) => (names.length ? `${names.join('、')} 不在${projName(scope)}專案，請到跨專案頻道找對方` : '');
   function drawMentionWarn() {
     const el = $('#mention-warn');
     if (!el) return;
@@ -1381,7 +1389,7 @@
   const isMeRef = r => r && r.participantId === meId();
   const closedSt = s => s === '已完成' || s === '已封存';
   const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
-  const typeTag = c => projTag(c.project) + (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
+  const typeTag = c => (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
   const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
   const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
   const markHtml = c => (c.verified ? '<span class="cmark ok">✓ 已驗證</span>' : c.done ? '<span class="cmark wait">待驗證</span>' : '') + staleTag(c);
@@ -1455,18 +1463,19 @@
       hint = '想說明或留言給提案的 AI（Ctrl+Enter 留言）';
       btns = inlBtn(key, 'sugg-note', '只留言', { need: true, primary: true }) + inlBtn(key, 'sugg-skip', '略過並附原因', { need: true });
     } else if (kind === 'decision') {
-      hint = '說明可選填；不同意或要求補充一定要寫；「暫緩」可寫原因（Ctrl+Enter 只送意見）';
+      hint = '說明可選填；不同意或要求補充一定要寫；先擱著可寫原因（Ctrl+Enter 只留言）';
       btns = optionsOf(c).map((o, i) => inlBtn(key, 'decide', `決定「${esc(o)}」`, { cls: i === 0 ? 'ok' : '', result: o })).join('')
-        + inlBtn(key, 'opinion', '只送意見', { need: true, primary: true })
+        + inlBtn(key, 'opinion', '只留言，不決定', { need: true, primary: true })
         + inlBtn(key, 'decide', '不同意', { need: true, result: '不同意' })
         + inlBtn(key, 'decide', '要求補充', { need: true, result: '要求補充' })
-        + inlBtn(key, 'defer', '暫緩');
+        + inlBtn(key, 'defer', '先擱著（暫緩）');
     }
     return `<div class="inl" data-inl-root="${esc(key)}">
       <div class="inl-field"><textarea class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${kind === 'card' ? '想說什麼都可以寫在這裡，打 @ 可以指定人（Ctrl+Enter 送出）' : hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
         ${kind === 'card' ? '<ul class="mention-list" role="listbox" aria-label="選擇成員" hidden></ul>' : ''}</div>
       ${kind === 'card' ? cardToHtml(key, c) : ''}
       <div class="inl-actions">${btns}</div>
+      ${kind === 'decision' ? '<p class="muted small inl-note">留言會通知提案人；先擱著會移出收件匣，之後可在工作頁恢復。</p>' : ''}
       <p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
   }
   const decisionActions = c => inlineHtml('c:' + c.cardId, 'decision', c);
@@ -1826,7 +1835,7 @@
     const panel = (title, cls, list, empty, meta, extra = '') => `
       <section class="wpanel ${cls}${list.length ? ' has' : ''}">
         <div class="wpanel-head"><span class="wdot"></span><b>${title}</b><span class="wcount">${list.length}</span></div>
-        ${list.length ? list.slice(0, 3).map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span>${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(meta(c))}</span></button>`).join('')
+        ${list.length ? list.slice(0, 3).map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span>${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(meta(c))}</span></button>`).join('')
           : `<p class="muted small">${empty}</p>`}
         ${list.length > 3 ? `<button type="button" class="link small" data-filter="${cls === 'done' ? '已完成' : cls === 'blocked' ? '受阻' : 'open'}">查看全部 ${list.length} 張</button>` : ''}
         ${extra}
@@ -1836,7 +1845,7 @@
     const archMore = work.filter === '已封存' && work.archived.hasMore ? `<button type="button" class="btn small" data-arch-more ${work.archived.loading ? 'disabled' : ''}>再載入 50 張</button>` : '';
     const sa = work.archSearch, archHits = work.q.trim() && sa.q === work.q.trim() && work.filter !== '已封存' ? sa.items.filter(c => !listed.some(x => x.cardId === c.cardId)) : [];
     const archGroup = archHits.length ? `<div class="arch-group"><button type="button" class="arch-group-head" data-arch-toggle aria-expanded="${sa.open}">已封存 ${archHits.length}（${sa.open ? '點一下收合' : '收合中，點開'}）${sa.open ? '▴' : '▾'}</button>
-        ${sa.open ? archHits.map(c => `<button type="button" class="crow arch" data-card="${esc(c.cardId)}"><span class="cid">${esc(c.cardId)}</span><span class="crow-main"><span class="crow-title">${projTag(c.project)} ${esc(cardTitle(c))}</span></span><span class="crow-st">${archTag(c)}</span></button>`).join('') : ''}</div>` : '';
+        ${sa.open ? archHits.map(c => `<button type="button" class="crow arch" data-card="${esc(c.cardId)}"><span class="cid">${esc(c.cardId)}</span><span class="crow-main"><span class="crow-title">${cardPTag(c)} ${esc(cardTitle(c))}</span></span><span class="crow-st">${archTag(c)}</span></button>`).join('') : ''}</div>` : '';
     const decSection = decisionSectionHtml(decideMe);
     return `
       ${decSection}
@@ -1855,7 +1864,7 @@
         ${listed.length ? listed.map(c => `
           <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}" data-card="${esc(c.cardId)}">
             <span class="cid">${esc(c.cardId)}</span>
-            <span class="crow-main"><span class="crow-title">${typeTag(c)}${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
+            <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
             <span class="crow-st">${stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
             <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
@@ -1883,7 +1892,9 @@
   async function loadNotes() { work.notes = (await api('/api/notifications?status=pending&limit=100')).items; }
   const ackNotes = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
   // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
-  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview })); };
+  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
+  // C-181：講已經決定完的決策卡的通知，不再列在「給你知道的」
+  const decidedCardNote = n => ((state.byId.get(n.messageId)?.text || n.preview || '').match(/C-\d+/g) || []).some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
   function notesHtml() {
     const list = noteList();
     const reason = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
@@ -1961,8 +1972,8 @@
     return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你做` : '沒有要你做的事'}</span></div></div>
       <div class="inbox-block-title">要你做的</div>
       ${todoHtml(all)}
-      <div class="inbox-block-title">給你知道的</div>
-      ${notesHtml()}`;
+      ${noteList().length ? `<div class="inbox-block-title">給你知道的</div>
+      ${notesHtml()}` : ''}`;
   }
 
   // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議（C-107）
@@ -1996,12 +2007,12 @@
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
         <div class="ctile-top"><span class="cid">${esc(c.cardId)}</span>${typeTag(c)}${c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
-        <b class="ctile-title">${projTag(c.project)} ${esc(cardTitle(c))}</b>
+        <b class="ctile-title">${cardPTag(c)} ${esc(cardTitle(c))}</b>
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
         <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
       </div>`;
-    const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}"><span class="cid">${esc(c.cardId)}</span><span class="cmini-t">${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
+    const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}"><span class="cid">${esc(c.cardId)}</span><span class="cmini-t">${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
     const archFoot = work.archived.count ? `<button type="button" class="bfoot" data-show-archived>更早完成的 ${work.archived.count} 張已收進「已封存」· 查看</button>` : '';
     const colBody = (st, list) => {
       if (st === '已完成') {
@@ -2224,7 +2235,7 @@
   // 卡片詳情（桌面右側抽屜、手機底部滑出）
   async function openCard(id, trigger) {
     let d;
-    try { d = await api(`/api/cards/${encodeURIComponent(id)}`); } catch (err) { return toast(err.message); }
+    try { d = await api(`/api/cards/${encodeURIComponent(id)}`); } catch (err) { return toast(err.code === 'CARD_FORBIDDEN' ? `${id} 屬於其他專案，你沒有權限查看` : err.code === 'NOT_FOUND' ? `找不到 ${id}，可能輸入錯誤或已刪除` : err.message); }
     if (trigger) work.returnFocus = trigger;
     rememberLinks(d);
     work.cards.set(id, { ...d, log: undefined, messageIds: undefined });
@@ -2324,7 +2335,7 @@
       ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
       <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
-          <div class="drawer-titles"><span class="cid">${esc(d.cardId)}</span>${typeTag(d)}${projTag(d.project)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
+          <div class="drawer-titles"><span class="cid">${esc(d.cardId)}</span>${typeTag(d)}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
           <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
         </div>
@@ -2576,9 +2587,10 @@
     if (dcard) { // 這則在講一張等我決定的決策卡：只送意見，或暫緩；選項與「同意」到決策卡上按
       const id = esc(m.messageId);
       return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(dcard.cardId)} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
-      <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只送意見）" aria-label="輸入想法">${esc(q.text)}</textarea>
-      <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只送意見'}</button>
-        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button></div>
+      <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
+        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>先擱著（暫緩）</button></div>
+      <p class="muted small inl-note">留言會通知提案人；先擱著會移出收件匣，之後可在工作頁恢復。</p>
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
     }
     const qs = parseQuestions(m.text);
@@ -2747,19 +2759,20 @@
   }
 
   // ---------- 輸入框標籤選單（C-105）----------
-  const TAGS = [['接單', '說明理解的範圍'], ['進度', ''], ['完成', ''], ['需確認', ''], ['受阻', ''], ['交接', ''], ['回覆', '']];
+  // C-181：人類常用的放上面，每項附一句白話；「一般訊息」＝不加類型
+  const TAGS = [['', '不加類型'], ['需確認', '要對方做決定'], ['回覆', '回應別人的問題'], ['接單', '我開始做了'], ['進度', '做到哪了'], ['受阻', '卡住了，需要幫忙'], ['完成', '做好了，請驗收'], ['通知', '讓大家知道一件事'], ['交接', '交給下一位接手']];
   const tagMenu = $('#tag-menu');
   let tagIdx = null; // null＝關閉
   const leadTagOf = v => (v.match(/^\s*\[([^\]\n]{1,40})\]/) || [])[1];
   function openTagMenu() {
-    const cur = TAGS.findIndex(t => t[0] === leadTagOf(input.value));
+    const cur = TAGS.findIndex(t => t[0] === (leadTagOf(input.value) || ''));
     tagIdx = cur >= 0 ? cur : 0;
     renderTagMenu();
   }
   function renderTagMenu() {
-    const cur = leadTagOf(input.value);
+    const cur = leadTagOf(input.value) || '';
     tagMenu.innerHTML = TAGS.map(([t, hint], i) => `
-      <li role="option" data-i="${i}" aria-selected="${cur === t}" class="${i === tagIdx ? 'active' : ''}">[${t}]${cur === t ? '<span class="small">目前選取</span>' : hint ? `<span class="muted small">${hint}</span>` : ''}</li>`).join('');
+      <li role="option" data-i="${i}" aria-selected="${cur === t}" class="${i === tagIdx ? 'active' : ''}"><b>${t ? `[${t}]` : '一般訊息'}</b><span class="muted small">${hint}${cur === t ? '（目前）' : ''}</span></li>`).join('');
     tagMenu.hidden = false;
     $('#tag-btn').setAttribute('aria-expanded', 'true');
   }
@@ -2767,7 +2780,7 @@
   function pickTag(i) {
     let v = input.value;
     v = v.replace(/^\s*\[[^\]\n]{0,40}\]?\s?/, ''); // 已有標籤（或只打了一半）就取代
-    input.value = `[${TAGS[i][0]}] ` + v;
+    input.value = (TAGS[i][0] ? `[${TAGS[i][0]}] ` : '') + v;
     closeTagMenu();
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
@@ -2984,12 +2997,12 @@
     const row = p => {
       const self = p.participantId === meId();
       const line2 = p.memberType === 'ai'
-        ? [`#${p.shortCode}`, 'AI', p.ownerName ? `所屬 ${p.ownerName}` : '', p.environment].filter(Boolean).join(' · ')
-        : [`#${p.shortCode}`, '人類', p.environment].filter(Boolean).join(' · ');
+        ? ['AI', p.ownerName ? `所屬 ${p.ownerName}` : '', p.environment].filter(Boolean).join(' · ')
+        : ['人類', p.environment].filter(Boolean).join(' · ');
       return `<div class="mem-row">
         ${avatarDot(p)}
         <div class="mem-main">
-          <div class="mem-name"><b>${esc(p.name)}</b><span class="muted small">${esc(p.role || '')}</span></div>
+          <div class="mem-name"><b title="代號（AI 用來找你）：${esc(p.shortCode)}">${esc(p.name)}</b><span class="muted small">${esc(p.role || '')}</span></div>
           <div class="muted small">${esc(line2)}</div>
           ${p.duties ? `<div class="mem-duty muted small">${esc(p.duties)}</div>` : ''}
         </div>
@@ -3392,7 +3405,8 @@
         <span class="file-icon" aria-hidden="true">${fileIcon(f.ext)}</span>
         <div class="file-info">
           <b class="file-name">${esc(f.name)}</b>
-          <span class="muted small">${fmtBytes(f.size)} · 到期 ${fmtTime(f.expiresAt)} · SHA-256 ${esc(f.sha256.slice(0, 12))}…</span>
+          <span class="muted small">${fmtBytes(f.size)} <span class="file-ok">✓ 已聲明不含程式碼與個資</span></span>
+          <details class="file-more"><summary>詳細</summary><span class="muted small">到期 ${fmtTime(f.expiresAt)} · SHA-256 ${esc(f.sha256.slice(0, 12))}…（給稽核用）</span></details>
         </div>
         <button class="btn" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
         ${canDeleteFile(f) ? `<button class="btn danger-outline" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
@@ -3595,7 +3609,7 @@
         <div class="copy-row"><code class="val">${esc(meId())}</code><button class="btn small" type="button" data-copy="${esc(meId())}">複製</button></div></div>
       <div class="kv-field"><span class="field-label">本人 Token（登入用）</span>
         <div class="copy-row"><code class="val" id="my-token">••••••••••••</code><button class="btn small" type="button" id="tok-show">顯示</button><button class="btn small" type="button" id="tok-copy">複製</button></div></div>
-      <div class="warn-box red">這是你本人的 Token，等同登入密碼：在其他裝置選「用 Token 登入」貼上即可用同一身分登入。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。</div>
+      <div class="warn-box red">這是你本人的 Token，等同登入密碼：在其他裝置選「用登入碼登入」貼上即可用同一身分登入。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。</div>
       <div class="group-title">主要端點</div>
       <ul class="endpoints">
         ${ep('GET', '/api/me', '自身身分')}

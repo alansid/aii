@@ -203,7 +203,8 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal(rp.project, '銀行系統', '單一專案成員回覆＝自己的專案');
     const bc = (await call(liu.token, '/api/cards', 'POST', { requestId: 'req_iso1', title: '銀行專案的卡', project: '銀行系統' })).body;
     assert.ok(!(await call(plat.token, '/api/cards?limit=200')).body.items.some(c => c.cardId === bc.cardId), '只屬平台的成員看不到銀行系統的卡');
-    assert.equal((await call(plat.token, `/api/cards/${bc.cardId}`)).status, 404, '卡片詳情也擋');
+    assert.equal((await call(plat.token, `/api/cards/${bc.cardId}`)).body.error?.code, 'CARD_FORBIDDEN', 'C-181：卡片詳情回 403 沒權限（不寫專案名）');
+    assert.equal((await call(plat.token, '/api/cards/C-99999')).status, 404, '真的不存在才回 404');
     assert.ok((await call(liu.token, '/api/cards?limit=200')).body.items.some(c => c.cardId === bc.cardId), '兩邊成員看得到兩邊的卡');
     const after0 = (await call(plat.token, '/api/messages?limit=1')).body.nextCursor;
     await msg(bank.token, '[進度] 銀行又一則（隔離）', { project: '銀行系統' });

@@ -130,7 +130,8 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
   // me 有給時套用 C-146 A 隔離：不屬於卡片專案的成員視為找不到
   async function load(no, me = null) {
     const c = await db.get('SELECT * FROM cards WHERE seq = ?', parseNo(no));
-    if (!c || (me && isolatedFrom(me) && !projectsOf(me).includes(c.project))) throw notFound();
+    if (!c) throw notFound();
+    if (me && isolatedFrom(me) && !projectsOf(me).includes(c.project)) throw new ApiError(403, 'CARD_FORBIDDEN', '這張卡屬於其他專案，你沒有權限查看。'); // C-181：不寫專案名
     return c;
   }
   const logStmt = (seq, me, texts, at) => texts.map(t =>
