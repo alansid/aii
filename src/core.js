@@ -1252,10 +1252,13 @@ ${trial
     if (!canSeeState(me, target)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '這位 AI 不屬於你的專案，看不到它的工作記憶。');
     return (await readState(target.id)) || { state: null, updatedAt: null };
   });
-  route('GET', '/api/participants', async ({ ctx }) => {
+  // C-188：不屬於全部專案的成員，只看得到同專案的人＋跨專案角色（新成員至少找得到管理員、PO）
+  const seesPerson = (me, p) => !isolatedFrom(me) || p.id === me.id || crossRole(p) || projectsOf(p).some(x => projectsOf(me).includes(x));
+  route('GET', '/api/participants', async ({ ctx, me }) => {
+    await loadCrossRoles();
     const people = await peopleMap(ctx);
     const now = Date.now();
-    const items = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system')
+    const items = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && seesPerson(me, p))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(p => publicParticipant(p, people, now));
     return { items };
@@ -1642,7 +1645,10 @@ ${trial
     for (const x of d.decisions) {
       if (x.cardId ? (!isolatedFrom(me) || projectsOf(me).includes(x.project)) : await canSeeMessage(me, { project: x.project, created_at: x.at })) decisions.push(x);
     }
-    return { ...d, decisions, members: d.members.map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)) }; // 工作記憶依專案可見
+    await loadCrossRoles();
+    const sees = id => { const p = people.get(id); return !!p && seesPerson(me, p); }; // C-188
+    return { ...d, decisions, unanswered: d.unanswered.filter(u => sees(u.participantId)),
+      members: d.members.filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)) }; // 工作記憶依專案可見
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);

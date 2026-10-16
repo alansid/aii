@@ -416,7 +416,7 @@ async function api(p) {
 - **過濾（省用量）**：`GET /api/messages?project=平台|銀行系統|mine`，結果含「全部專案」的訊息；`mine` 依你的專案（兩邊成員不過濾）。**沒帶參數維持原樣，不影響現有流程**；單一專案的 AI 輪詢建議改成 `?after=<游標>&brief=1&project=mine`。過濾後游標仍會推進到最新。@ 通知不分專案。
 - **卡片**：`POST /api/cards` **必填 `project`**（單一專案成員可省略，自動帶自己的專案；兩邊成員沒帶回 400）；不能在不屬於的專案建卡（403 `PROJECT_FORBIDDEN`）。`GET /api/cards?project=…` 可過濾，`PATCH` 可改 `project`。建議（`POST /api/suggestions` 的 `create`）同樣要有 `project`。
 - **交接、指派、收件人只能選同專案成員（C-146 B）**：交接對象、卡片負責人與「等誰」（決策卡的決策者除外）必須屬於卡片的專案；有專案的訊息，`recipientIds` 也必須屬於該專案。跨專案回 400 `PROJECT_MISMATCH`，訊息會寫出是誰；要跨專案找人請發全部專案（`project: "all"`）。卡片動作通知與交接訊息會帶卡片的專案。
-- 團隊狀態與成員名單不分專案。
+- 團隊狀態與成員名單（C-188）：不屬於全部專案的成員，`GET /api/participants`、`GET /api/team-status` 只回同專案的人與跨專案角色；兩邊都屬的人看得到全部。
 - **專案可管理（C-146 B）**：專案清單存在資料表，不再只有兩個。`GET /api/projects` 列出（`id`、`name`、`archived`、`memberCount`、`openCards`）；回應另帶 `adminId`、`adminName`（群組管理員＝最早加入、仍有效的人類）與 `crossRoleIds`（跨專案角色）。**只有群組管理員**能 `POST /api/projects`（`{ name }`）新增、`PATCH /api/projects/:id`（`{ name }`）改名、`POST /api/projects/:id/archive`／`unarchive` 封存與還原（其他人回 403 `NOT_ADMIN`）。**專案值一律用 `id`**（`平台`、`銀行系統` 的 id 就是它們的名稱；新專案是 `prj_…`），改名只改 `name`，既有訊息與卡片不受影響。封存時若還有未結案卡片回 409 `HAS_OPEN_CARDS`。
 - **預設成員**：新專案只含建立者與 PO、SM；群組第一位成員預設所有專案，之後加入的人類預設沒有專案（只看得到「全部專案」），由群組管理員加入。人類建立 AI（`POST /api/my-ais`）時**必須帶 `projects`**（至少一個專案 id），所屬人類只有一個專案時才會自動帶入。
 - **成員管理（C-146 B，僅群組管理員）**：`PUT /api/projects/:id/members` 帶 `{ memberIds, dryRun? }` 一次設定某專案的成員；`dryRun: true` 只回 `impact`（每人 `added`、`removed`、`returnedCards`）不寫入。規則：跨專案角色（PO、SM）固定在所有專案，移出回 400 `CROSS_ROLE_FIXED`；AI 的專案不能超出所屬人類，否則 400 `OWNER_NOT_IN_PROJECT`（新增 AI 時也一樣）；移出後沒有任何專案回 400 `NEEDS_ONE_PROJECT`；封存的專案回 409 `PROJECT_ARCHIVED`。成員被移出時，他在該專案負責的未結案卡片會**改為未指派、退回待處理**，並記在卡片紀錄。

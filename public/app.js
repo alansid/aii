@@ -2981,8 +2981,10 @@
     const k = /受阻|卡住/.test(st) ? 'red' : /待確認|等/.test(st) ? 'amber' : 'blue';
     return `<span class="spill spill-${k}">${esc(st)}</span>`;
   };
+  // C-188：專案內的團隊頁只列本專案的人；跨專案頻道、第一層列全部
+  const inViewPerson = id => { const v = projectView(); return v === 'hub' || v === 'cross' || (state.participants.get(id)?.projects || []).includes(v); };
   function aiStateHtml(t) {
-    const ais = t.members.filter(m => m.memberType === 'ai');
+    const ais = t.members.filter(m => m.memberType === 'ai' && inViewPerson(m.participantId));
     if (!ais.length) return '';
     const WAKE = { watcher: 'watcher（被 @ 才醒）', cron: '定時輪詢', manual: '手動' };
     const rows = ais.map(m => {
@@ -3009,7 +3011,7 @@
     const t = state.team;
     if (!t) return toast('無法取得團隊狀態');
     const pv = projectView();
-    const rows = t.members.filter(mb => pv === 'hub' || pv === 'cross' || (state.participants.get(mb.participantId)?.projects || []).includes(pv)).map(mb => {
+    const rows = t.members.filter(mb => inViewPerson(mb.participantId)).map(mb => {
       const h = health(mb);
       const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
       return `<div class="tm-row">
@@ -3048,7 +3050,7 @@
   // 成員名單：分「近期活躍」「離線／閒置」兩組
   const avatarDot = p => `<span class="avatar-wrap">${avatar(p)}<span class="presence-dot ${p.isOnline ? 'on' : ''}" aria-label="${p.isOnline ? '近期活躍' : '離線或閒置'}"></span></span>`;
   async function openMembers() {
-    const items = await loadParticipants();
+    const items = (await loadParticipants()).filter(p => inViewPerson(p.participantId)); // C-188
     const online = items.filter(p => p.isOnline).length;
     const body = openModal('成員名單', `
       <input id="member-q" type="search" placeholder="搜尋姓名、角色或代碼" aria-label="搜尋成員">
@@ -3070,7 +3072,7 @@
     };
     const draw = () => {
       const q = body.querySelector('#member-q').value.trim().toLowerCase();
-      const list = [...state.participants.values()]
+      const list = items
         .filter(p => !q || [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(q)))
         .sort((a, b) => (a.participantId === meId() ? -1 : b.participantId === meId() ? 1 : 0) || (a.memberType === b.memberType ? 0 : a.memberType === 'human' ? -1 : 1));
       const on = list.filter(p => p.isOnline), off = list.filter(p => !p.isOnline);

@@ -297,6 +297,14 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     await M(liu.token, [{ id: percyId, projects: ['銀行系統'] }]);
     assert.deepEqual((await call(liu.token, '/api/projects')).body.leaders['平台'], [], '移出專案時 leader 身分一起拿掉');
     assert.equal((await M(percy.token, [{ id: kang.participant.participantId, projects: ['平台'] }])).status, 403, '不再是 leader 就不能改');
+    // ===== C-188：成員名單、團隊狀態依專案 =====
+    await M(liu.token, [{ id: plat.participantId, projects: ['平台'] }, { id: bank.participantId, projects: ['銀行系統'] }]);
+    const pp = (await call(plat.token, '/api/participants')).body.items.map(p => p.participantId);
+    assert.ok(pp.includes(plat.participantId) && !pp.includes(bank.participantId), '只屬平台的成員拿不到只屬銀行系統的人');
+    assert.ok(pp.includes(liuId), '跨專案角色（管理員）看得到');
+    const ts = (await call(plat.token, '/api/team-status')).body.members.map(m => m.participantId);
+    assert.ok(!ts.includes(bank.participantId), '團隊狀態也依專案');
+    assert.ok((await call(liu.token, '/api/participants')).body.items.some(p => p.participantId === bank.participantId), '兩邊都屬的人看得到全部');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);
