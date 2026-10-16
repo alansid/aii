@@ -1435,3 +1435,58 @@ body.drawer-docked #app { padding-right: 400px; }
 .inl-note { margin: 4px 0 0; }
 #tag-menu li b { font-weight: 600; margin-right: 8px; }
 button.cap-miss { cursor: pointer; font: inherit; font-size: 13px; }
+
+/* ===== C-182 頭像選單、我的 AI、成員與權限 ===== */
+.topbar { flex: none; display: flex; align-items: center; background: var(--surface); border-bottom: 1px solid var(--border); padding-right: 16px; }
+.topbar .crumbs { flex: 1; border-bottom: 0; }
+.av-btn { all: unset; box-sizing: border-box; cursor: pointer; width: 40px; height: 40px; flex: none; border-radius: 20px; display: inline-flex; align-items: center; justify-content: center; }
+.av-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.av-btn[aria-expanded="true"] { outline: 2px solid var(--primary); }
+.av-menu { position: fixed; z-index: 60; min-width: 240px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); display: grid; gap: 2px; }
+.av-menu[hidden] { display: none; }
+.av-head { display: grid; padding: 8px 12px; }
+.av-menu button { all: unset; box-sizing: border-box; cursor: pointer; min-height: 44px; padding: 0 12px; display: flex; align-items: center; gap: 8px; border-radius: 8px; font-size: 14px; color: var(--text); }
+.av-menu button .muted, .av-menu .av-n { margin-left: auto; }
+.av-menu button:hover, .av-menu button:focus-visible { background: var(--surface-2); outline: none; }
+.av-n { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--human-bg); color: var(--human-text); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.av-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.av-menu .av-out { color: var(--danger); }
+@media (max-width: 899px) { .topbar { display: none; } }
+@media (min-width: 900px) { .m-av { display: none; } }
+.myai-page .modal { box-shadow: none; }
+.chk.off { color: var(--muted); }
+.pill-tag.blue { background: #e6f0ff; color: #1d4ed8; }
+.pm-panel { padding: 0; overflow: hidden; }
+.pm-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; }
+.pm-tools input { flex: 1; max-width: 280px; min-height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.pm-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.pm-table th, .pm-table td { padding: 0 12px; height: 52px; border-top: 1px solid var(--border); text-align: left; font-weight: 400; }
+.pm-table thead th { height: 40px; background: var(--surface-2); font-size: 12px; color: var(--muted); font-weight: 500; }
+.pm-table th[scope="row"] b { font-weight: 700; }
+.pm-c { text-align: center !important; width: 120px; white-space: nowrap; }
+.pm-grp td { height: 30px; background: var(--surface-2); font-size: 12px; color: var(--muted); }
+.pm-sw { all: unset; box-sizing: border-box; cursor: pointer; width: 44px; height: 26px; border-radius: 13px; background: #9ca3af; position: relative; display: inline-block; vertical-align: middle; }
+.pm-sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 10px; background: #fff; transition: left .15s; }
+.pm-sw[aria-checked="true"] { background: var(--primary); }
+.pm-sw[aria-checked="true"]::after { left: 21px; }
+.pm-sw[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.pm-sw:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.pm-sw.chg { outline: 3px solid #f59e0b; outline-offset: 2px; }
+.pm-star { display: inline-block; width: 32px; vertical-align: middle; } /* C-183 leader ★ 預留位 */
+.pm-lock { font-size: 12px; color: var(--muted); }
+.pm-note { padding: 10px 14px; margin: 0; border-top: 1px solid var(--border); }
+.pm-bar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 12px; background: #14213d; color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.2); }
+.pm-bar[hidden] { display: none; }
+.pm-bar .pm-undo { background: transparent; color: #dbe4f5; border-color: #52607e; }
+.pm-bar-text { min-width: 0; overflow-wrap: anywhere; }
+.pm-impact { margin: 0; padding-left: 18px; display: grid; gap: 4px; text-align: left; }
+.pm-projs { padding: 12px 14px; display: grid; gap: 8px; }
+.pm-projs .pa-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.pm-projs .pa-log { grid-column: 1 / -1; }
+.pm-pname { display: grid; }
+.pm-pacts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pm-new { display: flex; gap: 8px; }
+.pm-new input { flex: 1; max-width: 280px; min-height: 40px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pill-tag.blue { background: #172554; color: #bfdbfe; } }
+:root[data-theme="dark"] .pill-tag.blue { background: #172554; color: #bfdbfe; }
+@media (max-width: 600px) { .pm-c { width: 88px; } .pm-table th, .pm-table td { padding: 0 8px; } .pm-projs .pa-row { grid-template-columns: 1fr; } }

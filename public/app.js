@@ -207,6 +207,48 @@
 
   document.addEventListener('click', e => { if (e.target.closest('[data-change-avatar]')) { closeSheet(false); changeMyAvatar(); } });
 
+  // ---------- C-182 右上頭像選單（每個畫面都有）：我的 AI、成員與權限（管理員）、個人設定、API 資訊與登入碼、登出 ----------
+  const isAdmin = () => !!state.projMeta.adminId && state.projMeta.adminId === state.me?.participantId;
+  state.myAiCount = null;
+  function drawAvatarMenu() {
+    if (!state.me) return;
+    document.querySelectorAll('.av-btn').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
+    $('#av-menu').innerHTML = `<div class="av-head"><b>${esc(state.me.name)}</b><span class="muted small">${esc([state.me.role, isAdmin() ? '管理員' : ''].filter(Boolean).join(' · '))}</span></div>
+      <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
+      ${isAdmin() ? '<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">管理員</span></button>' : ''}
+      <button type="button" role="menuitem" data-av="settings">個人設定</button>
+      <button type="button" role="menuitem" data-av="api">API 資訊與登入碼</button>
+      <div class="av-sep" role="separator"></div>
+      <button type="button" role="menuitem" class="av-out" data-av="logout">登出</button>`;
+  }
+  const refreshMyAiCount = () => api('/api/my-ais').then(d => { state.myAiCount = d.items.filter(a => a.status !== 'deleted').length; drawAvatarMenu(); }).catch(() => {});
+  function avOpen(open, from) {
+    const m = $('#av-menu');
+    m.hidden = !open;
+    document.querySelectorAll('.av-btn').forEach(b => b.setAttribute('aria-expanded', String(open && b === from)));
+    if (open) { const r = from.getBoundingClientRect(); m.style.top = `${Math.round(r.bottom + 6)}px`; m.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`; m.querySelector('button')?.focus(); }
+  }
+  function goTop(page) { closeSheet(false); if (hasHub()) setProjectView('hub', page); else showPage(page); }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('.av-btn');
+    if (b) return avOpen($('#av-menu').hidden, b);
+    if (!e.target.closest('#av-menu')) { if (!$('#av-menu').hidden) avOpen(false); return; }
+    const it = e.target.closest('[data-av]');
+    if (!it) return;
+    avOpen(false);
+    const k = it.dataset.av;
+    if (k === 'myai' || k === 'perm') goTop(k);
+    else if (k === 'settings') openSettings();
+    else if (k === 'api') openApi();
+    else if (k === 'logout') logout(true);
+  });
+  document.addEventListener('keydown', e => {
+    if ($('#av-menu').hidden || !e.target.closest?.('#av-menu')) return;
+    const items = [...$('#av-menu').querySelectorAll('button')], i = items.indexOf(e.target);
+    if (e.key === 'Escape') { e.preventDefault(); avOpen(false); document.querySelector('.av-btn[aria-expanded="false"]')?.focus(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+  });
+
   // ---------- 啟動 ----------
   async function start() {
     state.me = await api('/api/me');
@@ -224,6 +266,7 @@
     const route = parseRoute();
     state.view = route.view || 'hub';
     drawProjSwitch();
+    drawAvatarMenu(); refreshMyAiCount();
     await loadParticipants();
     await loadWindow();
     refreshInboxCount();
@@ -483,6 +526,7 @@
     state.projectList = d.items;
     state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [] };
     document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
+    if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
     PROJECTS.length = 0;
     PROJECTS.push(...state.projectList.filter(p => !p.archived).map(p => p.id));
   }
@@ -521,7 +565,9 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊' };
+  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', myai: '我的 AI', perm: '成員與權限' };
+  const TOP_PAGES = { myai: '/my-ai', perm: '/members' }; // C-182：第一層頁面（不分專案）
+  const isTop = p => p === 'myai' || (p === 'perm' && isAdmin());
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
   const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
   const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc([...projName(p)][0] || '?')}</span>`;
@@ -545,16 +591,16 @@
   }
   // 頂端麵包屑「我的專案 ▸ 平台 ▸ 訊息」、手機頂欄「‹」與標題、第一層的「要你處理 N」、輸入框的「發到」
   function drawChrome() {
-    const v = projectView(), page = PAGE_NAME[state.page] || '訊息';
-    const home = !hasHub() ? '' : v === 'hub' ? '<b aria-current="page">我的專案</b>' : '<button type="button" class="crumb-link" data-proj="hub">我的專案</button>';
-    const parts = v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
+    const v = projectView(), page = PAGE_NAME[state.page] || '訊息', top = !!TOP_PAGES[state.page];
+    const home = !hasHub() ? '' : v === 'hub' && !top ? '<b aria-current="page">我的專案</b>' : '<button type="button" class="crumb-link" data-proj="hub">我的專案</button>';
+    const parts = top ? [home, `<b aria-current="page">${page}</b>`] : v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
     $('#crumbs').innerHTML = parts.filter(Boolean).join('<span class="crumb-sep" aria-hidden="true">▸</span>');
-    $('#m-back').hidden = !hasHub() || v === 'hub';
-    $('#m-title').textContent = v === 'hub' ? '我的專案' : `${viewLabel(v)} · ${page}`;
+    $('#m-back').hidden = !hasHub() || (v === 'hub' && !top);
+    $('#m-title').textContent = top ? page : v === 'hub' ? '我的專案' : `${viewLabel(v)} · ${page}`;
     const counts = todoByView(), here = counts[v] || 0; // 收件匣徽章＝所在專案的件數，切專案就跟著變
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !here; b.textContent = here > 99 ? '99+' : here; });
     const todo = $('#m-todo'), n = counts.hub, nb = todo.querySelector('.m-todo-n');
-    todo.hidden = v !== 'hub';
+    todo.hidden = v !== 'hub' || top;
     nb.hidden = !n; nb.textContent = n > 99 ? '99+' : n;
     drawSendTo();
   }
@@ -579,9 +625,12 @@
     const page = x => PAGE_BY_NAME[x] || (PAGE_NAME[x] ? x : null);
     if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.name === seg[1] || x.id === seg[1]); return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
     if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
+    if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
+    if (seg[0] === 'members') return { view: null, page: 'perm' };
     return { view: null, page: null };
   }
   function routePath() {
+    if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     const v = projectView();
     if (v === 'hub') return '/';
     return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(projName(v))}/${encodeURIComponent(PAGE_NAME[state.page] || '訊息')}`;
@@ -595,6 +644,7 @@
   }
   // 切換所在：k＝hub／專案 id／cross；切專案時留在同一頁（工作頁在跨專案頻道沒有，改到訊息）
   function setProjectView(k, page) {
+    if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); setProjectView(k, page); });
     state.view = k;
     if (state.replyTo) setReply(null);
     drawProjSwitch();
@@ -611,6 +661,7 @@
     drawProjSwitch(); syncFilterBar(); renderMessages(true);
     showPage(r.page || (projectView() === 'hub' ? 'hub' : 'messages'), { noHistory: true });
   });
+  window.addEventListener('beforeunload', e => { if (state.page === 'perm' && permDirty()) { e.preventDefault(); e.returnValue = ''; } });
   function psOpen(btn, open) {
     const list = btn.parentElement.querySelector('.ps-list');
     btn.setAttribute('aria-expanded', String(open));
@@ -1130,7 +1181,7 @@
   // 在「團隊」頁時，團隊狀態／成員名單／我的 AI 這三個畫面直接畫在頁面的分頁區，不再跳對話框（C-134 第二版）
   const TEAM_PANES = ['團隊狀態', '成員名單', '我的 AI'];
   function openModal(title, bodyHtml, opts = {}) {
-    const pane = state.page === 'team' && TEAM_PANES.includes(title) ? $('#team-pane') : null;
+    const pane = (state.page === 'team' && TEAM_PANES.includes(title) && $('#team-pane')) || (state.page === 'myai' && title === '我的 AI' && $('#myai-pane')) || null;
     if (pane) {
       const sc = $('#page-work'), top = sc.scrollTop;
       pane.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
@@ -1698,11 +1749,12 @@
     // 同一個分頁重畫（例如切專案）時保留捲動位置，不跳回頂端
     const keep = work.teamScrollTab === work.teamTab ? box.scrollTop : 0;
     work.teamScrollTab = work.teamTab;
-    const tabs = [['status', '團隊狀態'], ['memory', 'AI 工作記憶'], ['members', '成員名單'], ['ai', '我的 AI']];
+    if (work.teamTab === 'ai') work.teamTab = 'status'; // C-182：我的 AI 移到頭像選單
+    const tabs = [['status', '團隊狀態'], ['memory', 'AI 工作記憶'], ['members', '成員名單']];
     box.innerHTML = `<div class="work-head"><div class="work-title"><h2>團隊</h2></div>
       <div class="seg-scope" role="group" aria-label="團隊分頁">${tabs.map(([k, t]) => `<button type="button" data-team-tab="${k}" aria-pressed="${work.teamTab === k}">${t}</button>`).join('')}</div></div>
       <div id="team-pane" class="inline-pane"></div>`;
-    const done = ({ status: openTeam, memory: openTeamMemory, members: openMembers, ai: openMyAi })[work.teamTab]();
+    const done = ({ status: openTeam, memory: openTeamMemory, members: openMembers })[work.teamTab]();
     if (keep) Promise.resolve(done).then(() => { box.scrollTop = keep; });
     syncTeamNav();
   }
@@ -1751,16 +1803,17 @@
     const tg = e.target.closest('[data-team-toggle]');
     if (tg) { const open = tg.getAttribute('aria-expanded') === 'true'; store.set(TEAM_NAV_KEY, open ? '0' : '1'); document.querySelectorAll('[data-team-group]').forEach(g => { g.querySelector('.nav-sub').hidden = open; g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(!open)); g.querySelector('.chev').textContent = open ? '▸' : '▾'; }); return; }
     const go = e.target.closest('[data-team-go]');
-    if (go) { closeSheet(false); work.teamTab = go.dataset.teamGo; store.set(TEAM_NAV_KEY, '1'); if (state.page === 'team') renderTeamPage(); else showPage('team'); }
+    if (go) { closeSheet(false); if (go.dataset.teamGo === 'ai') return goTop('myai'); work.teamTab = go.dataset.teamGo; store.set(TEAM_NAV_KEY, '1'); if (state.page === 'team') renderTeamPage(); else showPage('team'); }
   });
   function openTodoPage() { closeSheet(false); showPage('inbox'); }
   document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
   function showPage(page, { replace = false, noHistory = false } = {}) {
+    if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); showPage(page, { replace, noHistory }); }); // C-182：有未儲存的變更先提醒
     if (work.openId) closeCard();
     const v = projectView();
-    state.page = v === 'hub' ? 'hub' : ['work', 'inbox', 'team'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
+    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
     if (state.page !== 'team') work.teamScrollTab = null; // C-157：離開團隊頁就不再保留捲動位置（UX 第 1010 則），回來從頂端開始
-    if (state.page !== 'hub') store.set(PAGE_KEY, state.page);
+    if (state.page !== 'hub' && !TOP_PAGES[state.page]) store.set(PAGE_KEY, state.page);
     if (!noHistory) syncUrl(replace);
     drawChrome();
     document.body.classList.toggle('at-hub', state.page === 'hub');
@@ -1776,6 +1829,10 @@
       renderTeamPage();
     } else if (state.page === 'hub') {
       return Promise.all([work.loaded ? null : loadCards(), loadTeam().catch(() => {})]).then(renderWork).catch(err => toast(err.message));
+    } else if (state.page === 'myai') {
+      return renderMyAiPage();
+    } else if (state.page === 'perm') {
+      return renderPermPage();
     } else if (state.page === 'inbox') {
       return Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
     } else scrollBottom();
@@ -1801,6 +1858,7 @@
 
   function renderWork() {
     const box = $('#page-work');
+    if (state.page === 'perm') return drawPerm();
     if (!['work', 'inbox', 'hub'].includes(state.page) || !work.loaded) return;
     box.classList.remove('is-board');
     if (state.page === 'inbox') { box.innerHTML = inboxHtml(); return; }
@@ -2818,7 +2876,7 @@
       ({ 'team-status': openTeam, members: openMembers, 'my-ai': openMyAi })[b.dataset.hub]();
     });
   }
-  const openers = { team: openTeamHub, members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr, 'proj-admin': () => openProjAdmin() };
+  const openers = { team: openTeamHub, members: openMembers, 'my-ai': () => goTop('myai'), inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr, 'proj-admin': () => goTop('perm') }; // C-182：專案管理併入「成員與權限」
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
   // 手機選單（底部滑出）
   const sheet = $('#sheet');
@@ -3039,8 +3097,17 @@
     return state.roles;
   }
 
+  // C-182：第一層「我的 AI」頁：名下所有 AI，不分專案
+  async function renderMyAiPage() {
+    const box = $('#page-work');
+    box.classList.remove('is-board');
+    box.innerHTML = '<div id="myai-pane" class="inline-pane myai-page"></div>';
+    await loadProjectList().catch(() => {});
+    await openMyAi();
+  }
   async function openMyAi() {
     const body = openModal('我的 AI', `
+      <p class="muted small">你名下所有 AI，不分專案；每列看得到它在哪些專案。</p>
       <div class="row spread">
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI 助手</button>
         <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a>
@@ -3052,6 +3119,7 @@
     const open = new Set();
     async function draw() {
       items = (await api('/api/my-ais')).items;
+      state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
       body.querySelector('#ai-list').innerHTML = items.length ? items.map(ai => aiCardHtml(ai, open.has(ai.participantId))).join('')
         : '<p class="muted">還沒有 AI 助手。按「新增 AI 助手」選一個角色範例開始。</p>';
     }
@@ -3135,7 +3203,7 @@
         <div class="ai-card-head">
           ${avatar(ai)}
           <div class="member-info">
-            <div class="member-name"><b>${esc(ai.name)}</b>${statusTag}</div>
+            <div class="member-name"><b>${esc(ai.name)}</b>${statusTag}${state.projMeta.crossRoleIds.includes(ai.participantId) ? '<span class="ptag ptag-all">跨專案角色</span>' : (ai.projects || []).filter(p => PROJECTS.includes(p)).map(projTag).join('')}</div>
             <div class="member-sub">${esc([ai.role, '#' + ai.shortCode, ai.environment].filter(Boolean).join(' · '))}
               <span class="ai-online"><span class="dot ${ai.isOnline ? 'on' : ''}"></span>${ai.isOnline ? '在線' : '離線／閒置'}</span></div>
             <div class="member-sub ${active && level ? 'warn-text' : ''}">Token 到期：${ai.expiresAt ? fmtTime(ai.expiresAt) : '—'}</div>
@@ -3178,6 +3246,17 @@
     const other = roles.filter(r => !COMMON_ROLES.includes(r.key));
     return common.map(opt).join('') + (other.length ? `<optgroup label="其他角色">${other.map(opt).join('')}</optgroup>` : '');
   }
+  // C-182：AI 屬於哪些專案（新增、編輯都能勾）；只列自己在的專案，不在的灰掉寫原因；跨專案角色固定在所有專案
+  function aiProjField(ai) {
+    const cross = ai && state.projMeta.crossRoleIds.includes(ai.participantId);
+    const has = p => (ai ? (ai.projects || []).includes(p) : myProjects().length === 1);
+    const boxes = PROJECTS.map(p => myProjects().includes(p)
+      ? `<label class="chk"><input type="checkbox" name="proj" value="${esc(p)}" ${has(p) ? 'checked' : ''} ${cross ? 'disabled' : ''}> ${esc(projName(p))}</label>`
+      : `<label class="chk off"><input type="checkbox" disabled> ${esc(projName(p))}<span class="muted small">（你不在這個專案）</span></label>`).join('');
+    return `<div class="field"><span class="field-label">所屬專案（至少選一個）</span>
+      <div class="proj-row new-ai-proj">${myProjects().length ? boxes : '<span class="muted small">你還沒有加入任何專案，請群組管理員把你加入專案。</span>'}</div>
+      <span class="field-hint">${cross ? '這個 AI 是跨專案角色，固定在所有專案（由管理員在「成員與權限」設定）。' : '改了專案，這個 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
+  }
   async function openAiForm(ai) {
     const { items: roles, fields, environments = [] } = await loadRoles();
     const editing = !!ai;
@@ -3190,8 +3269,7 @@
           <select name="roleKey">${roleOptionsHtml(roles)}</select>
           <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
         </label>
-        ${editing ? '' : `<div class="field"><span class="field-label">所屬專案（至少選一個）</span>
-          <div class="proj-row new-ai-proj">${myProjects().map(p => `<label class="chk"><input type="checkbox" name="proj" value="${esc(p)}" ${myProjects().length === 1 ? 'checked' : ''}> ${esc(projName(p))}</label>`).join('') || '<span class="muted small">你還沒有加入任何專案，請群組管理員把你加入專案。</span>'}</div></div>`}
+        ${aiProjField(ai)}
         <div class="two-col">
           <div class="field">
             <label>角色顯示名稱<input name="role" required maxlength="30"></label>
@@ -3304,9 +3382,24 @@
       const data = Object.fromEntries(new FormData(form));
       delete data.proj;
       for (const [k, v] of Object.entries(data)) data[k] = v.trim();
+      const picked = [...form.querySelectorAll('input[name="proj"]:checked:not(:disabled)')].map(i => i.value);
       if (!editing) {
-        data.projects = [...form.querySelectorAll('input[name="proj"]:checked')].map(i => i.value);
+        data.projects = picked;
         if (!data.projects.length) return toast('請至少選一個所屬專案');
+      } else if (!state.projMeta.crossRoleIds.includes(ai.participantId) && myProjects().length) {
+        // C-182：編輯時改了專案：先看影響（移出的專案有幾張卡會退回待處理）再確認
+        const before = (ai.projects || []).filter(p => PROJECTS.includes(p));
+        const next = [...picked, ...before.filter(p => !myProjects().includes(p))]; // 自己不在的專案不動
+        if (!next.length) return toast('請至少選一個所屬專案');
+        if (next.slice().sort().join() !== before.slice().sort().join()) {
+          try {
+            const d = await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: { projects: next, dryRun: true } });
+            const im = d.impact?.[0];
+            if (im?.removed.length && !await confirmDialog({ title: '移出專案？', confirmText: '確定移出', danger: true,
+              message: `${esc(ai.name)} 將移出「${esc(im.removed.map(projName).join('、'))}」${im.returnedCards.length ? `，它負責的 <b>${im.returnedCards.length} 張卡</b>（${esc(im.returnedCards.join('、'))}）會退回待處理、改為未指派` : '，它在那邊沒有負責的卡'}。` })) return;
+          } catch (err) { body.querySelector('#ai-error').textContent = err.message; return; }
+          data.projects = next;
+        }
       }
       try {
         const saved = editing ? await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data })
@@ -3318,6 +3411,7 @@
           await api(`/api/my-ais/${saved.participantId}/avatar`, { method: 'DELETE' });
         }
         loadParticipants().then(() => renderMessages(false)).catch(() => {});
+        if (state.page === 'myai' || state.page === 'team') closeModal(); // 頁面模式：先關表單再重畫清單
         await openMyAi();
         toast(editing ? '已儲存' : '已建立。按「只複製 Token」或在詳細設定裡複製完整接入設定給你的 AI');
       } catch (err) { body.querySelector('#ai-error').textContent = err.message; }
@@ -3756,6 +3850,209 @@
     drawLeft(); drawRight();
   }
   // 小對話框：輸入名稱（改名用）
+  // ---------- C-182 成員與權限（第一層，只有管理員）----------
+  const perm = { tab: 'members', q: '', draft: new Map(), events: {}, openLog: null };
+  const permDirty = () => perm.draft.size > 0;
+  function permLeave(go) {
+    confirmDialog({ title: '還有沒儲存的變更', confirmText: '放棄變更並離開', danger: true, message: `成員與權限有 <b>${perm.draft.size} 位成員</b>的變更還沒儲存，離開後會不見。` })
+      .then(ok => { if (ok) go(); });
+  }
+  const permPeople = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && p.status !== 'deleted' && p.memberType !== 'system');
+  const permBase = p => ({ projects: new Set((p.projects || []).filter(x => PROJECTS.includes(x))), cross: state.projMeta.crossRoleIds.includes(p.participantId) });
+  const permCur = p => perm.draft.get(p.participantId) || permBase(p);
+  const sameSet = (a, b) => a.size === b.size && [...a].every(x => b.has(x));
+  function permSet(p, next) {
+    const b = permBase(p);
+    if (next.cross === b.cross && (next.cross || sameSet(next.projects, b.projects))) perm.draft.delete(p.participantId);
+    else perm.draft.set(p.participantId, next);
+  }
+  // AI 所屬人類不在那個專案時鎖住（以畫面上的變更後狀態判斷）
+  function ownerBlocks(p, pj) {
+    if (p.memberType !== 'ai') return '';
+    const o = state.participants.get(p.ownerParticipantId);
+    if (!o) return '找不到所屬人類';
+    const oc = permCur(o);
+    return oc.cross || oc.projects.has(pj) ? '' : `所屬人類 ${o.name} 不在${projName(pj)}，AI 的專案不能超出所屬人類`;
+  }
+  function permSummary() {
+    const out = [];
+    for (const [id, d] of perm.draft) {
+      const p = state.participants.get(id), b = permBase(p);
+      if (d.cross !== b.cross) out.push(`${p.name}${d.cross ? '設為' : '取消'}跨專案角色`);
+      if (!d.cross) {
+        for (const x of d.projects) if (!b.projects.has(x) || b.cross) out.push(`${p.name}加入${projName(x)}`);
+        if (!b.cross) for (const x of b.projects) if (!d.projects.has(x)) out.push(`${p.name}離開${projName(x)}`);
+      }
+    }
+    return out;
+  }
+  function permMembersHtml() {
+    const q = perm.q.trim().toLowerCase();
+    const all = permPeople().filter(p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q));
+    const humans = all.filter(p => p.memberType === 'human');
+    const ownerName = p => state.participants.get(p.ownerParticipantId)?.name || '';
+    const ais = all.filter(p => p.memberType === 'ai').sort((a, b) => ownerName(a).localeCompare(ownerName(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant'));
+    const adminId = state.projMeta.adminId;
+    const sw = (on, attrs, chg, label, extra = '') => `<button type="button" class="pm-sw${chg ? ' chg' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" ${attrs} ${extra}></button>`;
+    const row = p => {
+      const c = permCur(p), b = permBase(p), id = esc(p.participantId);
+      const tags = p.participantId === adminId ? '<span class="pill-tag blue">管理員</span>' : '';
+      const sub = p.memberType === 'ai' ? [`${ownerName(p)}的`, p.environment].filter(Boolean).join(' · ') : (!c.cross && !c.projects.size ? '還沒有專案' : p.environment || '');
+      const cells = PROJECTS.map(pj => {
+        if (c.cross) return `<td class="pm-c"><span class="pm-lock">全部專案</span></td>`;
+        const on = c.projects.has(pj), why = ownerBlocks(p, pj);
+        if (why && !on) return `<td class="pm-c"><span class="pm-lock" title="${esc(why)}" tabindex="0" aria-label="${esc(why)}">🔒 ${esc(state.participants.get(p.ownerParticipantId)?.name || '')}不在</span></td>`;
+        const chg = b.cross || on !== b.projects.has(pj);
+        return `<td class="pm-c">${sw(on, `data-pm="${id}" data-pj="${esc(pj)}"`, chg, `${p.name} ${projName(pj)}`)}${p.memberType === 'human' ? '<span class="pm-star" aria-hidden="true"></span>' : ''}</td>`;
+      }).join('');
+      const self = p.participantId === adminId;
+      const crossCell = `<td class="pm-c">${sw(c.cross, `data-pm-cross="${id}"`, c.cross !== b.cross, `${p.name} 跨專案角色`, self && c.cross ? 'aria-disabled="true" title="管理員本人不能關掉自己的跨專案角色（避免沒人能管）"' : '')}</td>`;
+      return `<tr><th scope="row"><b>${esc(p.name)}</b> ${tags}${sub ? `<span class="muted small"> · ${esc(sub)}</span>` : ''}</th>${cells}${crossCell}</tr>`;
+    };
+    const head = `<tr><th scope="col">成員</th>${PROJECTS.map(pj => `<th scope="col" class="pm-c">${esc(projName(pj))}</th>`).join('')}<th scope="col" class="pm-c">跨專案角色</th></tr>`;
+    const grp = t => `<tr class="pm-grp"><td colspan="${PROJECTS.length + 2}">${t}</td></tr>`;
+    return `<div class="pm-tools"><input id="pm-q" type="search" placeholder="搜尋成員" aria-label="搜尋成員" value="${esc(perm.q)}"><span class="muted small">一眼看完誰在哪些專案；點開關就改，最後一次儲存所有專案</span></div>
+      <div class="table-scroll"><table class="pm-table"><thead>${head}</thead><tbody>${grp('人類')}${humans.map(row).join('')}${grp('AI（排在所屬人類底下）')}${ais.map(row).join('') || `<tr><td colspan="${PROJECTS.length + 2}" class="muted small">沒有 AI</td></tr>`}</tbody></table></div>
+      <p class="muted small pm-note">跨專案角色＝自動在所有專案，那幾格寫「全部專案」不能點。AI 的鎖頭格：所屬人類不在那個專案，滑過看原因。</p>`;
+  }
+  function permProjectsHtml() {
+    return `<div class="pm-projs">${state.projectList.map(p => {
+      const blocked = !p.archived && p.openCards > 0, open = perm.openLog === p.id;
+      return `<div class="pa-row${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}">
+        <div class="pm-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}<span class="muted small">成員 ${p.memberCount} · 未結案卡 ${p.openCards}</span></div>
+        <div class="pm-pacts">${p.archived ? '<button type="button" class="btn small" data-pp="unarchive">還原</button>'
+          : `<button type="button" class="btn small" data-pp="rename">改名</button><button type="button" class="btn small danger-outline" data-pp="archive" ${blocked ? `aria-disabled="true" title="還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案"` : ''}>封存</button>`}
+          <button type="button" class="link small" data-pp="log" aria-expanded="${open}">異動紀錄 ${open ? '▴' : '▾'}</button></div>
+        ${open ? `<ul class="pa-log">${(perm.events[p.id] || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul>` : ''}
+      </div>`;
+    }).join('')}
+      ${state.projectList.some(p => !p.archived && p.openCards) ? '<p class="muted small">「封存」不能按：還有未結案卡，請先結案或把卡移到別的專案。</p>' : ''}
+      <div class="pm-new"><input id="pm-new-name" maxlength="20" placeholder="新專案名稱" aria-label="新專案名稱"><button type="button" class="btn small primary" data-pp="create">新增專案</button></div></div>`;
+  }
+  function drawPermBar() {
+    const bar = $('#pm-bar');
+    if (!bar) return;
+    const s = permSummary();
+    bar.hidden = !perm.draft.size;
+    bar.innerHTML = perm.draft.size ? `<span class="pm-bar-text">${s.length} 項變更：${esc(s.slice(0, 4).join('；'))}${s.length > 4 ? '…' : ''}</span><span class="grow"></span>
+      <button type="button" class="btn small pm-undo" data-pm-act="undo">復原</button><button type="button" class="btn primary" data-pm-act="save">檢查並儲存</button>` : '';
+  }
+  function drawPerm() {
+    const box = $('#page-work');
+    if (state.page !== 'perm') return;
+    const keep = document.activeElement?.id, top = box.scrollTop;
+    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}</span></div>
+        <div class="seg-scope" role="tablist" aria-label="分頁">${[['members', '成員'], ['projects', '專案']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div></div>
+      <section class="wpanel pm-panel">${perm.tab === 'members' ? permMembersHtml() : permProjectsHtml()}</section>
+      <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
+    box.scrollTop = top;
+    drawPermBar();
+    if (keep === 'pm-q') { const q = $('#pm-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  }
+  async function renderPermPage() {
+    $('#page-work').classList.remove('is-board');
+    await Promise.all([loadProjectList(), loadParticipants()]).catch(() => {});
+    drawPerm();
+  }
+  async function permToggle(p, pj) {
+    const c = permCur(p), next = { projects: new Set(c.projects), cross: c.cross };
+    const on = !next.projects.has(pj);
+    if (on) next.projects.add(pj); else next.projects.delete(pj);
+    permSet(p, next);
+    // 開人類進專案時，問一次「也讓他的 AI 加入？」
+    if (on && p.memberType === 'human') {
+      const mine = permPeople().filter(a => a.memberType === 'ai' && a.ownerParticipantId === p.participantId && !permCur(a).cross && !permCur(a).projects.has(pj));
+      if (mine.length) {
+        const pick = await new Promise(res => {
+          const body = openModal('也讓他的 AI 加入？', `<p>${esc(p.name)} 加入「${esc(projName(pj))}」。要不要讓他名下的 AI 一起加入？</p>
+            <div class="stack">${mine.map(a => `<label class="chk"><input type="checkbox" name="pm-ai" value="${esc(a.participantId)}"> ${esc(a.name)}<span class="muted small">${esc(a.role || '')}</span></label>`).join('')}</div>`,
+            { size: 'narrow', foot: '<button class="btn" type="button" id="pm-ai-no">都不用</button><button class="btn primary" type="button" id="pm-ai-ok">加入勾選的 AI</button>' });
+          body.modal.querySelector('#pm-ai-no').onclick = () => { closeModal(); res([]); };
+          body.modal.querySelector('#pm-ai-ok').onclick = () => { const ids = [...body.querySelectorAll('input[name="pm-ai"]:checked')].map(i => i.value); closeModal(); res(ids); };
+        });
+        for (const id of pick) { const a = state.participants.get(id), ac = permCur(a); permSet(a, { projects: new Set([...ac.projects, pj]), cross: ac.cross }); }
+      }
+    }
+    // 人類離開專案時，他的 AI 也不能留在那裡：一併移出（畫面上看得到）
+    if (!on && p.memberType === 'human') {
+      for (const a of permPeople().filter(a => a.memberType === 'ai' && a.ownerParticipantId === p.participantId && !permCur(a).cross && permCur(a).projects.has(pj))) {
+        const ac = permCur(a); const np = new Set(ac.projects); np.delete(pj); permSet(a, { projects: np, cross: ac.cross });
+      }
+    }
+    drawPerm();
+  }
+  async function permSave() {
+    const changes = [];
+    const order = [...perm.draft.keys()].sort((a, b) => (state.participants.get(a)?.memberType === 'ai') - (state.participants.get(b)?.memberType === 'ai'));
+    for (const id of order) {
+      const p = state.participants.get(id), d = perm.draft.get(id), b = permBase(p), ch = { id };
+      if (d.cross !== b.cross) ch.crossRole = d.cross;
+      if (!d.cross) ch.projects = PROJECTS.filter(x => d.projects.has(x));
+      changes.push(ch);
+    }
+    try {
+      const dry = await api('/api/members/matrix', { method: 'PUT', body: { changes, dryRun: true } });
+      const lines = [
+        ...(dry.crossChanges || []).map(c => `${c.name}：${c.crossRole ? '設為跨專案角色（自動在所有專案）' : '取消跨專案角色'}`),
+        ...dry.impact.map(x => `${x.name}：${[x.added.length ? '加入 ' + x.added.map(projName).join('、') : '', x.removed.length ? '離開 ' + x.removed.map(projName).join('、') : ''].filter(Boolean).join('；')}${x.returnedCards.length ? `（<b>${x.returnedCards.length} 張卡退回待處理</b>：${x.returnedCards.join('、')}）` : ''}`),
+      ];
+      if (!await confirmDialog({ title: '確定儲存這些變更？', confirmText: '確定儲存', danger: dry.impact.some(x => x.returnedCards.length),
+        message: `<ul class="pm-impact">${lines.map(l => `<li>${l}</li>`).join('') || '<li>沒有實際變更</li>'}</ul>` })) return;
+      await api('/api/members/matrix', { method: 'PUT', body: { changes } });
+      perm.draft.clear();
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      drawProjSwitch(); drawAvatarMenu(); drawPerm();
+      toast('已儲存成員與權限');
+    } catch (err) { toast(err.message); }
+  }
+  $('#page-work').addEventListener('click', async e => {
+    if (state.page !== 'perm') return;
+    const t = e.target;
+    const tab = t.closest('[data-pm-tab]');
+    if (tab) { perm.tab = tab.dataset.pmTab; return drawPerm(); }
+    const s = t.closest('[data-pm]');
+    if (s) return permToggle(state.participants.get(s.dataset.pm), s.dataset.pj);
+    const cr = t.closest('[data-pm-cross]');
+    if (cr) {
+      if (cr.getAttribute('aria-disabled') === 'true') return toast(cr.title);
+      const p = state.participants.get(cr.dataset.pmCross), c = permCur(p), b = permBase(p);
+      permSet(p, { projects: c.cross ? (b.cross ? new Set(PROJECTS) : new Set(b.projects.size ? b.projects : PROJECTS)) : new Set(PROJECTS), cross: !c.cross });
+      return drawPerm();
+    }
+    const act = t.closest('[data-pm-act]')?.dataset.pmAct;
+    if (act === 'undo') { perm.draft.clear(); return drawPerm(); }
+    if (act === 'save') return permSave();
+    const pp = t.closest('[data-pp]');
+    if (!pp) return;
+    const id = pp.closest('[data-pj]')?.dataset.pj, a = pp.dataset.pp;
+    try {
+      if (a === 'log') {
+        perm.openLog = perm.openLog === id ? null : id;
+        if (perm.openLog) perm.events[id] = (await api(`/api/projects/${encodeURIComponent(id)}/events?limit=20`).catch(() => ({ items: [] }))).items;
+        return drawPerm();
+      }
+      if (a === 'create') {
+        const name = $('#pm-new-name').value.trim();
+        if (!name) return toast('請輸入專案名稱');
+        await api('/api/projects', { method: 'POST', body: { name } });
+        toast(`已新增專案「${name}」`);
+      } else if (a === 'rename') {
+        const name = await promptName('改專案名稱', projName(id));
+        if (!name || name === projName(id)) return;
+        await api(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } });
+      } else if (a === 'archive') {
+        if (pp.getAttribute('aria-disabled') === 'true') return toast(pp.title);
+        if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(id))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以還原。` })) return;
+        await api(`/api/projects/${encodeURIComponent(id)}/archive`, { method: 'POST' });
+      } else if (a === 'unarchive') {
+        await api(`/api/projects/${encodeURIComponent(id)}/unarchive`, { method: 'POST' });
+      }
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      if (perm.openLog) perm.events[perm.openLog] = (await api(`/api/projects/${encodeURIComponent(perm.openLog)}/events?limit=20`).catch(() => ({ items: [] }))).items;
+      drawProjSwitch(); drawPerm();
+    } catch (err) { toast(err.message); }
+  });
+  $('#page-work').addEventListener('input', e => { if (state.page === 'perm' && e.target.id === 'pm-q') { perm.q = e.target.value; drawPerm(); } });
   function promptName(title, value) {
     return new Promise(resolve => {
       const host = document.createElement('div');
@@ -3783,7 +4080,7 @@
         <button class="btn small" type="button" data-change-avatar>更換</button>
       </div>
       <div class="field"><span class="field-label">所屬專案</span>
-        <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在「設定 ▸ 專案管理」調整，這裡只能看。</p>
+        <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員與權限」調整，這裡只能看。</p>
         <div class="proj-rows">${projMineHtml()}</div>
       </div>
       <div class="switch-row">

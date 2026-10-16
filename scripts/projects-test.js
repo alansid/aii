@@ -245,6 +245,36 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal((await msg(liu.token, '[進度] 壞掉的字�', { project: 'all' })).body.error?.code, 'INVALID_ENCODING', 'U+FFFD 擋下');
     assert.equal((await msg(liu.token, '[進度] 真的嗎???', { project: 'all' })).status, 201, '3 個問號不擋');
     assert.equal((await msg(liu.token, '[進度] 連結 https://x.test/a?q=????&b=1 請看', { project: 'all' })).status, 201, '網址裡的問號不擋');
+    // ===== C-182：成員與權限一次儲存、跨專案角色可開關、我的 AI 可改專案 =====
+    const M = (tok, changes, dryRun) => call(tok, '/api/members/matrix', 'PUT', { changes, dryRun });
+    const projOf = async id => (await call(liu.token, '/api/participants')).body.items.find(p => p.participantId === id).projects;
+    assert.equal((await M(percy.token, [])).status, 403, '只有管理員能用成員與權限');
+    const mdry = (await M(liu.token, [{ id: both.participantId, projects: ['平台', '銀行系統'] }, { id: bank.participantId, projects: ['平台', '銀行系統'] }], true)).body;
+    assert.equal(mdry.dryRun, true); assert.equal(mdry.impact.length, 2, 'dryRun 列出兩人的影響');
+    assert.deepEqual(await projOf(both.participantId), ['平台'], 'dryRun 不寫入');
+    const msave = (await M(liu.token, [{ id: both.participantId, projects: ['平台', '銀行系統'] }, { id: bank.participantId, projects: ['平台', '銀行系統'] }])).body;
+    assert.equal(msave.impact.length, 2);
+    assert.deepEqual(await projOf(bank.participantId), ['平台', '銀行系統'], '一次存多人、多專案');
+    await M(liu.token, [{ id: both.participantId, projects: ['平台'] }, { id: bank.participantId, projects: ['銀行系統'] }]);
+    const con = (await M(liu.token, [{ id: plat.participantId, crossRole: true }])).body;
+    assert.ok(con.crossRoleIds.includes(plat.participantId), '管理員可把成員設為跨專案角色');
+    assert.deepEqual(await projOf(plat.participantId), (await call(liu.token, '/api/projects')).body.items.filter(p => !p.archived).map(p => p.id), '設為跨專案角色＝自動在所有專案');
+    assert.equal((await M(liu.token, [{ id: plat.participantId, projects: ['平台'] }])).body.error?.code, 'CROSS_ROLE_FIXED', '跨專案角色不能只移出專案');
+    const coff = (await M(liu.token, [{ id: plat.participantId, crossRole: false, projects: ['平台'] }])).body;
+    assert.ok(!coff.crossRoleIds.includes(plat.participantId) && (await projOf(plat.participantId)).join() === '平台', '同一次關掉跨專案角色並移出專案');
+    assert.ok((await M(liu.token, [{ id: liuId, crossRole: true }])).body.crossRoleIds.includes(liuId));
+    assert.equal((await M(liu.token, [{ id: liuId, crossRole: false }])).body.error?.code, 'ADMIN_CROSS_ROLE', '管理員本人不能關掉自己的跨專案角色');
+    assert.equal((await M(liu.token, [{ id: percyId, crossRole: false }])).body.crossRoleIds.includes(percyId), false, '預設的跨專案角色（PO）也能關掉');
+    assert.equal((await M(liu.token, [{ id: bank.participantId, projects: [] }])).body.error?.code, 'NEEDS_ONE_PROJECT', '至少一個專案');
+    const pev = (await call(liu.token, '/api/projects/平台/events?limit=50')).body.items.map(e => e.text);
+    assert.ok(pev.some(t => /取消 Percy 為跨專案角色/.test(t)), '跨專案角色變更記在異動紀錄');
+    // 我的 AI：所屬人類改 AI 的專案
+    const adry = (await call(liu.token, `/api/my-ais/${bank.participantId}`, 'PATCH', { projects: ['平台'], dryRun: true })).body;
+    assert.ok(adry.dryRun && adry.impact[0].removed.includes('銀行系統'), '改 AI 專案前先看影響');
+    assert.deepEqual(await projOf(bank.participantId), ['銀行系統'], 'dryRun 不寫入');
+    const asave = (await call(liu.token, `/api/my-ais/${bank.participantId}`, 'PATCH', { projects: ['平台', '銀行系統'] })).body;
+    assert.deepEqual(asave.projects, ['平台', '銀行系統'], '所屬人類可改自己 AI 的專案');
+    assert.equal((await call(percy.token, `/api/my-ais/${bank.participantId}`, 'PATCH', { projects: ['平台'] })).status, 404, '不能改別人的 AI');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);

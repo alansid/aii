@@ -598,6 +598,15 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   async function updateAi(ctx, me, id, body) {
     const ai = await myAi(me, id);
+    // C-182：所屬人類可以改自己 AI 的專案（只能選自己在的專案）；移出專案時他負責的卡退回待處理，dryRun 先看影響
+    let impact;
+    if (body.projects !== undefined) {
+      const next = readProjects(body.projects), mineP = projectsOf(me);
+      const outside = next.filter(x => !mineP.includes(x));
+      if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `你不在「${outside.map(nameOf).join('、')}」，AI 的專案不能超出所屬人類。`);
+      impact = await applyMembership(ctx, me, [{ id: ai.id, projects: next }], { dryRun: body.dryRun === true });
+      if (body.dryRun === true) return { dryRun: true, impact };
+    }
     const name = body.name !== undefined ? validateName(body.name) : ai.name;
     await assertNameFree(name, ai.id);
     const s = readSettings(body, { role: ai.role, avatar: ai.avatar || '', ...settingsOf(ai) });
@@ -605,7 +614,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     await db.run(`UPDATE participants SET name = ?, role = ?, role_key = ?, duties = ?, style = ?, autonomy = ?, must_confirm = ?,
       handoff = ?, env = ?, avatar = ?, version = version + 1, updated_at = ? WHERE id = ?`,
       name, s.role, s.roleKey, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff, s.environment, s.avatar, nowIso(), ai.id);
-    return aiView(await db.get('SELECT * FROM participants WHERE id = ?', ai.id), await peopleMap(ctx));
+    const view = aiView(await db.get('SELECT * FROM participants WHERE id = ?', ai.id), await peopleMap(ctx));
+    return impact ? { ...view, impact } : view;
   }
 
   async function setAiStatus(ctx, me, id, status) {
@@ -872,8 +882,19 @@ ${trial
     const admin = adminOf(await peopleMap(ctx));
     if (!admin || admin.id !== me.id) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員（${admin?.name || '未設定'}）能管理專案與成員所屬專案。`);
   }
-  // 跨專案角色（PO、SM，含人類 PO）：固定屬於所有專案，不能移出
-  const crossRole = p => p.status === 'active' && p.kind !== 'system' && (['PO', 'SM'].includes(p.role_key) || ['PO', 'SM'].includes(String(p.role || '').trim().toUpperCase()));
+  // 跨專案角色：固定屬於所有專案，不能移出。預設是 PO、SM（含人類 PO）；C-182 起管理員可在「成員與權限」開關，
+  // 覆寫存在 app_settings 的 cross_roles（{ add: [...], remove: [...] }），不用改資料表結構
+  const defaultCross = p => ['PO', 'SM'].includes(p.role_key) || ['PO', 'SM'].includes(String(p.role || '').trim().toUpperCase());
+  let crossOv = { add: new Set(), remove: new Set() }, crossAt = 0;
+  async function loadCrossRoles(force = false) {
+    if (!force && Date.now() - crossAt < 10_000) return crossOv;
+    const r = await db.get("SELECT value FROM app_settings WHERE key = 'cross_roles'").catch(() => null);
+    let v = {};
+    try { v = JSON.parse(r?.value || '{}'); } catch {}
+    crossOv = { add: new Set(v.add || []), remove: new Set(v.remove || []) }; crossAt = Date.now();
+    return crossOv;
+  }
+  const crossRole = (p, ov = crossOv) => p.status === 'active' && p.kind !== 'system' && !ov.remove.has(p.id) && (ov.add.has(p.id) || defaultCross(p));
   const listOf = p => String(p?.projects ?? '').split(',').map(x => x.trim()).filter(Boolean);
   const projEvent = (projectId, actorId, text, at) => ['INSERT INTO project_events (project_id, at, actor_id, text) VALUES (?,?,?,?)', [projectId, at, actorId, text]];
   const nameOf = id => projectRows.find(r => r.id === id)?.name || id;
@@ -887,16 +908,18 @@ ${trial
       openCards: counts.get(r.id) || 0 }));
   }
   async function projectsResponse(ctx, extra = {}) {
+    await loadCrossRoles();
     const people = await peopleMap(ctx);
     const admin = adminOf(people);
-    const crossRoleIds = [...people.values()].filter(crossRole).map(p => p.id);
+    const crossRoleIds = [...people.values()].filter(p => crossRole(p)).map(p => p.id);
     return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, ...extra };
   }
 
   // 改成員所屬專案（單人或批次）。移出某專案時，他在該專案負責的未結案卡片退回「待處理」、改為未指派。
   // changes: [{ id, projects: [...] }]；dryRun 只回影響，不寫入
-  async function applyMembership(ctx, me, changes, { dryRun = false } = {}) {
+  async function applyMembership(ctx, me, changes, { dryRun = false, ov = null } = {}) {
     await loadProjects(true);
+    ov = ov || await loadCrossRoles();
     const people = await peopleMap(ctx);
     const plan = [];
     for (const ch of changes) {
@@ -905,7 +928,7 @@ ${trial
       const next = readProjects(ch.projects);
       const cur = listOf(target).filter(x => PROJECTS.includes(x));
       const added = next.filter(x => !cur.includes(x)), removed = cur.filter(x => !next.includes(x));
-      if (crossRole(target) && removed.length) {
+      if (crossRole(target, ov) && removed.length) {
         throw new ApiError(400, 'CROSS_ROLE_FIXED', `${target.name} 是跨專案角色（PO／SM），固定屬於所有專案，不能移出「${removed.map(nameOf).join('、')}」。`);
       }
       if (target.kind === 'ai' && added.length) {
@@ -973,6 +996,45 @@ ${trial
     return projectsResponse(ctx, { dryRun: body.dryRun === true, impact });
   });
 
+  // C-182：「成員與權限」一次儲存所有專案。changes: [{ id, projects?, crossRole? }]；跨專案角色打開＝自動在所有專案
+  route('PUT', '/api/members/matrix', async ({ ctx, me, req }) => {
+    await requireAdmin(ctx, me);
+    await loadProjects(true);
+    await loadCrossRoles(true);
+    const body = await readJson(req);
+    if (!Array.isArray(body.changes)) throw invalid('changes 需為陣列');
+    const people = await peopleMap(ctx);
+    const person = id => { const p = people.get(String(id)); if (!p || p.status !== 'active' || p.kind === 'system') throw new ApiError(404, 'NOT_FOUND', `找不到成員 ${id}`); return p; };
+    const ov = { add: new Set(crossOv.add), remove: new Set(crossOv.remove) };
+    const crossChanges = [];
+    for (const ch of body.changes) {
+      if (typeof ch.crossRole !== 'boolean') continue;
+      const p = person(ch.id);
+      if (crossRole(p, ov) === ch.crossRole) continue;
+      if (!ch.crossRole && p.id === me.id) throw new ApiError(400, 'ADMIN_CROSS_ROLE', '管理員本人不能關掉自己的跨專案角色（避免沒人能管專案）。');
+      if (ch.crossRole) { ov.remove.delete(p.id); if (!defaultCross(p)) ov.add.add(p.id); } else { ov.add.delete(p.id); if (defaultCross(p)) ov.remove.add(p.id); }
+      crossChanges.push({ participantId: p.id, name: p.name, crossRole: ch.crossRole });
+    }
+    const memberChanges = [];
+    for (const ch of body.changes) {
+      if (ch.projects === undefined && ch.crossRole !== true) continue;
+      const p = person(ch.id);
+      if (crossRole(p, ov)) { memberChanges.push({ id: p.id, projects: ch.crossRole === true || !Array.isArray(ch.projects) ? [...PROJECTS] : ch.projects }); continue; } // 跨專案角色只移出某專案 → CROSS_ROLE_FIXED
+      if (Array.isArray(ch.projects) && !ch.projects.length) throw new ApiError(400, 'NEEDS_ONE_PROJECT', `${p.name} 至少要屬於一個專案。`);
+      memberChanges.push({ id: p.id, projects: ch.projects ?? listOf(p).filter(x => PROJECTS.includes(x)) });
+    }
+    const dryRun = body.dryRun === true;
+    const impact = await applyMembership(ctx, me, memberChanges, { dryRun, ov });
+    if (!dryRun && crossChanges.length) {
+      const at = nowIso();
+      await db.batch([
+        ["INSERT INTO app_settings (key, value) VALUES ('cross_roles', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify({ add: [...ov.add], remove: [...ov.remove] })]],
+        ...crossChanges.flatMap(c => PROJECTS.map(pj => projEvent(pj, me.id, `${me.name} ${c.crossRole ? '設' : '取消'} ${c.name} 為跨專案角色`, at))),
+      ]);
+      await loadCrossRoles(true);
+    }
+    return projectsResponse(ctx, { dryRun, impact, crossChanges });
+  });
   route('GET', '/api/projects', async ({ ctx }) => projectsResponse(ctx));
   route('GET', '/api/projects/:id/events', async ({ params, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
@@ -990,6 +1052,7 @@ ${trial
     await loadProjects(true);
     if (projectRows.some(r => !r.archived && r.name === name)) throw new ApiError(409, 'NAME_TAKEN', '已有同名的專案');
     const id = randId('prj'), at = nowIso();
+    await loadCrossRoles();
     const stmts = [['INSERT INTO projects (id, name, archived, created_by, created_at) VALUES (?,?,0,?,?)', [id, name, me.id, at]], projEvent(id, me.id, `${me.name} 建立專案`, at)];
     // 新專案只含建立者＋跨專案角色（PO、SM）；其他人由管理員在專案成員勾選加入
     for (const p of (await peopleMap(ctx)).values()) {
