@@ -2109,26 +2109,37 @@
   }
   // ---------- C-132：[需確認] 快捷列——選項按鈕＋想法輸入框 ----------
   const quickMap = new Map(); // 訊息編號 → { sel, text, noOpts, busy, error }
-  const quickState = id => { if (!quickMap.has(id)) quickMap.set(id, { sel: null, text: '', noOpts: false, busy: false, error: '' }); return quickMap.get(id); };
+  const quickState = id => { if (!quickMap.has(id)) quickMap.set(id, { sels: {}, text: '', busy: false, error: '' }); return quickMap.get(id); };
   const OPT_LETTER = /^\s*(?:[（(]([A-F])[）)]|([A-F])\s*[.、:：）)])\s*(\S.*)$/;
   const OPT_CIRCLE = /^\s*([①②③④⑤⑥])\s*(\S.*)$/;
-  // 連續 2～6 行、開頭是「A. ／A、／A： ／（A）」或「①②③」才算選項；一般 1. 2. 3. 不認
-  function parseOptions(text) {
-    const lines = String(text).split('\n');
-    let best = [];
+  // C-148：只有「選項：」那一行之後緊接的 2～6 行 A.～F.／①～⑥ 才是選項；其他地方的 ①②③、1. 2. 都只是文字。
+  // 每題用「問題N：」開頭（只有一題可省略），回傳 [{ no, title, opts: [{ key, label }] }]
+  const OPT_HEAD = /^\s*選項\s*[:：]\s*$/;
+  const Q_HEAD = /^\s*問題\s*(\d+)\s*[:：]\s*(.*)$/;
+  function parseQuestions(text) {
+    const lines = String(text).split('\n'), out = [];
+    let lastQ = null, lastEnd = -1;
     for (let i = 0; i < lines.length; i++) {
-      const block = [];
-      for (let j = i; j < lines.length; j++) {
+      const qh = Q_HEAD.exec(lines[i]);
+      if (qh) { lastQ = { no: Number(qh[1]), title: qh[2].trim(), at: i }; continue; }
+      if (!OPT_HEAD.test(lines[i])) continue;
+      const opts = [];
+      let j = i + 1;
+      for (; j < lines.length && opts.length < 7; j++) {
         const a = OPT_LETTER.exec(lines[j]), c = OPT_CIRCLE.exec(lines[j]);
-        if (a) block.push({ key: a[1] || a[2], label: a[3] });
-        else if (c) block.push({ key: c[1], label: c[2] });
+        if (a) opts.push({ key: a[1] || a[2], label: a[3].trim() });
+        else if (c) opts.push({ key: c[1], label: c[2].trim() });
         else break;
       }
-      if (block.length >= 2 && block.length <= 6 && block.length > best.length) best = block;
-      i += Math.max(block.length - 1, 0);
+      const keys = opts.map(o => o.key);
+      if (opts.length >= 2 && opts.length <= 6 && new Set(keys).size === keys.length) {
+        const q = lastQ && lastQ.at > lastEnd ? lastQ : null;
+        out.push({ no: q ? q.no : out.length + 1, title: q ? q.title : '', opts, named: !!q });
+        lastEnd = j - 1;
+      }
+      i = j - 1;
     }
-    const keys = best.map(o => o.key);
-    return new Set(keys).size === keys.length ? best : []; // 重複的字母＝不是選項
+    return out;
   }
   function quickHtml(m) {
     const q = quickState(m.messageId);
@@ -2142,15 +2153,21 @@
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button></div>
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
     }
-    const opts = q.noOpts ? [] : parseOptions(m.text);
+    const qs = parseQuestions(m.text);
     const id = esc(m.messageId);
-    const sendLabel = opts.length ? (q.sel ? `選 ${esc(q.sel)} 並送出` : '先選一個選項') : '同意照辦';
+    const missing = qs.filter((_, i) => !q.sels[i]).length, picked = qs.length - missing;
+    const sendLabel = !qs.length ? '同意照辦' : missing ? `還有 ${missing} 題未選` : qs.length > 1 ? `送出 ${qs.length} 題回覆` : `選 ${esc(q.sels[0])} 並送出`;
+    const qBlock = (qq, i) => {
+      const long = qq.opts.some(o => o.label.length > 16);
+      const head = qs.length > 1 || qq.named ? `<div class="q-title" id="qt-${id}-${i}">問題${qq.no}${qq.title ? '　' + esc(qq.title) : ''}${picked && !q.sels[i] ? ' <span class="pill-tag yellow">未選</span>' : ''}</div>` : '';
+      return `<div class="q-group" role="radiogroup" ${head ? `aria-labelledby="qt-${id}-${i}"` : 'aria-label="選項"'}>${head}
+        <div class="q-opts${long ? ' vertical' : ''}">${qq.opts.map(o => `<button type="button" class="btn q-opt" role="radio" aria-checked="${q.sels[i] === o.key}" data-q-opt="${esc(o.key)}" data-qi="${i}" data-qm="${id}"><b>${esc(o.key)}</b><span>${esc(o.label)}</span></button>`).join('')}</div></div>`;
+    };
     return `<div class="auth-row quick" data-q-root="${id}">
-      ${opts.length ? `<div class="q-opts" role="group" aria-label="選項">${opts.map(o => `<button type="button" class="btn q-opt" data-q-opt="${esc(o.key)}" data-qm="${id}" aria-pressed="${q.sel === o.key}"><b>${esc(o.key)}</b> ${esc(o.label.slice(0, 8))}</button>`).join('')}
-        <button type="button" class="link small" data-q-notopt data-qm="${id}">不是選項？</button></div>` : ''}
+      ${qs.map(qBlock).join('')}
       <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions">
-        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || (opts.length && !q.sel) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
+        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || missing ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button>
       </div>
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
@@ -2171,9 +2188,10 @@
       } catch (err) { q.busy = false; q.error = err.message; refreshMsg(id); }
       return;
     }
-    const opts = q.noOpts ? [] : parseOptions(m.text);
-    if (kind === 'send' && opts.length && !q.sel) return;
-    const head = kind === 'hold' ? '暫緩處理' : opts.length ? `選 ${q.sel}` : '同意照辦';
+    const qs = parseQuestions(m.text);
+    if (kind === 'send' && qs.some((_, i) => !q.sels[i])) return;
+    const picks = qs.length === 1 && !qs[0].named ? `選 ${q.sels[0]}` : qs.map((qq, i) => `問題${qq.no} 選 ${q.sels[i]}`).join('；');
+    const head = kind === 'hold' ? '暫緩處理' : qs.length ? picks : '同意照辦';
     const text = `[回覆] ${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
     q.busy = true; q.error = ''; refreshMsg(id);
     try {
@@ -2189,9 +2207,7 @@
   function quickClick(e) {
     const t = e.target;
     const opt = t.closest?.('[data-q-opt]');
-    if (opt) { const q = quickState(opt.dataset.qm); q.sel = q.sel === opt.dataset.qOpt ? null : opt.dataset.qOpt; refreshMsg(opt.dataset.qm); return true; }
-    const no = t.closest?.('[data-q-notopt]');
-    if (no) { const q = quickState(no.dataset.qm); q.noOpts = true; q.sel = null; refreshMsg(no.dataset.qm); return true; }
+    if (opt) { const q = quickState(opt.dataset.qm), i = Number(opt.dataset.qi); q.sels[i] = q.sels[i] === opt.dataset.qOpt ? undefined : opt.dataset.qOpt; refreshMsg(opt.dataset.qm); return true; }
     const send = t.closest?.('[data-q-send]');
     if (send) { if (!send.disabled) quickSend(send.dataset.qm, 'send'); return true; }
     const hold = t.closest?.('[data-q-hold]');
@@ -2218,7 +2234,7 @@
       rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
     }
     if (!shas.length && /^\s*\[需確認\]/.test(text)) {
-      const sent = mineR.find(r => /^\[回覆\] (同意 commit|同意照辦|暫緩處理|選 [A-F①-⑥])/.test(r.text));
+      const sent = mineR.find(r => /^\[回覆\] (同意 commit|同意照辦|暫緩處理|選 [A-F①-⑥]|問題\d+ 選 [A-F①-⑥])/.test(r.text));
       const answered = sent || repliesOf(m.messageId).some(r => !isMine(r) && poRole(r));
       const isPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG'; // Commit 授權只給程式開發 AI 的 [需確認]
       const hasCommit = isPG && /commit/i.test(text);
