@@ -818,6 +818,10 @@
       return;
     }
     const stick = nearBottom() || isMine(m);
+    const parent = m.replyToMessageId && state.byId.get(m.replyToMessageId);
+    if (parent && /^\s*\[需確認\]/.test(parent.text) && (state.participants.get(m.author.participantId) || m.author).memberType === 'human') {
+      loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox' || state.page === 'hub') renderWork(); }).catch(() => {}); // C-173：回覆後收件匣移除
+    }
     state.messages.push(m);
     state.byId.set(m.messageId, m);
     if (state.page === 'hub' && work.loaded) renderWork();
@@ -849,7 +853,7 @@
   // 捲到最底下：膠囊消失
   $('#messages').addEventListener('scroll', () => { if (nearBottom()) clearNew(); }, { passive: true });
 
-  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (!t) return; quickState(t.dataset.qText).text = t.value; const sb = t.closest('[data-q-root]')?.querySelector('[data-q-send]'); if (sb && cardOfConfirm({ messageId: t.dataset.qText })) sb.disabled = !t.value.trim(); });
+  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (!t) return; quickState(t.dataset.qText).text = t.value; const sb = t.closest('[data-q-root]')?.querySelector('[data-q-send]'); if (sb && cardOfConfirm({ messageId: t.dataset.qText })) sb.disabled = !t.value.trim(); else if (sb) { const m = state.byId.get(t.dataset.qText), qs = m ? parseQuestions(m.text) : [], q = quickState(t.dataset.qText); if (qs.length === 1 && !q.sels[0]) { sb.disabled = !t.value.trim(); sb.textContent = t.value.trim() ? '送出想法' : '先選一個選項'; } } });
   $('#messages').addEventListener('keydown', e => {
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
     e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
@@ -2536,7 +2540,8 @@
     const qs = parseQuestions(m.text);
     const id = esc(m.messageId);
     const missing = qs.filter((_, i) => !q.sels[i]).length, picked = qs.length - missing;
-    const sendLabel = !qs.length ? '同意照辦' : missing ? `還有 ${missing} 題未選` : qs.length > 1 ? `送出 ${qs.length} 題回覆` : `選 ${esc(q.sels[0])} 並送出`;
+    const textOnly = qs.length === 1 && missing && q.text.trim(); // C-173：只有一題時，不選選項也能直接送出想法
+    const sendLabel = !qs.length ? '同意照辦' : textOnly ? '送出想法' : missing ? (qs.length === 1 ? '先選一個選項' : `還有 ${missing} 題未選`) : qs.length > 1 ? `送出 ${qs.length} 題回覆` : `選 ${esc(q.sels[0])} 並送出`;
     const qBlock = (qq, i) => {
       const long = qq.opts.some(o => o.label.length > 16);
       const head = qs.length > 1 || qq.named ? `<div class="q-title" id="qt-${id}-${i}">問題${qq.no}${qq.title ? '　' + esc(qq.title) : ''}${picked && !q.sels[i] ? ' <span class="pill-tag yellow">未選</span>' : ''}</div>` : '';
@@ -2547,7 +2552,7 @@
       ${qs.map(qBlock).join('')}
       <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions">
-        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || missing ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
+        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || (missing && !textOnly) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button>
       </div>
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
@@ -2569,10 +2574,11 @@
       return;
     }
     const qs = parseQuestions(m.text);
-    if (kind === 'send' && qs.some((_, i) => !q.sels[i])) return;
+    const textOnly = kind === 'send' && qs.length === 1 && !q.sels[0] && q.text.trim();
+    if (kind === 'send' && !textOnly && qs.some((_, i) => !q.sels[i])) return;
     const picks = qs.length === 1 && !qs[0].named ? `選 ${q.sels[0]}` : qs.map((qq, i) => `問題${qq.no} 選 ${q.sels[i]}`).join('；');
     const head = kind === 'hold' ? '暫緩處理' : qs.length ? picks : '同意照辦';
-    const text = `[回覆] ${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
+    const text = textOnly ? `[回覆] ${q.text.trim()}` : `[回覆] ${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
     q.busy = true; q.error = ''; refreshMsg(id);
     try {
       const r = await postMsg({ text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] });
@@ -2614,17 +2620,35 @@
       rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
     }
     if (!shas.length && /^\s*\[需確認\]/.test(text)) {
-      const sent = mineR.find(r => /^\[回覆\] (同意 commit|同意照辦|暫緩處理|選 [A-F①-⑥]|問題\d+ 選 [A-F①-⑥])/.test(r.text));
+      // C-173：任何人類回覆都算已處理（和伺服器收件匣規則一致），選項區收起；自己的回覆優先顯示
+      const humanR = repliesOf(m.messageId).filter(r => (state.participants.get(r.author.participantId) || r.author).memberType === 'human');
+      const sent = humanR.find(isMine) || humanR[0];
       const answered = sent || repliesOf(m.messageId).some(r => !isMine(r) && poRole(r));
       const isPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG'; // Commit 授權只給程式開發 AI 的 [需確認]
       const hasCommit = isPG && /commit/i.test(text);
-      if (sent) rows.push(`<div class="auth-row sent"><b>已回覆 · ${shortTime(sent.createdAt)}</b><span class="muted small">${esc(sent.text.slice(5, 40))}</span></div>`);
+      if (sent) rows.push(answeredHtml(m, sent));
       else if (pend && pend.key === 'need') rows.push(authConfirm(m, pend));
       else if (!answered) rows.push(hasCommit
         ? `<div class="auth-row"><span class="auth-title">授權 Commit</span>${authBtn(m, 'commit', '同意 Commit')}</div>`
         : quickHtml(m));
     }
     return rows.length ? `<div class="auth-box">${rows.join('')}</div>` : '';
+  }
+  // C-173：回覆裡寫了「選 A」「A」「問題1 選 B」就標出已選的選項
+  function answerPicks(qs, body) {
+    const t = body.trim(), picks = {};
+    for (const x of t.matchAll(/問題\s*(\d+)\s*[:：]?\s*選?\s*([A-F①-⑥])/g)) {
+      const i = qs.findIndex(q => q.no === Number(x[1]));
+      if (i >= 0 && qs[i].opts.some(o => o.key === x[2])) picks[i] = x[2];
+    }
+    if (qs.length === 1 && !picks[0]) { const x = /^(?:選\s*)?([A-F①-⑥])(?![A-Za-z0-9])/.exec(t); if (x && qs[0].opts.some(o => o.key === x[1])) picks[0] = x[1]; }
+    return picks;
+  }
+  function answeredHtml(m, r) {
+    const body = r.text.replace(/^\s*\[回覆\]\s*/, '');
+    const qs = parseQuestions(m.text), picks = answerPicks(qs, body);
+    const chosen = qs.map((qq, i) => { const o = picks[i] && qq.opts.find(x => x.key === picks[i]); return o ? `<span class="ans-pick">${qs.length > 1 ? `問題${qq.no} ` : ''}<b>${esc(o.key)}</b> ${esc(o.label)}<span class="ans-tag">已選</span></span>` : ''; }).join('');
+    return `<div class="auth-row sent answered"><button type="button" class="ans-jump" data-jump="${esc(r.messageId)}" title="跳到這則回覆"><b>已回覆：</b><span class="ans-text">${esc(oneLine(body, 60))}</span><span class="muted small">· ${esc(r.author.name)} · ${esc(shortTime(r.createdAt))}</span></button>${chosen ? `<div class="ans-picks">${chosen}</div>` : ''}</div>`;
   }
   function refreshMsg(id) {
     const el = document.getElementById('msg-' + id);
@@ -3532,7 +3556,7 @@
         ${ep('GET', '/api/participants', '有效成員與在線狀態')}
         ${ep('GET', '/api/messages?limit=50&amp;after=&lt;nextCursor&gt;', '增量讀取訊息')}
         ${ep('GET', '/api/messages/:messageId', '單則訊息')}
-        ${ep('POST', '/api/messages', '發文（text、requestId、recipientIds、replyToMessageId、audience）')}
+        ${ep('POST', '/api/messages', '發文（text、requestId、project、recipientIds、replyToMessageId、audience）；屬於多個專案要帶 project（平台／銀行系統／all）')}
         ${ep('GET', '/api/notifications?status=pending&amp;limit=50', '待處理通知')}
         ${ep('GET', '/api/notifications/count', '未讀通知數')}
         ${ep('POST', '/api/notifications/ack', '確認通知（notificationIds）')}
