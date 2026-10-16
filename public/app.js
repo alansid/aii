@@ -734,7 +734,7 @@
         <div class="field"><span class="field-label" id="fs-scope">範圍</span>
           <div class="seg-scope full" role="group" aria-labelledby="fs-scope" id="fs-scope-g"></div></div>
         <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('')}</select></label>
-        <label>標籤<select id="fs-tag"><option value="">所有標籤</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
+        <label>訊息類型<select id="fs-tag"><option value="">所有類型</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
       </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除</button><button class="btn primary grow" type="button" id="fs-apply">套用</button>' });
     const draw = () => {
       body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
@@ -1451,7 +1451,8 @@
   const typeTag = c => (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
   const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
   const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
-  const markHtml = c => (c.verified ? '<span class="cmark ok">✓ 已驗證</span>' : c.done ? '<span class="cmark wait">待驗證</span>' : '') + staleTag(c);
+  const doneTitle = c => [c.done ? `完成：${c.done.by?.name || ''} ${shortTime(c.done.at)}` : '', c.verified ? `驗收：${c.verified.by?.name || ''} ${shortTime(c.verified.at)}` : ''].filter(Boolean).join(' · ');
+  const markHtml = c => (c.verified ? `<span class="cmark ok" title="${esc(doneTitle(c))}">✓ 已驗收</span>` : c.done ? `<span class="cmark wait" title="${esc(doneTitle(c))}">待驗收</span>` : '') + staleTag(c);
   // C-161 卡片瘦身：已完成＋已驗證滿 7 天由伺服器自動封存；未驗證不封存，超過 7 天標紅
   const ARCHIVE_DAYS = 7, DAY_MS = 86400_000;
   const archiveLeftMs = c => new Date(c.verified?.at || c.done?.at || c.updatedAt).getTime() + ARCHIVE_DAYS * DAY_MS - Date.now();
@@ -2425,10 +2426,9 @@
               <div class="row"><button class="btn small" type="button" data-act="reopen">重新打開（改回待處理）</button></div>
               <span class="muted small">重新打開後照一般卡片流程；再次完成＋驗證後重新計 ${ARCHIVE_DAYS} 天。</span></div>`;
           })() : ''}
-          ${d.status === '已完成' && doneTag(d) ? `<div class="dmarks">${doneTag(d)}<span class="muted small">${d.verified ? '已驗證：明天會自動收進已封存' : pendingDays(d) > ARCHIVE_DAYS ? '超過 7 天沒驗證，請驗證或退回' : '待驗證的卡不會自動收起'}</span></div>` : ''}
+          ${d.status === '已完成' && doneTag(d) && d.verified ? `<div class="dmarks">${doneTag(d)}<span class="muted small">${d.verified ? '已驗證：明天會自動收進已封存' : pendingDays(d) > ARCHIVE_DAYS ? '超過 7 天沒驗證，請驗證或退回' : '待驗證的卡不會自動收起'}</span></div>` : ''}
           ${d.done || d.verified ? `<div class="dmarks">
-            ${d.done ? `<span class="cmark ok-bg">已完成 · ${esc(d.done.by?.name || '')} · ${shortTime(d.done.at)}</span>` : ''}
-            ${d.verified ? `<span class="cmark ver-bg">已驗證 · ${esc(d.verified.by?.name || '')} · ${shortTime(d.verified.at)}</span>` : ''}
+            ${d.verified ? `<span class="cmark ok-bg" title="${esc(doneTitle(d))}">✓ 已完成</span><span class="muted small">${esc(doneTitle(d))}</span>` : d.done ? `<span class="cmark wait" title="${esc(doneTitle(d))}">已完成 · 待驗收</span><span class="muted small">${esc(doneTitle(d))}</span>` : ''}
             ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
           </div>` : ''}
           ${d.staleHint ? `<div class="stale-note" role="status"><b>可能過時</b><span class="small">卡片最後更新 ${esc(shortTime(d.staleHint.lastUpdatedAt))}，但之後 ${esc(shortTime(d.staleHint.latestMessageAt))} 有新的相關訊息。</span>${d.staleHint.latestMessageId ? `<button type="button" class="link small" data-stale-jump="${esc(d.staleHint.latestMessageId)}">看最新訊息</button>` : ''}</div>` : ''}
@@ -3976,31 +3976,35 @@
   }
   // 「＋ 加入成員」：只列還不在這個專案的人；人類底下縮排列他的 AI；主人不在的 AI 鎖住
   function permPickerHtml(pj) {
-    const q = perm.pickQ.trim().toLowerCase(), sel = perm.pickSel;
+    const q = perm.pickQ.trim().toLowerCase(), sel = perm.pickSel, admin = isAdmin();
     const out = permPeople().filter(p => !inProj(p, pj));
     const match = p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q);
-    const humans = out.filter(p => p.memberType === 'human');
+    const mineP = myProjects();
+    const humanOk = p => admin || (!permBase(p).projects.size && !permBase(p).cross) || [...permBase(p).projects].some(x => mineP.includes(x));
+    const humans = out.filter(p => p.memberType === 'human' && humanOk(p));
     const ownerIn = a => { const o = ownerOf(a); return !!o && (inProj(o, pj) || sel.has(o.participantId)); };
-    const lockWhy = a => (ownerIn(a) ? '' : `主人${ownerOf(a) ? ' ' + ownerOf(a).name : ''}不在${projName(pj)}`);
-    const box = (p, indent) => {
-      const why = p.memberType === 'ai' ? lockWhy(p) : '';
-      const note = why ? '🔒 ' + why : p.memberType === 'ai' ? (indent ? '跟著主人' : permSub(p)) : `人類${permCur(p).projects.size || permCur(p).cross ? '' : ' · 還沒有專案'}`;
-      return `<label class="pm-row pm-pick-row${indent ? ' indent' : ''}${why ? ' off' : ''}"><input type="checkbox" data-pm-picksel="${esc(p.participantId)}" ${sel.has(p.participantId) ? 'checked' : ''} ${why ? 'disabled' : ''}><span class="pm-name"><b>${esc(p.name)}</b></span><span class="muted small">${esc(note)}</span></label>`;
+    const box = (p, indent, lock = '') => {
+      const note = lock ? '🔒 ' + lock : p.memberType === 'ai' ? (indent ? '跟著主人' : permSub(p)) : `人類${permCur(p).projects.size || permCur(p).cross ? '' : ' · 還沒有專案'}`;
+      return `<label class="pm-row pm-pick-row${indent ? ' indent' : ''}${lock ? ' off' : ''}"><input type="checkbox" data-pm-picksel="${esc(p.participantId)}" ${sel.has(p.participantId) ? 'checked' : ''} ${lock ? 'disabled' : ''}><span class="pm-name"><b>${esc(p.name)}</b></span><span class="muted small">${esc(note)}</span></label>`;
     };
     const rows = [];
     for (const h of humans) {
-      const kids = out.filter(a => a.memberType === 'ai' && a.ownerParticipantId === h.participantId);
+      const kids = sel.has(h.participantId) ? out.filter(a => a.memberType === 'ai' && a.ownerParticipantId === h.participantId) : []; // 勾了人類，名下的 AI 才列在下面
       if (!match(h) && !kids.some(match)) continue;
       rows.push(box(h, false), ...kids.map(a => box(a, true)));
     }
-    const others = out.filter(a => a.memberType === 'ai' && !humans.some(h => h.participantId === a.ownerParticipantId) && match(a));
-    if (others.length) rows.push('<div class="pm-grp">其他 AI（主人已在這個專案）</div>', ...others.map(a => box(a, false)));
+    const listed = new Set(humans.filter(h => sel.has(h.participantId)).map(h => h.participantId));
+    const ownerInAis = out.filter(a => a.memberType === 'ai' && !listed.has(a.ownerParticipantId) && ownerOf(a) && inProj(ownerOf(a), pj) && match(a));
+    if (ownerInAis.length) rows.push('<div class="pm-grp">主人已在這個專案的 AI</div>', ...ownerInAis.map(a => box(a, false)));
+    const others = admin ? out.filter(a => a.memberType === 'ai' && !listed.has(a.ownerParticipantId) && !ownerIn(a) && match(a)) : [];
+    if (others.length) rows.push(`<details class="pm-others"><summary class="pm-grp">其他（主人不在${esc(projName(pj))}的 AI，${others.length} 個）</summary>${others.map(a => box(a, false, `主人${ownerOf(a) ? ' ' + ownerOf(a).name : ''}不在${projName(pj)}`)).join('')}</details>`);
+    const pending = perm.draft.size > 0;
     return `<section class="pm-col pm-pick" aria-label="加入${esc(projName(pj))}的成員">
       <div class="pm-dhead"><strong>加入${esc(projName(pj))}的成員</strong></div>
       <div class="pm-search"><input id="pm-pickq" type="search" placeholder="搜尋要加入的人" aria-label="搜尋要加入的人" value="${esc(perm.pickQ)}"></div>
-      <div class="pm-pick-list">${rows.join('') || '<p class="muted small pm-pad">大家都已經在這個專案了</p>'}</div>
-      <div class="pm-pick-foot"><button type="button" class="btn" data-pm-pick-cancel>取消</button><button type="button" class="btn primary" data-pm-pick-ok ${sel.size ? '' : 'disabled'}>加入 ${sel.size} 人</button></div>
-      <p class="muted small pm-pad">只列還不在${esc(projName(pj))}的人；勾人類時，名下的 AI 縮排列在下面可一起勾。</p></section>`;
+      <div class="pm-pick-list">${rows.join('') || '<p class="muted small pm-pad">沒有可以加入的人</p>'}</div>
+      <div class="pm-pick-foot"><button type="button" class="btn" data-pm-pick-cancel>取消</button><button type="button" class="btn primary" data-pm-pick-ok ${sel.size ? '' : 'disabled'}>加入 ${sel.size} 人${pending ? '（跟其他變更一起儲存）' : ''}</button></div>
+      <p class="muted small pm-pad">${pending ? '底下還有沒儲存的變更，這次加入會一起放進變更列。' : '加入不會退回任何卡片，按下就直接儲存，10 秒內可以復原。'}勾人類時，名下的 AI 會列在下面可一起勾。</p></section>`;
   }
   function permByMemberHtml() {
     const all = permPeople(), q = perm.mq.trim().toLowerCase();
@@ -4080,6 +4084,32 @@
     await Promise.all([loadProjectList(), loadParticipants()]).catch(() => {});
     drawPerm();
   }
+  // C-190：只有「加入」時直接儲存（不會退回卡片），toast 可在 10 秒內復原
+  async function permQuickAdd(ids, pj) {
+    const before = ids.map(id => ({ id, projects: [...permBase(P2(id)).projects] }));
+    const changes = ids.map(id => ({ id, projects: PROJECTS.filter(x => perm.draft.get(id)?.projects.has(x)) })).filter(c => c.projects.length);
+    try {
+      await api('/api/members/matrix', { method: 'PUT', body: { changes } });
+      perm.draft.clear();
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      drawProjSwitch(); drawPerm();
+      const names = ids.map(id => P2(id)?.name).filter(Boolean).join('、');
+      const t = $('#toast');
+      t.innerHTML = `已加入 ${esc(names)} <button type="button" class="link toast-undo" id="toast-undo">復原</button>`;
+      t.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { t.hidden = true; }, 10_000);
+      t.querySelector('#toast-undo').onclick = async () => {
+        t.hidden = true;
+        try {
+          await api('/api/members/matrix', { method: 'PUT', body: { changes: before.slice().reverse().map(b => ({ id: b.id, projects: b.projects })) } });
+          await Promise.all([loadProjectList(), loadParticipants()]);
+          drawProjSwitch(); drawPerm(); toast(`已復原：${names} 不在${projName(pj)}`);
+        } catch (err) { toast(err.message); }
+      };
+    } catch (err) { toast(err.message); drawPerm(); }
+  }
+  const P2 = id => state.participants.get(id);
   async function permSave() {
     const changes = [];
     const order = [...perm.draft.keys()].sort((a, b) => (state.participants.get(a)?.memberType === 'ai') - (state.participants.get(b)?.memberType === 'ai'));
@@ -4122,9 +4152,11 @@
     if (el('[data-pm-pick-cancel]')) { perm.picker = false; return drawPerm(); }
     if (el('[data-pm-pick-ok]')) {
       const ids = [...perm.pickSel].sort((a, b) => (P(a)?.memberType === 'ai') - (P(b)?.memberType === 'ai'));
-      for (const id of ids) permAdd(P(id), perm.selProj);
+      const direct = perm.draft.size === 0, pj = perm.selProj;
+      for (const id of ids) permAdd(P(id), pj);
       Object.assign(perm, { picker: false, pickSel: new Set() });
-      return drawPerm();
+      if (!direct) return drawPerm();
+      return permQuickAdd(ids, pj); // C-190：加入沒有破壞性，直接儲存，10 秒內可復原
     }
     if ((x = el('[data-pm-rm]'))) { permRemove(P(x.dataset.pmRm), x.dataset.pj); return drawPerm(); }
     if ((x = el('[data-pm-restore]'))) { permAdd(P(x.dataset.pmRestore), x.dataset.pj); return drawPerm(); }

@@ -1572,3 +1572,7 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 .dmsg-main .dmsg-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dmsg-main:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
 .dmsg-go { min-height: 32px; }
+
+/* ===== C-190 ===== */
+.toast-undo { margin-left: 8px; color: inherit; text-decoration: underline; font-weight: 700; }
+.pm-others summary { cursor: pointer; list-style: revert; }

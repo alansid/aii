@@ -938,7 +938,8 @@ ${trial
     for (const ch of changes) {
       const target = people.get(String(ch.id));
       if (!target || target.status !== 'active' || target.kind === 'system') throw new ApiError(404, 'NOT_FOUND', `找不到成員 ${ch.id}`);
-      const next = readProjects(ch.projects);
+      // C-190：人類可以回到「還沒有專案」（例如復原剛才的加入）；AI 至少要一個專案
+      const next = ch.allowEmpty && target.kind === 'human' && Array.isArray(ch.projects) && !ch.projects.length ? [] : readProjects(ch.projects);
       const cur = listOf(target).filter(x => PROJECTS.includes(x));
       const added = next.filter(x => !cur.includes(x)), removed = cur.filter(x => !next.includes(x));
       if (crossRole(target, ov) && removed.length) {
@@ -1043,7 +1044,7 @@ ${trial
         if (!isAdmin && Array.isArray(ch.projects) && PROJECTS.some(x => !ch.projects.includes(x))) throw forbid(`${p.name} 是跨專案角色，leader 不能改。`);
         memberChanges.push({ id: p.id, projects: ch.crossRole === true || !Array.isArray(ch.projects) ? [...PROJECTS] : ch.projects }); continue; // 跨專案角色只移出某專案 → CROSS_ROLE_FIXED
       }
-      if (Array.isArray(ch.projects) && !ch.projects.length) throw new ApiError(400, 'NEEDS_ONE_PROJECT', `${p.name} 至少要屬於一個專案。`);
+      if (Array.isArray(ch.projects) && !ch.projects.length && p.kind !== 'human') throw new ApiError(400, 'NEEDS_ONE_PROJECT', `${p.name} 至少要屬於一個專案。`);
       const next = ch.projects ?? cur;
       if (!isAdmin) {
         const touched = [...next.filter(x => !cur.includes(x)), ...cur.filter(x => !next.includes(x))];
@@ -1052,7 +1053,7 @@ ${trial
         if (p.id === admin?.id) throw forbid('leader 不能改管理員。');
         if (p.id === me.id && cur.some(x => !next.includes(x))) throw forbid('leader 不能把自己移出專案。');
       }
-      memberChanges.push({ id: p.id, projects: next });
+      memberChanges.push({ id: p.id, projects: next, allowEmpty: true });
     }
     // leader 指定（只有管理員）：leaderOf＝這位成員要當 leader 的專案；只能人類、要先在那個專案
     const nextLeaders = Object.fromEntries(PROJECTS.map(pj => [pj, [...(leadersMap[pj] || [])]]));
@@ -1253,9 +1254,11 @@ ${trial
     return (await readState(target.id)) || { state: null, updatedAt: null };
   });
   // C-188：不屬於全部專案的成員，只看得到同專案的人＋跨專案角色（新成員至少找得到管理員、PO）
-  const seesPerson = (me, p) => !isolatedFrom(me) || p.id === me.id || crossRole(p) || projectsOf(p).some(x => projectsOf(me).includes(x));
+  // C-190：專案 leader 另外看得到「還沒有任何專案」的人類，才能把新成員加進自己的專案
+  const seesPerson = (me, p) => !isolatedFrom(me) || p.id === me.id || crossRole(p) || projectsOf(p).some(x => projectsOf(me).includes(x))
+    || (p.kind === 'human' && !projectsOf(p).length && leaderProjectsOf(me.id).length > 0);
   route('GET', '/api/participants', async ({ ctx, me }) => {
-    await loadCrossRoles();
+    await loadCrossRoles(); await loadLeaders();
     const people = await peopleMap(ctx);
     const now = Date.now();
     const items = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && seesPerson(me, p))
