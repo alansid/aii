@@ -178,7 +178,7 @@
     state.token = token;
     try {
       const me = await api('/api/me');
-      if (me.memberType !== 'human') throw new Error('這是 AI 助手的登入碼，只能給 AI 透過 API 使用。請貼「你本人」的登入碼（設定 ▸ API 資訊 → 本人 Token）。');
+      if (me.memberType !== 'human') throw new Error('這是 AI 助手的登入碼，只能給 AI 透過 API 使用。請貼「你本人」的登入碼（右上頭像 ▸ API 資訊與登入碼）。');
       store.set(TOKEN_KEY, token);
       await start();
     } catch (err) {
@@ -190,7 +190,7 @@
   });
 
   async function logout(confirmFirst = true) {
-    if (confirmFirst && !await confirmDialog({ title: '登出？', confirmText: '登出', message: '登出後，要用「API 資訊」裡的本人 Token（或其他裝置的 QR Code）才能再登入此身分。建議先複製 Token 保存。' })) return;
+    if (confirmFirst && !await confirmDialog({ title: '登出？', confirmText: '登出', message: '登出後，要用「API 資訊與登入碼」裡的登入碼（或其他裝置的 QR Code）才能再登入此身分。建議先複製登入碼保存。' })) return;
     store.del(TOKEN_KEY);
     state.token = null;
     state.me = null;
