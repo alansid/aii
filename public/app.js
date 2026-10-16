@@ -559,6 +559,7 @@
   function drawSendTo() {
     const el = $('#send-to');
     if (!el) return;
+    drawMentionWarn();
     const t = sendTarget();
     const v = projectView(), base = v === 'cross' || v === 'hub' ? 'all' : v;
     el.innerHTML = `<span class="muted">發到</span>${t === 'all' ? '<span class="ptag ptag-all">跨專案頻道</span><span class="muted">所有專案都看得到</span>' : projTag(t)}${state.replyTo && t !== base ? '<span class="muted">（跟著被回覆的訊息）</span>' : ''}`;
@@ -926,13 +927,37 @@
 
   // ---------- 輸入與 @提及 ----------
   // @ 選單候選（C-150）：不截斷，清單可捲動；所有人在最前，再來是跟我同專案的成員
+  // C-174：專案內只列該專案的成員（跨專案角色本來就屬於每個專案），「所有人」寫成「所有人（平台）」；跨專案頻道列全部
+  const mentionScope = () => { const t = sendTarget(); return t === 'all' ? null : t; };
+  const inScope = (p, scope) => !scope || (p.projects || []).includes(scope);
   function mentionCandidates(raw) {
-    const q = raw.toLowerCase();
+    const q = raw.toLowerCase(), scope = mentionScope();
     const mine = myProjects();
     const near = p => (p.projects?.length ? p.projects : PROJECTS).some(x => mine.includes(x));
     const people = [...state.participants.values()]
-      .filter(p => p.participantId !== meId() && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q)));
-    return [...(!q || ALL.name.includes(q) || ALL.role.includes(q) ? [ALL] : []), ...people.filter(near), ...people.filter(p => !near(p))];
+      .filter(p => p.participantId !== meId() && p.status !== 'disabled' && inScope(p, scope) && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q)));
+    const all = scope ? { ...ALL, label: `${ALL.name}（${projName(scope)}）`, role: `通知${projName(scope)}的所有成員` } : ALL;
+    return [...(!q || ALL.name.includes(q) || all.role.includes(q) ? [all] : []), ...people.filter(near), ...people.filter(p => !near(p))];
+  }
+  // 手打 @ 了不在這個專案的人：輸入框下方先提示，不用等送出才被擋
+  function outsideMentions(text, scope = mentionScope()) {
+    if (!scope) return [];
+    let scan = text;
+    const out = [];
+    for (const p of [...state.participants.values()].sort((a, b) => b.name.length - a.name.length)) {
+      const tag = '@' + p.name;
+      if (!scan.includes(tag)) continue;
+      if (p.participantId !== meId() && !inScope(p, scope)) out.push(p.name);
+      scan = scan.split(tag).join(' ');
+    }
+    return out;
+  }
+  const outsideText = (names, scope = mentionScope()) => (names.length ? `${names.join('、')} 不在${projName(scope)}專案，請到跨專案頻道找他` : '');
+  function drawMentionWarn() {
+    const el = $('#mention-warn');
+    if (!el) return;
+    const t = outsideText(outsideMentions($('#input')?.value || ''));
+    el.textContent = t; el.hidden = !t;
   }
   // 鍵盤上下移動時，讓選中的那一列留在可視範圍
   const scrollPicked = list => list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
@@ -961,7 +986,7 @@
   function renderMention() {
     mentionList.innerHTML = mentionState.items.map((p, i) => `
       <li role="option" data-i="${i}" aria-selected="${i === mentionState.index}">
-        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.name)}</b>
+        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.label || p.name)}</b>
         <span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}
       </li>`).join('');
     mentionList.hidden = false;
@@ -987,6 +1012,7 @@
     sendBtn.disabled = !input.value.trim();
     autoGrow();
     updateMention();
+    drawMentionWarn();
   }
   input.addEventListener('input', onInput);
   input.addEventListener('click', updateMention);
@@ -3412,7 +3438,7 @@
     let st = null;
     const close = () => { st = null; list.hidden = true; };
     const render = () => {
-      list.innerHTML = st.items.map((p, i) => `<li role="option" data-i="${i}" aria-selected="${i === st.index}"><span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.name)}</b><span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}</li>`).join('');
+      list.innerHTML = st.items.map((p, i) => `<li role="option" data-i="${i}" aria-selected="${i === st.index}"><span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.label || p.name)}</b><span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}</li>`).join('');
       list.hidden = false;
       scrollPicked(list);
     };
@@ -3458,6 +3484,7 @@
       ${problem ? `<div class="warn-box red">${esc(problem)}</div>` : `
       <div class="warn-box">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。${isImg ? '截圖請先確認沒有客戶資料（尤其行內畫面）。' : ''}</div>
       <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea id="up-note" rows="3" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></div></label>
+      <p class="mention-warn" id="up-warn" role="status" hidden></p>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>
       <p class="error" id="up-error" role="alert"></p>`}`, problem ? {} : {
       foot: `<button class="btn" type="button" data-close>取消</button>
@@ -3466,6 +3493,7 @@
     body.querySelector('.up-preview')?.addEventListener('load', () => URL.revokeObjectURL(previewUrl));
     if (problem) { if (previewUrl) URL.revokeObjectURL(previewUrl); return; }
     attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'));
+    body.querySelector('#up-note').addEventListener('input', e => { const w = body.querySelector('#up-warn'), t = outsideText(outsideMentions(e.target.value)); w.textContent = t; w.hidden = !t; }); // C-174
     const go = body.modal.querySelector('#up-go');
     body.querySelector('#up-declare').addEventListener('change', e => { go.disabled = !e.target.checked; });
     go.addEventListener('click', async () => {
