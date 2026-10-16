@@ -430,10 +430,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const status = url.searchParams.get('status') || 'pending';
     if (!['pending', 'confirmed'].includes(status)) throw invalid('status 需為 pending 或 confirmed');
     const limit = parseLimit(url);
+    // C-146 A：看不到的訊息（例如被移出專案後）的通知不列出
+    const scope = await messageScope(me, 'm');
+    const join = scope ? ` AND EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql})` : '';
     const sql = status === 'pending'
-      ? "SELECT * FROM notifications WHERE recipient_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT ?"
-      : "SELECT * FROM notifications WHERE recipient_id = ? AND status = 'acked' ORDER BY acked_at DESC LIMIT ?";
-    let rows = await db.all(sql, me.id, limit + 1);
+      ? `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join} ORDER BY n.created_at, n.id LIMIT ?`
+      : `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'acked'${join} ORDER BY n.acked_at DESC LIMIT ?`;
+    let rows = await db.all(sql, me.id, ...(scope ? scope.args : []), limit + 1);
     const hasMore = rows.length > limit;
     if (hasMore) rows = rows.slice(0, limit);
     return { items: await serializeNotifications(ctx, rows), hasMore };
@@ -1092,7 +1095,8 @@ ${autoStandby
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
   route('GET', '/api/notifications/count', async ({ me }) => {
-    const r = await db.get("SELECT COUNT(*) AS c FROM notifications WHERE recipient_id = ? AND status = 'pending'", me.id);
+    const scope = await messageScope(me, 'm');
+    const r = await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql})` : ''}`, me.id, ...(scope ? scope.args : []));
     return { pending: r.c };
   });
   route('POST', '/api/notifications/ack', async ({ me, req }) => ackNotifications(me, (await readJson(req)).notificationIds));
@@ -1420,7 +1424,7 @@ ${autoStandby
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
-  registerCards({ route, createMessage, isolatedFrom, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
+  registerCards({ route, createMessage, isolatedFrom, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
   route('GET', '/api/team-status', async ({ ctx, me }) => {
     const d = await teamStatus(ctx);

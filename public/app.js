@@ -471,6 +471,8 @@
     return myProjects().includes(v) || v === 'cross' ? v : 'all';
   }
   const projTag = p => (p ? `<span class="ptag" data-p="${esc(p)}">${esc(projName(p))}</span>` : '');
+  // 卡片標題（C-146 A）：不再手打「[平台]」，舊卡的前綴顯示時去掉，改看專案標籤
+  const cardTitle = c => { const m = /^\s*\[([^\]\n]{1,20})\]\s*/.exec(c.title || ''); return m && state.projectList.some(p => p.id === m[1] || p.name === m[1]) ? c.title.slice(m[0].length) || c.title : c.title; };
   // 訊息：總覽全部；跨專案頻道只看「全部專案」的訊息；選了專案只看該專案（單一專案成員另外看得到跨專案頻道）
   const msgInView = p => { const v = projectView(); return v === 'all' || (v === 'cross' ? !p : p === v || (!p && singleProject())); };
   const cardInView = c => { const v = projectView(); return v === 'all' || v === 'cross' || c.project === v; };
@@ -484,6 +486,7 @@
     return n;
   }
   function drawProjSwitch() {
+    document.querySelectorAll('[data-nav="overview"]').forEach(b => { b.hidden = myProjects().length < 2; });
     const v = projectView(), counts = todoByView();
     const opts = [...myProjects(), ...(myProjects().length > 1 ? ['all', 'cross'] : [])];
     const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你做的 ${counts[k]} 件">${counts[k]}</span>` : '');
@@ -506,7 +509,10 @@
     sel.value = projTouched ? sel.value : defaultProj();
   }
   function setProjectView(k) {
+    const was = projectView();
     store.set(PROJ_KEY, k);
+    if (k === 'all' && was !== 'all') return showPage('overview'), drawProjSwitch(), renderMessages(true);
+    if (k !== 'all' && state.page === 'overview') showPage('messages');
     projTouched = false;
     drawProjSwitch();
     syncFilterBar();
@@ -1420,7 +1426,7 @@
   document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
   function showPage(page) {
     if (work.openId) closeCard();
-    state.page = ['work', 'inbox', 'team'].includes(page) ? page : 'messages';
+    state.page = ['work', 'inbox', 'team', 'overview'].includes(page) ? page : 'messages';
     store.set(PAGE_KEY, state.page);
     $('#page-messages').hidden = state.page !== 'messages';
     $('#page-work').hidden = state.page === 'messages'; // 收件匣與工作共用同一個容器
@@ -1432,6 +1438,8 @@
       (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
     } else if (state.page === 'team') {
       renderTeamPage();
+    } else if (state.page === 'overview') {
+      Promise.all([work.loaded ? null : loadCards(), loadTeam().catch(() => {})]).then(renderWork).catch(err => toast(err.message));
     } else if (state.page === 'inbox') {
       Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
     } else scrollBottom();
@@ -1456,9 +1464,10 @@
 
   function renderWork() {
     const box = $('#page-work');
-    if (!['work', 'inbox'].includes(state.page) || !work.loaded) return;
+    if (!['work', 'inbox', 'overview'].includes(state.page) || !work.loaded) return;
     box.classList.remove('is-board');
     if (state.page === 'inbox') { box.innerHTML = inboxHtml(); return; }
+    if (state.page === 'overview') { box.innerHTML = todayHtml(); return; }
     const all = visibleCards();
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
     const keep = document.activeElement?.id;
@@ -1489,7 +1498,7 @@
     const panel = (title, cls, list, empty, meta) => `
       <section class="wpanel ${cls}${list.length ? ' has' : ''}">
         <div class="wpanel-head"><span class="wdot"></span><b>${title}</b><span class="wcount">${list.length}</span></div>
-        ${list.length ? list.slice(0, 3).map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span>${esc(c.title)}</span><span class="muted small">${esc(meta(c))}</span></button>`).join('')
+        ${list.length ? list.slice(0, 3).map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span>${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(meta(c))}</span></button>`).join('')
           : `<p class="muted small">${empty}</p>`}
         ${list.length > 3 ? `<button type="button" class="link small" data-filter="${cls === 'done' ? '已完成' : cls === 'blocked' ? '受阻' : 'open'}">查看全部 ${list.length} 張</button>` : ''}
       </section>`;
@@ -1511,7 +1520,7 @@
         ${listed.length ? listed.map(c => `
           <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}" data-card="${esc(c.cardId)}">
             <span class="cid">${esc(c.cardId)}</span>
-            <span class="crow-main"><span class="crow-title">${typeTag(c)}${esc(c.title)}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
+            <span class="crow-main"><span class="crow-title">${typeTag(c)}${projTag(c.project)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
             <span class="crow-st">${stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
             <span class="crow-time muted small">${shortTime(c.updatedAt)}${markHtml(c)}</span>
@@ -1552,6 +1561,34 @@
             <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">已讀</button></div></div>`;
       }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}</section>`;
   }
+  // 今日總覽（C-146 A）：每個專案一列，阻塞與跨專案頻道最新 3 則
+  function todayHtml() {
+    const cards = [...work.cards.values()], today = new Date().toDateString();
+    const isToday = iso => !!iso && new Date(iso).toDateString() === today;
+    const rows = myProjects().map(p => {
+      const cs = cards.filter(c => c.project === p);
+      const n = { done: cs.filter(c => c.status === '已完成' && isToday(c.done?.at)).length, doing: cs.filter(c => c.status === '進行中').length,
+        blocked: cs.filter(c => c.status === '受阻').length, verify: cs.filter(c => c.status === '已完成' && !c.verified).length };
+      const num = (v, cls) => (v ? `<span class="pill-tag ${cls}">${v}</span>` : '0');
+      return `<tr><th scope="row">${esc(projName(p))}</th><td>${n.done}</td><td>${n.doing}</td><td>${num(n.blocked, 'red')}</td><td>${num(n.verify, 'yellow')}</td><td class="muted">—</td>
+        <td><button type="button" class="link ov-enter" data-ov-enter="${esc(p)}">進入 ›</button></td></tr>`;
+    }).join('');
+    const blocked = cards.filter(c => c.status === '受阻' && myProjects().includes(c.project));
+    const cross = state.messages.filter(m => !m.project).slice(-3);
+    return `<div class="work-head"><div class="work-title"><h2>今日總覽</h2><span class="muted small">${esc(new Date().toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span></div></div>
+      <section class="wpanel ov-table-wrap"><table class="ov-table"><thead><tr><th scope="col">專案</th><th scope="col">今日完成</th><th scope="col">進行中</th><th scope="col">受阻</th><th scope="col">待驗收</th><th scope="col">外部依賴</th><th scope="col"><span class="sr-only">進入</span></th></tr></thead><tbody>${rows}</tbody></table></section>
+      <div class="ov-grid">
+        <section class="wpanel"><h3>阻塞</h3>${blocked.length ? blocked.map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span><span class="pill-tag red">受阻</span> ${projTag(c.project)} ${esc(c.cardId)} ${esc(cardTitle(c))}</span><span class="muted small">${c.waitFor ? '等 ' + esc(c.waitFor.name) : ''}</span></button>`).join('') : '<p class="muted small">目前沒有受阻的卡。</p>'}</section>
+        <section class="wpanel"><h3>跨專案頻道（最新 3 則）</h3>${cross.length ? cross.map(m => `<button type="button" class="wpanel-item" data-ov-cross="${esc(m.messageId)}"><span>${esc(m.text.slice(0, 60))}</span><span class="muted small">${esc(m.author.name)} · ${esc(fmtTime(m.createdAt))}</span></button>`).join('') : '<p class="muted small">還沒有跨專案訊息。</p>'}
+          <p class="muted small">規則公告、跨團隊協調請發在跨專案頻道（全部專案），所有人可見。</p></section>
+      </div>`;
+  }
+  document.addEventListener('click', e => {
+    const en = e.target.closest('[data-ov-enter]');
+    if (en) { setProjectView(en.dataset.ovEnter); showPage('messages'); return; }
+    const cr = e.target.closest('[data-ov-cross]');
+    if (cr) { setProjectView('cross'); showPage('messages'); jumpTo(cr.dataset.ovCross); }
+  });
   function inboxHtml() {
     const all = [...work.cards.values()].filter(cardInView);
     const open = todoCount();
@@ -1593,7 +1630,7 @@
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
         <div class="ctile-top"><span class="cid">${esc(c.cardId)}</span>${typeTag(c)}${markHtml(c)}</div>
-        <b class="ctile-title">${esc(c.title)}</b>
+        <b class="ctile-title">${projTag(c.project)} ${esc(cardTitle(c))}</b>
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
         <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
@@ -1809,7 +1846,7 @@
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && (p.projects || []).includes(d.project));
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
-        <div class="info-box">${esc(d.cardId)} ${esc(d.title)}<br>交接後負責人換成對方，狀態回到「待處理」，並在群組 @ 對方通知。</div>
+        <div class="info-box">${esc(d.cardId)} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態回到「待處理」，並在群組 @ 對方通知。</div>
         <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${p.role ? '（' + esc(p.role) + '）' : ''}</option>`).join('')}</select></label>
         <label>交接說明（必填）<textarea name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
         <p class="muted small">說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。</p>
@@ -1870,7 +1907,7 @@
       ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
       <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
-          <div class="drawer-titles"><span class="cid">${esc(d.cardId)}</span>${typeTag(d)}<h2 id="drawer-title">${esc(d.title)}</h2>
+          <div class="drawer-titles"><span class="cid">${esc(d.cardId)}</span>${typeTag(d)}${projTag(d.project)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
           <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
         </div>

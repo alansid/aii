@@ -33,9 +33,11 @@ export async function teamCards(db) {
   return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, createMessage, isolatedFrom, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, createMessage, isolatedFrom, projectName = id => id, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // C-144：卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
+  // C-146 A：卡片的專案看專案欄位；舊卡標題的「[專案]」前綴在通知裡去掉，改用【專案】標記
+  const plainTitle = t => { const m = /^\s*\[([^\]\n]{1,20})\]\s*/.exec(t); return m && (PROJECTS.includes(m[1]) || ['平台', '銀行系統'].includes(m[1])) ? t.slice(m[0].length) || t : t; };
   const parseNo = id => {
     const m = /^C-(\d+)$/.exec(id);
     const seq = m ? Number(m[1]) - CARD_NO_BASE : NaN;
@@ -426,8 +428,8 @@ export function registerCards({ route, createMessage, isolatedFrom, PROJECTS, pr
     const ids = [...new Set(toIds.filter(id => id && id !== me.id))];
     if (!ids.length) return;
     const cur = await load(cardNo(c.seq));
-    const tag = cur.title.startsWith('[平台]') ? '【平台】' : cur.title.startsWith('[銀行系統]') ? '【銀行系統】' : '';
-    const plain = cur.title.replace('[平台]', '').replace('[銀行系統]', '').trim();
+    const tag = cur.project ? `【${projectName(cur.project)}】` : '';
+    const plain = plainTitle(cur.title);
     const msg = `[通知] ${tag}${cardNo(c.seq)} ${plain}：${summary}`.slice(0, 1900);
     try {
       const r = await createMessage(ctx, me, { text: msg, requestId: `cardev_${c.uid}_${key}_${cur.version}`.slice(0, 128), recipientIds: ids, project: cur.project });
@@ -457,9 +459,8 @@ export function registerCards({ route, createMessage, isolatedFrom, PROJECTS, pr
     if (c.status !== '待處理') logs.push(`狀態 ${c.status} → 待處理`);
     await save(c, sets, logs, me, at);
     invalidatePeople();
-    // 專案標記取自卡片標題前綴，沒有前綴就不加
-    const proj = /^\[(平台|銀行系統)\]\s*/.exec(c.title);
-    const msgText = `[交接] ${proj ? `【${proj[1]}】` : ''}${cardNo(c.seq)} ${c.title.slice(proj ? proj[0].length : 0)} → @${toName}：${note}`;
+    // 專案標記取自卡片的專案欄位（C-146 A）
+    const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${toName}：${note}`;
     let messageId = null, notifyError = null;
     try {
       const r = await createMessage(ctx, me, { text: msgText, requestId: `handover_${c.uid}_${c.version}`, recipientIds: [to], project: c.project });

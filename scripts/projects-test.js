@@ -208,6 +208,14 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const inc = (await call(plat.token, `/api/messages?after=${encodeURIComponent(after0)}`)).body;
     assert.equal(inc.items.length, 0, '輪詢拿不到別專案的新訊息');
     assert.notEqual(inc.nextCursor, after0, '游標仍推進到最新');
+    // PO 第 967 則：通知列表也隔離。兩邊成員先收到銀行系統的指定，被移出銀行系統後就不再列出
+    await put(liu.token, both.participantId, ['平台', '銀行系統']);
+    const toBoth = (await msg(liu.token, '[需確認] 給兩邊 PG', { project: '銀行系統', recipientIds: [both.participantId] })).body;
+    assert.ok((await call(both.token, '/api/notifications?limit=100')).body.items.some(n => n.messageId === toBoth.messageId), '屬於銀行系統時收得到');
+    await put(liu.token, both.participantId, ['平台']);
+    const bn = (await call(both.token, '/api/notifications?limit=100')).body.items;
+    assert.ok(!bn.some(n => n.messageId === toBoth.messageId), '移出銀行系統後，銀行系統的通知不再列出');
+    assert.equal((await call(both.token, '/api/notifications/count')).body.pending, bn.length, '未讀數與列表一致');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);
