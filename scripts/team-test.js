@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { ROLES } from '../src/roles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -205,9 +206,22 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(ob.includes('所在環境：行內'), '接入設定寫出自己的環境');
     assert.ok(ob.includes('九、團隊成員與所在環境') && ob.includes('劉昱志的需求分析助手（你）'), '接入設定有團隊名冊');
     assert.ok(!ob.includes('平台通知'), '名冊不含系統身分');
+    // C-147：勾選「允許自動啟動待命」才寫已同意；行內／投信不論勾不勾都先問
+    const obIn = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding?autoStandby=1`)).body.text;
+    assert.ok(!obIn.includes('所屬人類已同意自動啟動待命') && obIn.includes('公司電腦可能不允許背景程式'), '行內勾選仍先問');
+    assert.ok(!ob.includes('所屬人類已同意自動啟動待命') && ob.includes('並詢問是否同意啟動'), '沒帶參數照舊先問');
+    const watcherSha = createHash('sha256').update(fs.readFileSync(path.join(__dirname, '..', 'public', 'watcher.mjs'))).digest('hex');
+    assert.ok(ob.includes(watcherSha), '接入設定的 watcher SHA-256 與 public/watcher.mjs 一致');
+    for (const s of ['/watcher.mjs', 'Node 22', 'watcher.env', `AIGILE_ME=${ba.participantId}`, '要求停止', '401 INVALID_TOKEN', '429 RATE_LIMITED']) {
+      assert.ok(ob.includes(s), `接入設定含 ${s}`);
+    }
     const upd = (await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: '行外' })).body;
     assert.equal(upd.environment, '行外', '可修改環境');
     assert.equal((await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: 'x'.repeat(21) })).body.error.code, 'INVALID_REQUEST', '環境上限 20 字');
+    const obOut = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding?autoStandby=1`)).body.text;
+    assert.ok(obOut.includes('所屬人類已同意自動啟動待命') && obOut.includes('做到第 8 步（啟動待命）後'), '行外勾選 → 自動啟動待命');
+    const obOutNo = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding`)).body.text;
+    assert.ok(!obOutNo.includes('所屬人類已同意自動啟動待命') && obOutNo.includes('沒有預先同意自動啟動'), '行外沒勾 → 先問');
     const msg = await post(ba.token, '[AI 簽到] 我是 BA');
     assert.equal(msg.author.environment, '行外', '訊息作者帶環境');
 

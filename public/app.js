@@ -2462,7 +2462,9 @@
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI 助手</button>
         <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a>
       </div>
+      <label class="check"><input type="checkbox" id="ai-auto-standby"${autoStandbyConsent ? ' checked' : ''}> 允許 AI 自動啟動待命（watcher／wait-for-bell，簽到後直接啟動再回報；行內／投信仍會先問你）</label>
       <div id="ai-list" class="stack"></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });
+    body.querySelector('#ai-auto-standby').onchange = e => { autoStandbyConsent = e.target.checked; };
     let items = [];
     const open = new Set();
     async function draw() {
@@ -2481,7 +2483,7 @@
           b.closest('.ai-card').outerHTML = aiCardHtml(ai, open.has(ai.participantId));
         } else if (b.dataset.act === 'copy') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
-          const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`);
+          const { text } = await api(onboardingUrl(ai));
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'token') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
@@ -2515,6 +2517,10 @@
     await draw();
   }
 
+  // C-147：「允許 AI 自動啟動待命」預設勾選；勾選才在接入設定寫明已同意，沒勾照舊先問
+  let autoStandbyConsent = true;
+  const onboardingUrl = ai => `/api/my-ais/${ai.participantId}/onboarding${autoStandbyConsent ? '?autoStandby=1' : ''}`;
+
   // 重發後：只需把新 Token 換進 AI 的環境，不用重讀整份接入設定
   function openTokenOnly(ai) {
     const body = openModal('已重發 Token', `
@@ -2527,7 +2533,7 @@
     const m = body.modal;
     m.querySelector('#tok-copy').onclick = async () => toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
     m.querySelector('#tok-full').onclick = async () => {
-      const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`);
+      const { text } = await api(onboardingUrl(ai));
       toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
     };
   }

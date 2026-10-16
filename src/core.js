@@ -63,6 +63,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const SB_URL = String(config.supabaseUrl || '').replace(/[/]+$/, '');
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
+  // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
+  const WATCHER_SHA256 = '78c654858126171eb6738d0419d1c38f6327cae0611915f3296a6e88984b5ac8';
   const defer = config.defer || (p => p);
   function ringDoorbell(ids, at) {
     if (!SB_URL || !SB_KEY || !ids.length) return;
@@ -528,7 +530,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   }
 
   // 「複製到我的 AI」：貼到 AI 對話即可接入的完整提示詞
-  async function onboardingText(base, ai) {
+  // consent：所屬人類在網頁勾了「允許 AI 自動啟動待命」（C-147）；行內／投信不論勾不勾都先問
+  async function onboardingText(base, ai, { consent = false } = {}) {
     const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
     const s = settingsOf(ai);
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
@@ -536,6 +539,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const byId = new Map(members.map(p => [p.id, p]));
     const roster = members.map(p => `- ${p.name}${p.id === ai.id ? '（你）' : ''}：${p.kind === 'ai' ? 'AI' : '人類'}，角色 ${p.role || '未設定'}，所在環境 ${p.env || '未設定'}${p.kind === 'ai' ? '，所屬 ' + (byId.get(p.owner_id)?.name || '?') : ''}（participantId ${p.id}）`).join('\n');
     const agent = ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI';
+    const insideEnv = ['行內', '投信'].includes(ai.env);
+    const autoStandby = consent && !insideEnv;
+    const envFile = `.aigile/${agent}/watcher.env`;
+    const watcherEnv = [`AIGILE_BASE=${base}`, `AIGILE_ME=${ai.id}`, `AIGILE_TOKEN_FILE=.aigile/${agent}/.token`,
+      ...(SB_URL && SB_KEY ? [`SUPABASE_URL=${SB_URL}`, `SUPABASE_KEY=${SB_KEY}`, `SUPABASE_TOPIC=${SB_TOPIC}`] : []),
+      'WAKE_CMD=echo WAKE'].join('\n');
+    const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
     return `# 昱志血汗勞工 接入設定：${ai.name}
 
 你即將以 AI 成員身分加入「昱志血汗勞工」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
@@ -568,10 +578,28 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 5. 處理既有通知：GET /api/notifications?status=pending，與你無關的靜默 ACK。
 6. 簽到一次：POST /api/messages，requestId 固定為 "req_checkin_${ai.id}"，內容例如「[AI 簽到] 我是 ${owner.name} 的 ${shortName}，角色為 ${ai.role}。已成功連線，目前可接受指定任務。」之後重連不再簽到。
 7. 建立狀態檔 .aigile/${agent}/state.json（見第五節），記錄游標與工作狀態，中斷後才能接續。可直接使用規格文件第 7 節的 poll.js：node poll.js --agent ${agent}。
-8. 回報 ${owner.name}：接入結果、你打算如何輪詢，並詢問是否同意建立定期輪詢排程。
+${autoStandby
+  ? `8. 啟動待命（見第四節）：${owner.name} 已在網頁勾選「允許 AI 自動啟動待命」，所屬人類已同意自動啟動待命。依你的能力選一種並確認實際啟動成功，再一次回報 ${owner.name}：接入結果、用哪種方式待命、日誌在哪、怎麼停止。`
+  : `8. 回報 ${owner.name}：接入結果、你打算用哪種方式待命（見第四節），並詢問是否同意啟動。${askWhy}`}
 
-## 四、輪詢（取得同意後才建立排程）
-- 簽到不等於啟動排程。只有在 ${owner.name} 明確同意、而且你具備排程能力時，才建立定期輪詢（建議每 1 分鐘），並確認排程實際建立成功。沒有排程能力時，改由 ${owner.name} 手動叫你跑單輪。
+## 四、待命與輪詢（${autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
+- 待命方式依你的能力擇一，由上往下選第一個做得到的：
+  1. 能在背景常駐程式、又能監看它的輸出（例如 Claude Code 的背景指令＋Monitor）→ watcher：平時只查未讀數，幾乎不耗用量，被 @ 才叫醒你。
+  2. 只能在回合內執行指令（例如 Codex）→ wait-for-bell（見第十三節）。
+  3. 都做不到 → 手動：由 ${owner.name} 叫你跑單輪，回報時要說清楚。
+- ${autoStandby
+  ? `這份設定產生時 ${owner.name} 已勾選同意，不必再問；啟動成功後回報即可，${owner.name} 隨時可要你停止。啟動失敗就照實回報，改用下一種。`
+  : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}
+- 簽到不等於已待命：要看到 watcher 日誌出現連線或巡檢紀錄（或 wait-for-bell 已在執行），才算啟動成功，不可假稱。啟動後把 wakeMode 寫進工作記憶（第十二節）。
+- watcher 設定（需要 Node 22 以上，內建 WebSocket）：
+  1. 下載 ${base}/watcher.mjs 存成 .aigile/watcher/watcher.mjs，核對 SHA-256 = ${WATCHER_SHA256}，並先讀過內容；不符就停止並告訴 ${owner.name}。
+  2. 建立 ${envFile}，連線設定只放這個檔，不貼群組、不進 git（.aigile/ 已被 .gitignore 排除）：
+\`\`\`
+${watcherEnv}
+\`\`\`
+  3. 在含 .aigile 的資料夾背景啟動，輸出寫進日誌：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '\n     （平台目前未設定即時通道，watcher 只會每 15 分鐘巡檢一次。）'}
+  4. 監看日誌：出現「喚醒：」→ 跑一輪（見下方）；出現「失敗」「錯誤」「被拒」→ 回報 ${owner.name}。WAKE_CMD=echo WAKE 只記錄門鈴，由你開著的對話負責處理。
+  5. 停止：結束 watcher 程序與監看。
 - 每一輪：
   1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
@@ -579,8 +607,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   4. 處理完才 ACK，最後才把 nextCursor 寫回 .aigile/${agent}/state.json。
   5. 每輪先確認 GET /api/me 的 participantId 等於 ${ai.id}；不一致代表拿錯 Token（例如與其他 AI 共用資料夾），立刻停止並告訴 ${owner.name}。
   6. 沒有新訊息也沒有通知 → 只記一句「無新事項」，不發文。
-- ${owner.name} 要求停止 → 立刻刪除排程；要求恢復 → 重建排程，延續原游標，不重新簽到。
-- 收到 401 INVALID_TOKEN 或 TOKEN_EXPIRED → 立刻停止所有排程，在本機對話告訴 ${owner.name}。
+- ${owner.name} 要求停止 → 立刻停止 watcher／wait-for-bell 與排程；要求恢復 → 重新啟動，延續原游標，不重新簽到。
+- 收到 401 INVALID_TOKEN 或 TOKEN_EXPIRED → 立刻停止 watcher 與所有排程，在本機對話告訴 ${owner.name}。
 - 收到 429 RATE_LIMITED → 依 Retry-After 秒數等待後再試。
 
 ## 五、狀態檔 .aigile/${agent}/state.json
@@ -645,7 +673,9 @@ ${roster}
 ## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）
 - 處理完手上的事，執行 node wait-for-bell.js（零依賴，可由平台 /wait-for-bell.js 下載；先讀過再用；建議 --max-min=5 起步）。依輸出最後一行：PENDING <N> → 收訊息、處理、回覆，做完再執行一次；TIMEOUT → 再執行一次；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}，不要自行重試或繞過。需要設定 AIGILE_BASE 與 AIGILE_TOKEN_FILE（Token 絕不印出）。細節見規格 3.12。
 
-請先回覆 ${owner.name}：你是否具備 HTTP 與排程能力，然後從「初次接入」第 1 步開始。`;
+${autoStandby
+  ? `請從「初次接入」第 1 步開始，做到第 8 步（啟動待命）後，一次回報 ${owner.name}。`
+  : `請先回覆 ${owner.name}：你是否具備 HTTP 與背景執行（watcher）或排程能力，然後從「初次接入」第 1 步開始。`}`;
   }
 
   // ---------- 路由 ----------
@@ -900,9 +930,10 @@ ${roster}
     return { deleted: true, name: ai.name, unassignedCards: cards.map(c => 'C-' + (c.seq + 100)), notified: noticed };
   });
   route('POST', '/api/my-ais/:id/enable', ({ me, params, ctx }) => { requireHuman(me); return setAiStatus(ctx, me, params.id, 'active'); });
-  route('GET', '/api/my-ais/:id/onboarding', async ({ me, params, base }) => {
+  route('GET', '/api/my-ais/:id/onboarding', async ({ me, params, base, url }) => {
     requireHuman(me);
-    return { text: await onboardingText(base, await myAi(me, params.id)) };
+    const consent = ['1', 'true'].includes(url.searchParams.get('autoStandby'));
+    return { text: await onboardingText(base, await myAi(me, params.id), { consent }) };
   });
   // ---------- 上傳文件（需求 v1.1） ----------
   const requireStorage = () => {
