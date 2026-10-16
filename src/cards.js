@@ -261,7 +261,10 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
       ...logStmt(c.seq, me, [`建立卡片（類型：${type}）`, ...(type === '決策' ? [`等 ${people.get(dec.decider_id)?.name} 決定`] : [])], at),
       ...messageIds.map(m => ['INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', [c.seq, m]]),
     ]);
-    return { __status: 201, ...view(c, people) };
+    // C-155：建卡時指定了別人（負責人、等誰、決策者）就通知對方，和交接一樣會叫醒 AI
+    const who = [owner && `負責人 ${people.get(owner)?.name}`, waitFor && (type === '決策' ? `等 ${people.get(waitFor)?.name} 決定` : `等 ${people.get(waitFor)?.name}`)].filter(Boolean).join('；');
+    await notifyCard(ctx, me, c, [owner, waitFor], `建立卡片${who ? '，' + who : ''}`, 'create');
+    return { __status: 201, ...view(await load(cardNo(c.seq)), people) };
   });
 
   route('PATCH', '/api/cards/:id', async ({ ctx, me, req, params }) => {

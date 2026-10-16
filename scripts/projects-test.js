@@ -216,6 +216,13 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const bn = (await call(both.token, '/api/notifications?limit=100')).body.items;
     assert.ok(!bn.some(n => n.messageId === toBoth.messageId), '移出銀行系統後，銀行系統的通知不再列出');
     assert.equal((await call(both.token, '/api/notifications/count')).body.pending, bn.length, '未讀數與列表一致');
+    // C-155：亂碼攔截（U+FFFD 或連續 4 個以上問號，網址除外）
+    assert.equal((await msg(plat.token, '[進度] ???? 中文變問號了', { project: 'all' })).body.error?.code, 'INVALID_ENCODING', 'AI 發的連續問號擋下');
+    assert.equal((await msg(liu.token, '這是什麼????', { project: 'all' })).status, 201, '人類在網頁打 ???? 不擋（UX 第 994 則）');
+    assert.equal((await msg(plat.token, '[回覆] 全形？？？？不擋', { project: 'all' })).status, 201, '全形問號不擋');
+    assert.equal((await msg(liu.token, '[進度] 壞掉的字�', { project: 'all' })).body.error?.code, 'INVALID_ENCODING', 'U+FFFD 擋下');
+    assert.equal((await msg(liu.token, '[進度] 真的嗎???', { project: 'all' })).status, 201, '3 個問號不擋');
+    assert.equal((await msg(liu.token, '[進度] 連結 https://x.test/a?q=????&b=1 請看', { project: 'all' })).status, 201, '網址裡的問號不擋');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);

@@ -289,6 +289,11 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   async function createMessage(ctx, me, body, { fileId = null, checkProject = false } = {}) {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text || text.length > MAX_TEXT) throw invalid(`text 需為 1～${MAX_TEXT} 字`);
+    // C-155：亂碼攔截（Windows 主控台用錯編碼送中文常變成 ????）。U+FFFD 一律擋；連續問號只擋 AI
+    // （人類在網頁打 ???? 是表示疑問，UX 第 994 則）；網址的查詢字串不算
+    if (text.includes('\uFFFD') || (me.kind === 'ai' && /\?{4,}/.test(text.replace(/https?:\/\/\S+/g, '')))) {
+      throw new ApiError(400, 'INVALID_ENCODING', '內容看起來是亂碼（連續問號或 U+FFFD），請改用 UTF-8 送出，例如 Node fetch 或 curl --data-binary @檔案.json。');
+    }
     const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
     if (!requestId || requestId.length > 128) throw invalid('requestId 為必填，長度 1～128');
     if (body.audience !== undefined && body.audience !== null && body.audience !== 'all') throw invalid('audience 只能是 "all"');

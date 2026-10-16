@@ -223,7 +223,8 @@
     loadTeam();
     loadCards().then(() => { renderMessages(false); if (state.page === 'work') renderWork(); }).catch(() => {});
     connectEvents();
-    showPage(['work', 'inbox', 'team'].includes(store.get(PAGE_KEY)) ? store.get(PAGE_KEY) : 'messages');
+    const savedPage = store.get(PAGE_KEY);
+    showPage(['work', 'inbox', 'team', 'overview'].includes(savedPage) ? savedPage : !savedPage && myProjects().length > 1 ? 'overview' : 'messages');
   }
 
   async function loadParticipants() {
@@ -463,7 +464,8 @@
   }
   const myProjects = () => (state.me?.projects || []).filter(p => PROJECTS.includes(p));
   const singleProject = () => myProjects().length === 1;
-  // 目前檢視（C-146 A）：單一專案成員固定自己的專案；多專案成員可切換專案、總覽（all）或跨專案頻道（cross），記在瀏覽器
+  // 目前檢視（C-146 A）：單一專案成員固定自己的專案；多專案成員可切換各專案、跨專案頻道（cross）或全部專案（all），記在瀏覽器。
+  // 下拉只列各專案與跨專案頻道；全部專案由側欄「今日總覽」進入（昱志第 997 則、UX 第 998 則），多專案成員預設就是全部專案
   function projectView() {
     if (singleProject()) return myProjects()[0];
     if (!myProjects().length) return 'cross';
@@ -477,7 +479,7 @@
   const msgInView = p => { const v = projectView(); return v === 'all' || (v === 'cross' ? !p : p === v || (!p && singleProject())); };
   const cardInView = c => { const v = projectView(); return v === 'all' || v === 'cross' || c.project === v; };
   const inView = p => { const v = projectView(); return v === 'all' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
-  const viewLabel = v => (v === 'all' ? '總覽' : v === 'cross' ? '跨專案頻道' : projName(v));
+  const viewLabel = v => (v === 'all' ? '全部專案' : v === 'cross' ? '跨專案頻道' : projName(v));
   // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議
   function todoByView() {
     const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || [])];
@@ -488,7 +490,7 @@
   function drawProjSwitch() {
     document.querySelectorAll('[data-nav="overview"]').forEach(b => { b.hidden = myProjects().length < 2; });
     const v = projectView(), counts = todoByView();
-    const opts = [...myProjects(), ...(myProjects().length > 1 ? ['all', 'cross'] : [])];
+    const opts = [...myProjects(), ...(myProjects().length > 1 ? ['cross'] : [])];
     const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你做的 ${counts[k]} 件">${counts[k]}</span>` : '');
     document.querySelectorAll('.proj-switch').forEach((el, i) => {
       el.innerHTML = singleProject() || !myProjects().length
@@ -509,10 +511,8 @@
     sel.value = projTouched ? sel.value : defaultProj();
   }
   function setProjectView(k) {
-    const was = projectView();
     store.set(PROJ_KEY, k);
-    if (k === 'all' && was !== 'all') return showPage('overview'), drawProjSwitch(), renderMessages(true);
-    if (k !== 'all' && state.page === 'overview') showPage('messages');
+    if (state.page === 'overview') showPage('messages');
     projTouched = false;
     drawProjSwitch();
     syncFilterBar();
@@ -567,7 +567,7 @@
     $('#f-clear').hidden = !filtering();
     const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
   }
-  const filterCount = () => (state.filter.scope !== 'all' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0) + (!singleProject() && projectView() !== 'all' ? 1 : 0);
+  const filterCount = () => (state.filter.scope !== 'all' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
   function setFilter(patch) {
     Object.assign(state.filter, patch);
     state.onlyMine = state.filter.scope === 'related';
@@ -598,7 +598,7 @@
     const draw = () => {
       body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
       const pg = body.querySelector('#fs-proj-g');
-      if (pg) pg.innerHTML = [['all', '全部'], ...PROJECTS.map(p => [p, projName(p)])].map(([k, t]) => `<button type="button" data-fs-proj="${k}" aria-pressed="${draft.project === k}">${t}</button>`).join('');
+      if (pg) pg.innerHTML = [['all', '全部專案'], ...myProjects().map(p => [p, projName(p)]), ['cross', '跨專案頻道']].map(([k, t]) => `<button type="button" data-fs-proj="${k}" aria-pressed="${draft.project === k}">${t}</button>`).join('');
       body.querySelector('#fs-member').value = draft.member;
       body.querySelector('#fs-tag').value = draft.tag;
     };
@@ -609,7 +609,7 @@
     });
     body.querySelector('#fs-member').onchange = e => { draft.member = e.target.value; };
     body.querySelector('#fs-tag').onchange = e => { draft.tag = e.target.value; };
-    body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '', project: showProj ? 'all' : projectView() }); draw(); };
+    body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '', project: projectView() }); draw(); };
     body.modal.querySelector('#fs-apply').onclick = () => {
       closeModal();
       if (showProj && draft.project !== projectView()) { store.set(PROJ_KEY, draft.project); projTouched = false; drawProjSwitch(); if (state.page === 'work') renderWork(); }
@@ -862,14 +862,16 @@
       setReply(null);
       onInput();
     } catch (err) {
-      if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'INVALID_REQUEST') pendingRequestId = null;
-      toast('送出失敗：' + err.message);
+      if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'INVALID_REQUEST' || err.code === 'INVALID_ENCODING') pendingRequestId = null;
+      // C-155：亂碼被擋時草稿留在輸入框，原因直接寫在框下（UX 第 994 則）
+      if (err.code === 'INVALID_ENCODING') { const e = $('#composer-error'); e.textContent = '訊息含亂碼字元（�），請確認編碼或刪掉那個字元後再送。'; e.hidden = false; }
+      else toast('送出失敗：' + err.message);
     } finally {
       sending = false;
       sendBtn.disabled = !input.value.trim();
     }
   }
-  input.addEventListener('input', () => { pendingRequestId = null; });
+  input.addEventListener('input', () => { pendingRequestId = null; $('#composer-error').hidden = true; });
   // 手機版：打字時收起頂欄大小、警示與篩選列，鍵盤出現時訊息區才有空間
   const typingMq = matchMedia('(max-width: 600px)');
   input.addEventListener('focus', () => { if (typingMq.matches) document.body.classList.add('typing'); });
@@ -1448,6 +1450,7 @@
     const b = e.target.closest('[data-nav]');
     if (!b) return;
     closeSheet(false);
+    if (b.dataset.nav === 'overview' && projectView() !== 'all') { store.set(PROJ_KEY, 'all'); drawProjSwitch(); syncFilterBar(); renderMessages(true); }
     showPage(b.dataset.nav);
     if (b.dataset.nav === 'messages') $('#input').focus();
   });

@@ -254,6 +254,14 @@ const rid = () => 'req_c' + (++n);
 
     // C-115 卡片動作發通知：決定、變更負責人／等待對象、採用建議，會 @ 相關成員（走既有通知與門鈴）
     const pend = async tok => (await call(tok, '/api/notifications?status=pending&limit=100')).body.items.map(n => n.preview || '');
+    // C-155：建卡時指定別人也通知（負責人、等誰、決策者）；指定自己不通知
+    const cc = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '建卡就指派', ownerId: qa.participantId, waitForId: pg.participantId })).body;
+    assert.ok((await pend(qa.token)).some(t => t.includes(cc.cardId) && t.includes('建立卡片，負責人 QA助手')), 'C-155：建卡指定負責人 → 負責人收到通知');
+    assert.ok((await pend(pg.token)).some(t => t.includes(cc.cardId) && t.includes('等 PG助手')), 'C-155：建卡指定等誰 → 對方收到通知');
+    const ccDec = (await call(pg.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: 'AI 提決策', question: '要不要？' })).body;
+    assert.ok((await pend(liu.token)).some(t => t.includes(ccDec.cardId) && t.includes('決定')), 'C-155：AI 建決策卡 → 決策者（所屬人類）收到通知');
+    const ccSelf = (await call(qa.token, '/api/cards', 'POST', { requestId: rid(), title: '自己的卡', ownerId: qa.participantId })).body;
+    assert.ok(!(await pend(qa.token)).some(t => t.includes(ccSelf.cardId)), 'C-155：指定自己不通知');
     const nd = (await call(pg.token, '/api/cards', 'POST', { requestId: rid(), type: '決策', title: '[平台] 通知測試決策', question: '要不要通知？' })).body;
     await call(liu.token, `/api/cards/${nd.cardId}/decide`, 'POST', { result: '要求補充', note: '請補充影響範圍' });
     assert.ok((await pend(pg.token)).some(t => t.startsWith('[通知] 【平台】' + nd.cardId) && t.includes('要求補充：請補充影響範圍')), '要求補充通知提案人，帶專案標記且標題去掉舊前綴');

@@ -1273,3 +1273,4 @@ body.drawer-docked #app { padding-right: 400px; }
 .q-opt { min-height: 44px; height: auto; display: inline-flex; align-items: flex-start; gap: 8px; padding: 8px 14px; white-space: normal; text-align: left; line-height: 1.5; }
 .q-opt b { flex: none; }
 @media (max-width: 640px) { .q-opts { flex-direction: column; align-items: stretch; } }
+.composer-error { margin: 4px 0 0; }
