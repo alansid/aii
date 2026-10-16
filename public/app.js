@@ -395,7 +395,15 @@
   function setConnBanner(down) { const b = $('#conn-banner'); if (b) b.hidden = !down; }
 
   // ---------- 訊息 ----------
-  const BASE_TITLE = document.title;
+  let BASE_TITLE = document.title;
+  // C-193：群組名稱由管理員在網頁設定；登入頁、側欄、分頁標題都讀它
+  function applyGroupName(name) {
+    if (!name) return;
+    document.querySelectorAll('[data-group-name]').forEach(el => { el.textContent = name; });
+    document.title = document.title.replace(BASE_TITLE, name);
+    BASE_TITLE = name;
+  }
+  fetch('/api/group').then(r => r.json()).then(d => applyGroupName(d.name)).catch(() => {});
   const meId = () => state.me.participantId;
   const isToMe = m => m.recipients.some(r => r.participantId === meId());
   const isReplyToMe = m => {
@@ -4058,7 +4066,8 @@
     for (const id of pick) permAdd(state.participants.get(id), pj);
   }
   function permProjectsHtml() {
-    return `<div class="pm-projs">${state.projectList.map(p => {
+    return `<div class="pm-projs"><div class="pm-group-name"><label>群組名稱<input id="pm-group-name" maxlength="30" value="${esc(BASE_TITLE)}" aria-describedby="pm-gn-hint"></label><button type="button" class="btn small primary" data-pp="groupname">儲存</button><span class="muted small" id="pm-gn-hint">顯示在登入頁、左上角、分頁標題與 AI 接入設定。</span></div>
+      ${state.projectList.map(p => {
       const blocked = !p.archived && p.openCards > 0, open = perm.openLog === p.id;
       return `<div class="pa-row${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}">
         <div class="pm-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}<span class="muted small">成員 ${p.memberCount} · 未結案卡 ${p.openCards}</span></div>
@@ -4195,6 +4204,12 @@
     const pp = t.closest('[data-pp]');
     if (!pp) return;
     const id = pp.closest('[data-pj]')?.dataset.pj, a = pp.dataset.pp;
+    if (a === 'groupname') {
+      const name = $('#pm-group-name').value.trim();
+      if (!name) return toast('請輸入群組名稱');
+      try { const d = await api('/api/group', { method: 'PUT', body: { name } }); applyGroupName(d.name); toast(`群組名稱已改成「${d.name}」`); } catch (err) { toast(err.message); }
+      return;
+    }
     try {
       if (a === 'log') {
         perm.openLog = perm.openLog === id ? null : id;

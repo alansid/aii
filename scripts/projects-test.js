@@ -308,6 +308,14 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.ok((await call(liu.token, '/api/participants')).body.items.some(p => p.participantId === bank.participantId), '兩邊都屬的人看得到全部');
     assert.deepEqual((await call(plat.token, '/api/projects')).body.items.map(p => p.id), ['平台'], '專案清單只回自己所屬的專案');
     assert.ok((await call(liu.token, '/api/projects')).body.items.length >= 2, '兩邊都屬的人看得到全部專案');
+    // ===== C-193：群組名稱 =====
+    assert.equal((await call(null, '/api/group')).body.name, '昱志的血汗勞工', '預設群組名稱（不用登入就讀得到）');
+    assert.equal((await call(percy.token, '/api/group', 'PUT', { name: '別人改' })).status, 403, '只有管理員能改');
+    assert.equal((await call(liu.token, '/api/group', 'PUT', { name: '' })).status, 400, '不能空白');
+    assert.equal((await call(liu.token, '/api/group', 'PUT', { name: '新群組名' })).body.name, '新群組名');
+    assert.equal((await call(null, '/api/group')).body.name, '新群組名');
+    const ob = (await call(liu.token, `/api/my-ais/${plat.participantId}/onboarding`)).body.text;
+    assert.ok(ob.startsWith('# 新群組名 接入設定') && ob.includes('加入「新群組名」協作群組'), '接入 PROMPT 跟著改');
     console.log('projects: all checks passed');
   } catch (e) {
     console.error(e);

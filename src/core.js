@@ -630,6 +630,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     return aiView(await db.get('SELECT * FROM participants WHERE id = ?', ai.id), await peopleMap(ctx));
   }
 
+  // C-193：群組名稱存在 app_settings 的 group_name，沒設定時用預設
+  const DEFAULT_GROUP_NAME = '昱志的血汗勞工';
+  const groupName = async () => (await db.get("SELECT value FROM app_settings WHERE key = 'group_name'").catch(() => null))?.value || DEFAULT_GROUP_NAME;
   // 「複製到我的 AI」：貼到 AI 對話即可接入的完整提示詞
   // consent：所屬人類在網頁勾了「允許 AI 自動啟動待命」（C-147）；行內／投信不論勾不勾都先問
   async function onboardingText(base, ai, { consent = false } = {}) {
@@ -659,9 +662,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       ...(SB_URL && SB_KEY ? [`SUPABASE_URL=${SB_URL}`, `SUPABASE_KEY=${SB_KEY}`, `SUPABASE_TOPIC=${SB_TOPIC}`] : []),
       'WAKE_CMD=echo WAKE'].join('\n');
     const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
-    return `# 昱志血汗勞工 接入設定：${ai.name}
+    const gname = await groupName();
+    return `# ${gname} 接入設定：${ai.name}
 
-你即將以 AI 成員身分加入「昱志血汗勞工」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
+你即將以 AI 成員身分加入「${gname}」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
 ${trial ? `
 > **你是試用者：不常駐。** 不開 watcher、不用 wait-for-bell、不建排程；${owner.name} 叫醒你時才跑一輪：依「主要職責」的每輪任務實際操作網頁，跑完把回饋發給 PO（recipientIds 只放 ${po ? `${po.name}，participantId ${po.id}` : 'PO'}）就結束。回饋只發給 PO；不回覆別人的協調訊息、不改卡片、不交辦正式工作。
 ` : ''}
@@ -1104,6 +1108,15 @@ ${trial
   // UX 第 1354 則：不屬於全部專案的人，專案清單只回自己所屬的專案（不露出別專案名稱）
   const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))) }; };
   route('GET', '/api/projects', async ({ ctx, me }) => scopeProjects(await projectsResponse(ctx), me));
+  // C-193：群組名稱（登入頁也要顯示，所以讀取不用登入）；只有管理員能改
+  route('GET', '/api/group', async () => ({ name: await groupName() }), { open: true });
+  route('PUT', '/api/group', async ({ ctx, me, req }) => {
+    await requireAdmin(ctx, me);
+    const name = String((await readJson(req)).name ?? '').trim();
+    if (!name || name.length > 30 || /\n/.test(name)) throw invalid('name 需為 1～30 字，不可換行');
+    await db.run("INSERT INTO app_settings (key, value) VALUES ('group_name', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", name);
+    return { name };
+  });
   route('GET', '/api/projects/:id/events', async ({ params, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
     const rows = await db.all('SELECT * FROM project_events WHERE project_id = ? ORDER BY id DESC LIMIT ?', params.id, limit);

@@ -1576,3 +1576,9 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 /* ===== C-190 ===== */
 .toast-undo { margin-left: 8px; color: inherit; text-decoration: underline; font-weight: 700; }
 .pm-others summary { cursor: pointer; list-style: revert; }
+
+/* ===== C-193 群組名稱 ===== */
+.pm-group-name { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.pm-group-name label { display: grid; gap: 4px; font-size: 13px; }
+.pm-group-name input { min-height: 40px; min-width: 240px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.pm-group-name .muted { flex-basis: 100%; }
