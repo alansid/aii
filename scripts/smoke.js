@@ -147,6 +147,34 @@ async function stopServer(server) {
     assert.equal(errCode(await call(re.token, '/api/me')), 'INVALID_TOKEN', '停用');
     await call(liu.token, `/api/my-ais/${ai.participantId}/enable`, 'POST');
 
+    // C-164：網頁依時間載入（span／min／beforeId）與某則訊息前後（/around）；AI 的游標參數不變
+    if (!EXTERNAL) {
+      const { DatabaseSync } = await import('node:sqlite');
+      const ids = [];
+      for (let i = 0; i < 12; i++) ids.push((await call(liu.token, '/api/messages', 'POST', { requestId: 'c164-' + i, text: `[進度] 時間測試 ${i}` })).body.messageId);
+      const sqlDb = new DatabaseSync(path.join(dataDir, 'switch.db'));
+      const twoDays = new Date(Date.now() - 48 * 3600_000).toISOString();
+      // 前 8 則改成兩天前；之前的其他訊息也一起改成三天前
+      sqlDb.prepare("UPDATE messages SET created_at = ? WHERE id NOT IN (SELECT value FROM json_each(?))").run(new Date(Date.now() - 72 * 3600_000).toISOString(), JSON.stringify(ids));
+      for (const id of ids.slice(0, 8)) sqlDb.prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(twoDays, id);
+      sqlDb.close();
+      const w = (await call(liu.token, '/api/messages?limit=100&span=12&min=2')).body;
+      assert.deepEqual(w.items.map(m => m.messageId), ids.slice(8), 'span=12：只拿最近 12 小時（4 則）');
+      assert.ok(w.hasMore && w.olderCursor && w.from, '還有更早的、回起始時間');
+      const w20 = (await call(liu.token, '/api/messages?limit=100&span=12&min=6')).body;
+      assert.equal(w20.items.length, 6, '最近 12 小時不足 min 則就補到 min 則');
+      assert.equal(w20.items.at(-1).messageId, ids[11]);
+      const older = (await call(liu.token, `/api/messages?limit=100&span=12&beforeId=${ids[8]}`)).body;
+      assert.deepEqual(older.items.map(m => m.messageId), ids.slice(0, 8), '往前：那段沒訊息就跳到更早有訊息的地方，拿它前 12 小時');
+      assert.ok(older.hasMore, '再更早還有（三天前的）');
+      const ar = (await call(liu.token, `/api/messages/${ids[5]}/around?n=2`)).body;
+      assert.deepEqual(ar.items.map(m => m.messageId), ids.slice(3, 8), '/around 回前後各 n 則');
+      assert.ok(ar.hasOlder && ar.hasNewer && ar.olderCursor && ar.newerCursor);
+      const after = (await call(liu.token, `/api/messages?limit=2&after=${encodeURIComponent(ar.newerCursor)}`)).body;
+      assert.deepEqual(after.items.map(m => m.messageId), ids.slice(8, 10), 'newerCursor 可以接著往後拿');
+      const plain = (await call(liu.token, '/api/messages?limit=1')).body;
+      assert.ok(plain.nextCursor && plain.items.length === 1, '沒帶 span 時行為不變（AI 照舊用游標）');
+    }
     // 文件與靜態檔
     const doc = await (await fetch(BASE + '/api/docs/ai-integration')).text();
     assert.ok(doc.includes(BASE) && !doc.includes('{{BASE_URL}}'));

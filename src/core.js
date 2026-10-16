@@ -396,6 +396,31 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const pf = projectFilter(url.searchParams.get('project'), me);
     const scope = await messageScope(me);
     const pfSql = (pf ? ` AND ${pf.sql}` : '') + (scope ? ` AND ${scope.sql}` : ''), pfArgs = [...(pf ? pf.args : []), ...(scope ? scope.args : [])];
+    // C-164（網頁用，選填）：span＝小時數，依時間載入；沒帶 after 時，before／beforeId 往前、都沒帶＝最近 span 小時（不足 min 則補到 min 則）
+    const spanH = Number(url.searchParams.get('span')) || 0;
+    if (spanH > 0 && !after) {
+      const maxSeq = (await db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM messages')).s;
+      let upper = maxSeq + 1;
+      const beforeId = url.searchParams.get('beforeId');
+      if (beforeId) { const b = await db.get('SELECT seq FROM messages WHERE id = ?', beforeId); if (!b) throw new ApiError(404, 'NOT_FOUND', 'beforeId 不存在'); upper = b.seq; }
+      else if (before) upper = decodeCursor(before);
+      let from;
+      if (!beforeId && !before) from = new Date(Date.now() - spanH * 3600_000).toISOString();
+      else { // 往前：以更早那段最新的一則為準往前 span 小時（那段沒訊息就自動跳到再更早有訊息的地方）
+        const anchor = await db.get(`SELECT created_at FROM messages WHERE seq < ?${pfSql} ORDER BY seq DESC LIMIT 1`, upper, ...pfArgs);
+        from = anchor ? new Date(new Date(anchor.created_at).getTime() - spanH * 3600_000).toISOString() : null;
+      }
+      rows = from ? await db.all(`SELECT * FROM messages WHERE seq < ? AND created_at >= ?${pfSql} ORDER BY seq DESC LIMIT ?`, upper, from, ...pfArgs, limit) : [];
+      const min = Math.min(Number(url.searchParams.get('min')) || 0, limit);
+      if (!beforeId && !before && rows.length < min) rows = await db.all(`SELECT * FROM messages WHERE seq < ?${pfSql} ORDER BY seq DESC LIMIT ?`, upper, ...pfArgs, min);
+      rows.reverse();
+      const oldest = rows[0]?.seq ?? upper;
+      hasMore = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq < ?${pfSql} LIMIT 1`, oldest, ...pfArgs));
+      olderCursor = hasMore ? encodeCursor(oldest) : null;
+      nextCursor = encodeCursor(maxSeq);
+      const items = await serializeMessages(ctx, rows);
+      return { items, nextCursor, olderCursor, hasMore, from: (!beforeId && !before) ? from : (rows[0]?.created_at ?? null) };
+    }
 
     if (after) {
       const s = decodeCursor(after);
@@ -1076,6 +1101,20 @@ ${autoStandby
   });
 
   route('GET', '/api/messages', ({ ctx, url, me }) => listMessages(ctx, url, me));
+  route('GET', '/api/messages/:id/around', async ({ ctx, me, params, url }) => {
+    const m = await db.get('SELECT * FROM messages WHERE id = ?', params.id);
+    if (!m || !(await canSeeMessage(me, m))) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
+    const n = Math.min(Math.max(Number(url.searchParams.get('n')) || 20, 1), 50);
+    const scope = await messageScope(me);
+    const sc = scope ? ` AND ${scope.sql}` : '', sa = scope ? scope.args : [];
+    const older = await db.all(`SELECT * FROM messages WHERE seq < ?${sc} ORDER BY seq DESC LIMIT ?`, m.seq, ...sa, n);
+    const newer = await db.all(`SELECT * FROM messages WHERE seq > ?${sc} ORDER BY seq LIMIT ?`, m.seq, ...sa, n);
+    const rows = [...older.reverse(), m, ...newer];
+    const first = rows[0].seq, last = rows[rows.length - 1].seq;
+    const hasOlder = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq < ?${sc} LIMIT 1`, first, ...sa));
+    const hasNewer = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq > ?${sc} LIMIT 1`, last, ...sa));
+    return { items: await serializeMessages(ctx, rows), olderCursor: hasOlder ? encodeCursor(first) : null, newerCursor: encodeCursor(last), hasOlder, hasNewer };
+  });
   route('GET', '/api/messages/:id', async ({ ctx, me, params }) => {
     const m = await db.get('SELECT * FROM messages WHERE id = ?', params.id);
     if (!m || !(await canSeeMessage(me, m))) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');

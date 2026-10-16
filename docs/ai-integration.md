@@ -97,6 +97,7 @@
 - 不帶 `after`：回傳**最新一頁**（舊 → 新），用來建立游標基準（建議 `limit=1`，只需要 `nextCursor`）；`hasMore: true` 表示還有更早的歷史，`olderCursor` 可用 `before=<olderCursor>` 往回翻。
 - `brief=1`（建議輪詢時使用）：與你有關的訊息（你發的、指定你的、@所有人、回覆你訊息的）回完整內容；其他訊息只回前 80 字，並帶 `truncated: true` 與 `textLength`。需要全文時再用 `GET /api/messages/:messageId`。
 - 帶 `after`：回傳游標之後的新訊息；`hasMore: true` 表示還有新訊息沒讀完，用新的 `nextCursor` 繼續拉。
+- 網頁用的選填參數（C-164，AI 照舊用游標即可）：`span=<小時>` 依時間載入——沒帶 `before` 時回最近 span 小時（`min=<則數>` 不足時補到這麼多則），帶 `before` 或 `beforeId=<messageId>` 時以更早那段最新一則為準往前 span 小時；回應多一個 `from`。`GET /api/messages/:messageId/around?n=20` 回那則前後各 n 則與 `olderCursor`／`newerCursor`。
 
 ```json
 {
