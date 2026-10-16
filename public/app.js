@@ -537,12 +537,10 @@
   const myProjects = () => (state.me?.projects || []).filter(p => PROJECTS.includes(p));
   const singleProject = () => myProjects().length === 1;
   // 目前檢視（C-169 兩層導覽）：hub＝第一層「我的專案」、專案 id＝第二層專案內、cross＝跨專案頻道。
-  // 只屬一個專案的人固定自己的專案（沒有第一層），沒有專案的人只有跨專案頻道；所在位置記在網址（/p/平台/訊息、/cross/訊息）
+  // C-185：每個人都有第一層（只屬一個專案、還沒有專案的人也一樣，至少有跨專案頻道卡）；所在位置記在網址（/p/平台/訊息、/cross/訊息）
   state.view = 'hub';
-  const hasHub = () => myProjects().length > 1;
+  const hasHub = () => true;
   function projectView() {
-    if (singleProject()) return myProjects()[0];
-    if (!myProjects().length) return 'cross';
     const v = state.view;
     return myProjects().includes(v) || v === 'cross' ? v : 'hub';
   }
@@ -558,7 +556,7 @@
   // 卡片的專案標籤：專案內整頁都是同一專案，不顯示；第一層、跨專案頻道才顯示
   const cardPTag = c => (myProjects().includes(projectView()) ? '' : projTag(c.project));
   // 訊息：跨專案頻道只看「全部專案」的訊息；專案內只看該專案（單一專案成員沒有第一層，另外看得到跨專案頻道）
-  const msgInView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v || (!p && singleProject())); };
+  const msgInView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); };
   const cardInView = c => { const v = projectView(); return v === 'hub' || (v !== 'cross' && c.project === v); };
   const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
   const viewLabel = v => (v === 'hub' ? '我的專案' : v === 'cross' ? '跨專案頻道' : projName(v));
@@ -610,7 +608,7 @@
   }
   // 發訊息的專案（C-169）：固定是目前所在的專案，不能選；跨專案頻道發的是全部專案；回覆時跟著被回覆的訊息
   function sendTarget() {
-    if (state.replyTo) return singleProject() ? myProjects()[0] : state.replyTo.project || 'all'; // C-172：只屬一個專案的人回覆全部專案的訊息，用自己的專案
+    if (state.replyTo) return state.replyTo.project || 'all'; // 回覆跟著被回覆的訊息（C-185 起專案內只看得到該專案的訊息）
     const v = projectView();
     return v === 'cross' || v === 'hub' ? 'all' : v;
   }
@@ -1119,7 +1117,6 @@
   // C-172：收件匣、卡片抽屜的行內回覆也明確帶專案（兩邊成員沒帶會被伺服器擋下）：卡片的專案＞被回覆訊息的專案＞所在專案
   async function msgProject(body) {
     if (body.project) return body.project;
-    if (singleProject()) return myProjects()[0];
     const card = body.cardId && work.cards.get(body.cardId);
     if (card?.project) return card.project;
     if (body.replyToMessageId) {
@@ -1995,7 +1992,7 @@
     const cm = lastMsgOf(null);
     return `<div class="hub"><section class="hub-main">
         <div class="work-head"><div class="work-title"><h2>我的專案</h2><span class="muted small">${esc(new Date().toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span></div></div>
-        <div class="hub-grid">${cards}</div>
+        <div class="hub-grid">${cards || '<p class="muted hub-empty">你還沒有加入任何專案，請群組管理員把你加入專案；在那之前可以先到跨專案頻道。</p>'}</div>
         <button type="button" class="hub-card hub-cross" data-proj="cross" aria-label="進入跨專案頻道">${projIcon('cross', 44)}<span class="hc-name"><b>跨專案頻道</b><span class="small">規則公告、跨團隊協調。${cm ? `最新：${esc(cm.author.name)} ${whenText(cm.createdAt)}「${esc(oneLine(cm.text, 40))}」` : '最近 12 小時沒有新訊息'}</span></span><span class="hc-go">進入 ›</span></button>
       </section>
       <aside class="hub-todo" aria-label="要你處理">${hubTodoHtml()}</aside></div>`;
