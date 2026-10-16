@@ -34,7 +34,7 @@ const json = async (token, p, method = 'GET', body) => {
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
 const upload = async (token, name, bytes, { declared = true, extra = '' } = {}) => {
-  const q = new URLSearchParams({ name, ...(declared ? { declared: 'true' } : {}) });
+  const q = new URLSearchParams({ name, ...(declared ? { declared: 'true' } : {}), ...(/[?&]project=/.test('&' + extra) ? {} : { project: 'all' }) }); // C-172
   const r = await fetch(`${BASE}/api/files?${q}${extra}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: bytes });
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };

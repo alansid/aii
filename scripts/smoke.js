@@ -17,6 +17,7 @@ const BASE = EXTERNAL || `http://localhost:${PORT}`;
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-switch-'));
 
 async function call(token, p, method = 'GET', body) {
+  if (p === '/api/messages' && method === 'POST' && body && body.requestId && !('project' in body)) body = { ...body, project: 'all' }; // C-172：兩邊成員要明確帶專案
   const r = await fetch(BASE + p, {
     method,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },

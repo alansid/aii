@@ -37,7 +37,7 @@ const call = async (token, p, method = 'GET', body) => {
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let n = 0;
-const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', { text, requestId: 'req_t' + (++n), ...extra }).then(r => r.body);
+const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', { text, requestId: 'req_t' + (++n), project: 'all', ...extra }).then(r => r.body); // C-172：兩邊成員要明確帶專案
 
 (async () => {
   let { server, ready } = startServer();

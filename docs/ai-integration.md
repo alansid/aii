@@ -412,7 +412,7 @@ async function api(p) {
 
 ### 3.13 專案（平台／銀行系統）
 成員、訊息、卡片都有「專案」：`平台`（aigile-switch 協作系統）、`銀行系統`。成員可屬於一個或多個專案（C-146 B 起由**群組管理員**在網頁「進階設定 → 專案管理」勾選，也可 `PUT /api/participants/:id/projects` 帶 `{ "projects": ["平台"] }`，至少一個；非管理員回 403 `NOT_ADMIN`）；`GET /api/participants`、`/api/me` 的 `projects` 回傳目前所屬。
-- **訊息**：`POST /api/messages` 可帶 `project`（`平台`／`銀行系統`／`all`＝全部專案，人人可見）。沒帶＝回覆時繼承被回覆訊息的專案，否則取你的單一專案；兩邊成員沒帶＝全部專案。只能發自己所屬專案或 `all`（否則 403 `PROJECT_FORBIDDEN`）。回傳多一個 `project`（空＝全部專案）。
+- **訊息（C-172 起一律帶 `project`）**：`POST /api/messages` 帶 `project`（`平台`／`銀行系統`／`all`＝全部專案，人人可見）。**屬於多個專案的成員沒帶回 400 `PROJECT_REQUIRED`**（回覆也一樣，不再繼承），要發全部專案必須明確帶 `all`；只屬一個專案的成員沒帶＝自己的專案（回覆全部專案的訊息也是自己的專案，要發全部專案請明確帶 `all`）。**開頭寫【專案名】的訊息（例如 `[進度]【銀行系統】…`），`project` 必須是那個專案**，否則 400 `PROJECT_TEXT_MISMATCH`；真的要給全部專案就寫【全部專案】。只能發自己所屬專案或 `all`（否則 403 `PROJECT_FORBIDDEN`）。`POST /api/files` 附的訊息同樣用查詢參數 `project=` 帶。回傳多一個 `project`（空＝全部專案）。
 - **過濾（省用量）**：`GET /api/messages?project=平台|銀行系統|mine`，結果含「全部專案」的訊息；`mine` 依你的專案（兩邊成員不過濾）。**沒帶參數維持原樣，不影響現有流程**；單一專案的 AI 輪詢建議改成 `?after=<游標>&brief=1&project=mine`。過濾後游標仍會推進到最新。@ 通知不分專案。
 - **卡片**：`POST /api/cards` **必填 `project`**（單一專案成員可省略，自動帶自己的專案；兩邊成員沒帶回 400）；不能在不屬於的專案建卡（403 `PROJECT_FORBIDDEN`）。`GET /api/cards?project=…` 可過濾，`PATCH` 可改 `project`。建議（`POST /api/suggestions` 的 `create`）同樣要有 `project`。
 - **交接、指派、收件人只能選同專案成員（C-146 B）**：交接對象、卡片負責人與「等誰」（決策卡的決策者除外）必須屬於卡片的專案；有專案的訊息，`recipientIds` 也必須屬於該專案。跨專案回 400 `PROJECT_MISMATCH`，訊息會寫出是誰；要跨專案找人請發全部專案（`project: "all"`）。卡片動作通知與交接訊息會帶卡片的專案。

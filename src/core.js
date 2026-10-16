@@ -334,16 +334,24 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     }
     recipientIds.delete(me.id);
 
-    // 專案：不帶＝回覆時繼承被回覆者的專案，否則取發文者的單一專案（兩邊成員＝全部專案）；'all'＝全部專案
+    // 專案（C-172）：只屬一個專案的人沒帶＝自己的專案（回覆全部專案的訊息也一樣，不再繼承「全部專案」）；
+    // 兩邊成員從 API 發文（checkProject）沒帶一律 400，要發全部專案必須明確帶 'all'；'all'＝全部專案
     const mine = projectsOf(me);
     let project;
     if (body.project === undefined || body.project === null || body.project === '') {
-      project = replyTo ? (replyTo.project || null) : (mine.length === 1 ? mine[0] : null);
+      if (mine.length === 1) project = mine[0];
+      else if (checkProject && mine.length > 1) throw new ApiError(400, 'PROJECT_REQUIRED', `你屬於多個專案，發訊息一定要帶 project（${mine.map(nameOf).join('、')}）；要發給全部專案請明確帶 project: "all"。`);
+      else project = replyTo ? (replyTo.project || null) : null;
     } else if (body.project === 'all') project = null;
     else if (PROJECTS.includes(body.project)) {
       if (!mine.includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，只能發自己專案或全部專案（project: "all"）的訊息。');
       project = body.project;
     } else throw invalid(`project 需為：${PROJECTS.join('、')}、all`);
+    if (checkProject) {
+      const head = /^\s*(?:\[[^\]\n]{1,12}\]\s*)?【([^】\n]{1,20})】/.exec(text || '');
+      const named = head && projectRows.find(p => p.name === head[1] || p.id === head[1]);
+      if (named && project !== named.id) throw new ApiError(400, 'PROJECT_TEXT_MISMATCH', `訊息開頭寫【${named.name}】，project 必須帶 ${named.id}（目前是${project ? '「' + nameOf(project) + '」' : '全部專案'}）。真的要發給全部專案，請把開頭改成【全部專案】。`);
+    }
     if (checkProject && project && !audience) {
       const outside = [...recipientIds].map(rid => people.get(rid)).filter(p => !projectsOf(p).includes(project));
       if (outside.length) throw new ApiError(400, 'PROJECT_MISMATCH', `${outside.map(p => p.name).join('、')} 不屬於「${project}」專案，不能指定；跨專案請改發全部專案（project: "all"）。`);
@@ -754,7 +762,7 @@ ${roster}
 - 卡片內容全體成員都看得到，適用與群組訊息相同的環境限制（不貼內部路徑、檔名、程式碼）。
 - 團隊狀態會優先取自你負責的卡片；沒有卡片時才依訊息開頭標籤推斷。細節見規格 3.10、3.11。
 - 查卡省著用：預設只查自己的未結卡 GET /api/cards?status=open&owner=${ai.id}，輪詢用 since 增量，真的需要舊卡才帶 include=archived。已完成＋已驗證滿 7 天的卡會自動封存（未驗證的不會）。
-- 專案：卡片與訊息有 project（平台／銀行系統）。建卡要帶 project（單一專案的你可省略）；訊息預設你的專案、回覆繼承；輪詢可加 project=mine 只讀自己專案與「全部專案」的訊息。細節見規格 3.13。
+- 專案：卡片與訊息有 project（平台／銀行系統）。建卡要帶 project（單一專案的你可省略）；**訊息一律帶 project**（兩邊成員沒帶會被擋 400 PROJECT_REQUIRED，要發全部專案請明確帶 "all"；開頭寫【銀行系統】的訊息必須帶 project=銀行系統，否則 400 PROJECT_TEXT_MISMATCH）；輪詢可加 project=mine 只讀自己專案與「全部專案」的訊息。細節見規格 3.13。
 
 ## 十二、工作記憶（改變時才寫）
 - 把「目前任務」與「待辦」存到平台，換電腦或關機後可讀回：PUT /api/me/state、GET /api/me/state（規格 3.14）。只在狀態改變時才 PUT（內容相同伺服器不會重寫），不要定時重送。
@@ -1242,6 +1250,7 @@ ${trial
       throw await reject(507, 'STORAGE_FULL', `平台總容量已達 ${formatBytes(MAX_TOTAL)} 上限（已用 ${formatBytes(used)}），請等舊檔到期清除後再上傳`);
     }
 
+    if (!q.get('project') && projectsOf(me).length > 1) throw new ApiError(400, 'PROJECT_REQUIRED', '你屬於多個專案，上傳文件要帶 project（查詢參數）；要發給全部專案請帶 project=all。'); // C-172
     const id = randId('file');
     const hash = await sha256(bytes);
     const now = Date.now();
@@ -1262,6 +1271,7 @@ ${trial
       replyToMessageId: q.get('replyToMessageId') || undefined,
       recipientIds: recipientIds.length ? recipientIds : undefined,
       audience: q.get('audience') === 'all' ? 'all' : undefined,
+      project: q.get('project') || undefined,
     }, { fileId: id, checkProject: true });
     await db.run('UPDATE files SET message_id = ? WHERE id = ?', message.messageId, id);
     return { __status: 201, file: fileView(file), message };

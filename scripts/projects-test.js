@@ -60,10 +60,12 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal(m1.project, '平台', '單一專案成員預設自己的專案');
     const m2 = (await msg(bank.token, '[進度] 銀行訊息')).body;
     assert.equal(m2.project, '銀行系統');
-    const m3 = (await msg(liu.token, '[通知] 兩邊成員預設全部專案')).body;
-    assert.equal(m3.project, null, '兩邊成員不帶專案＝全部專案');
-    const m4 = (await msg(liu.token, '[回覆] 回覆平台那則', { replyToMessageId: m1.messageId })).body;
-    assert.equal(m4.project, '平台', '回覆繼承被回覆訊息的專案');
+    assert.equal((await msg(liu.token, '[通知] 兩邊成員沒帶專案')).body.error?.code, 'PROJECT_REQUIRED', 'C-172：兩邊成員不帶專案擋下');
+    const m3 = (await msg(liu.token, '[通知] 兩邊成員明確發全部專案', { project: 'all' })).body;
+    assert.equal(m3.project, null, '要發全部專案必須明確帶 all');
+    assert.equal((await msg(liu.token, '[回覆] 回覆平台那則', { replyToMessageId: m1.messageId })).body.error?.code, 'PROJECT_REQUIRED', 'C-172：兩邊成員回覆也要帶專案');
+    const m4 = (await msg(liu.token, '[回覆] 回覆平台那則', { replyToMessageId: m1.messageId, project: '平台' })).body;
+    assert.equal(m4.project, '平台');
     const m5 = (await msg(liu.token, '[回覆] 明確指定銀行系統', { project: '銀行系統' })).body;
     assert.equal(m5.project, '銀行系統');
     const m6 = (await msg(plat.token, '[通知] 平台成員發全部專案', { project: 'all' })).body;
@@ -197,8 +199,8 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const platN = (await call(plat.token, '/api/notifications?limit=100')).body.items.map(n => n.messageId);
     const bankN = (await call(bank.token, '/api/notifications?limit=100')).body.items.map(n => n.messageId);
     assert.ok(!platN.includes(allBank.messageId) && bankN.includes(allBank.messageId), '@所有人只送到該專案成員');
-    const rp = (await msg(liu.token, '[回覆] 回銀行 PG', { replyToMessageId: bm.messageId })).body;
-    assert.equal(rp.project, '銀行系統', '回覆繼承專案');
+    const rp = (await msg(bank.token, '[回覆] 銀行 PG 回自己那則', { replyToMessageId: bm.messageId })).body;
+    assert.equal(rp.project, '銀行系統', '單一專案成員回覆＝自己的專案');
     const bc = (await call(liu.token, '/api/cards', 'POST', { requestId: 'req_iso1', title: '銀行專案的卡', project: '銀行系統' })).body;
     assert.ok(!(await call(plat.token, '/api/cards?limit=200')).body.items.some(c => c.cardId === bc.cardId), '只屬平台的成員看不到銀行系統的卡');
     assert.equal((await call(plat.token, `/api/cards/${bc.cardId}`)).status, 404, '卡片詳情也擋');
@@ -208,6 +210,25 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const inc = (await call(plat.token, `/api/messages?after=${encodeURIComponent(after0)}`)).body;
     assert.equal(inc.items.length, 0, '輪詢拿不到別專案的新訊息');
     assert.notEqual(inc.nextCursor, after0, '游標仍推進到最新');
+    // ===== C-172：外流情境（UX 第 1148 則）=====
+    assert.equal((await msg(liu.token, '[需確認] 兩邊成員沒帶專案')).body.error?.code, 'PROJECT_REQUIRED', '兩邊成員沒帶 project 擋下');
+    assert.equal((await msg(liu.token, '[回覆] 回覆也要帶', { replyToMessageId: am.messageId })).body.error?.code, 'PROJECT_REQUIRED', '兩邊成員回覆全部專案訊息也要帶');
+    const bankReply = (await msg(bank.token, '[完成] 銀行內容回覆跨專案訊息', { replyToMessageId: am.messageId })).body;
+    assert.equal(bankReply.project, '銀行系統', '只屬一個專案的人回覆全部專案訊息＝自己的專案，不繼承');
+    const bankAll = (await msg(bank.token, '[通知] 明確發全部專案', { replyToMessageId: am.messageId, project: 'all' })).body;
+    assert.equal(bankAll.project, null, '明確帶 all 才是全部專案');
+    assert.equal((await msg(liu.token, '[進度]【銀行系統】標題寫銀行卻發全部', { project: 'all' })).body.error?.code, 'PROJECT_TEXT_MISMATCH', '開頭【銀行系統】卻發全部專案');
+    assert.equal((await msg(bank.token, '【平台】單一專案的人標題寫別的專案')).body.error?.code, 'PROJECT_TEXT_MISMATCH');
+    const tagged = (await msg(liu.token, '[進度]【銀行系統】正確帶專案', { project: '銀行系統' })).body;
+    assert.equal(tagged.project, '銀行系統');
+    assert.equal((await msg(liu.token, '[通知]【全部專案】公告', { project: 'all' })).body.project, null, '【全部專案】可以發 all');
+    const upload = (tok, extra = '') => fetch(`${BASE}/api/files?name=a.txt&declared=true${extra}`, { method: 'POST', headers: { Authorization: `Bearer ${tok}` }, body: 'hello' }).then(r => r.json());
+    assert.equal((await upload(liu.token)).error?.code, 'PROJECT_REQUIRED', '上傳文件附的訊息也要帶專案');
+    const upOk = await upload(liu.token, '&project=' + encodeURIComponent('銀行系統'));
+    assert.equal(upOk.message?.project, '銀行系統', '上傳文件可帶 project');
+    assert.equal((await upload(bank.token)).message?.project, '銀行系統', '單一專案成員上傳不帶＝自己的專案');
+    const platSees = (await call(plat.token, '/api/messages?limit=100')).body.items.map(m => m.messageId);
+    assert.ok(![bankReply.messageId, tagged.messageId, upOk.message?.messageId].some(id => platSees.includes(id)), '只屬平台的帳號拿不到上面情境產生的任何銀行系統訊息');
     // PO 第 967 則：通知列表也隔離。兩邊成員先收到銀行系統的指定，被移出銀行系統後就不再列出
     await put(liu.token, both.participantId, ['平台', '銀行系統']);
     const toBoth = (await msg(liu.token, '[需確認] 給兩邊 PG', { project: '銀行系統', recipientIds: [both.participantId] })).body;

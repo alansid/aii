@@ -552,7 +552,7 @@
   }
   // 發訊息的專案（C-169）：固定是目前所在的專案，不能選；跨專案頻道發的是全部專案；回覆時跟著被回覆的訊息
   function sendTarget() {
-    if (state.replyTo) return state.replyTo.project || 'all';
+    if (state.replyTo) return singleProject() ? myProjects()[0] : state.replyTo.project || 'all'; // C-172：只屬一個專案的人回覆全部專案的訊息，用自己的專案
     const v = projectView();
     return v === 'cross' || v === 'hub' ? 'all' : v;
   }
@@ -560,7 +560,8 @@
     const el = $('#send-to');
     if (!el) return;
     const t = sendTarget();
-    el.innerHTML = `<span class="muted">發到</span>${t === 'all' ? '<span class="ptag ptag-all">跨專案頻道</span><span class="muted">所有專案都看得到</span>' : projTag(t)}${state.replyTo ? '<span class="muted">（跟著被回覆的訊息）</span>' : ''}`;
+    const v = projectView(), base = v === 'cross' || v === 'hub' ? 'all' : v;
+    el.innerHTML = `<span class="muted">發到</span>${t === 'all' ? '<span class="ptag ptag-all">跨專案頻道</span><span class="muted">所有專案都看得到</span>' : projTag(t)}${state.replyTo && t !== base ? '<span class="muted">（跟著被回覆的訊息）</span>' : ''}`;
   }
   // 網址（C-169）：/p/<專案名>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
   const PAGE_BY_NAME = Object.fromEntries(Object.entries(PAGE_NAME).map(([k, t]) => [t, k]));
@@ -1022,6 +1023,20 @@
 
   // 沒動過專案選單：回覆時不帶（繼承），否則帶目前檢視的專案；動過就照選的
   const sendProject = () => ({ project: sendTarget() });
+  // C-172：收件匣、卡片抽屜的行內回覆也明確帶專案（兩邊成員沒帶會被伺服器擋下）：卡片的專案＞被回覆訊息的專案＞所在專案
+  async function msgProject(body) {
+    if (body.project) return body.project;
+    if (singleProject()) return myProjects()[0];
+    const card = body.cardId && work.cards.get(body.cardId);
+    if (card?.project) return card.project;
+    if (body.replyToMessageId) {
+      const m = state.byId.get(body.replyToMessageId) || await api(`/api/messages/${encodeURIComponent(body.replyToMessageId)}`).catch(() => null);
+      return m?.project || 'all';
+    }
+    const v = projectView();
+    return v === 'cross' || v === 'hub' ? 'all' : v;
+  }
+  const postMsg = async body => api('/api/messages', { method: 'POST', body: { ...body, project: await msgProject(body) } });
   let sending = false;
   let pendingRequestId = null; // 失敗重送時沿用同一個 requestId，避免重複發文
   async function send() {
@@ -1504,7 +1519,7 @@
     errEl.textContent = '';
     root.querySelectorAll('button, textarea').forEach(x => { x.disabled = true; });
     btn.textContent = '送出中…';
-    const post = body => api('/api/messages', { method: 'POST', body: { requestId: newRequestId(), ...body } });
+    const post = body => postMsg({ requestId: newRequestId(), ...body });
     const others = ids => [...new Set(ids)].filter(x => x && x !== meId());
     try {
       if (act === 'send' && key.startsWith('m:')) {
@@ -2546,7 +2561,7 @@
       q.busy = true; q.error = ''; refreshMsg(id);
       try {
         if (kind === 'hold') work.cards.set(dcard.cardId, await api(`/api/cards/${encodeURIComponent(dcard.cardId)}/defer`, { method: 'POST', body: { reason: q.text.trim(), version: dcard.version } }));
-        else onNewMessage(await api('/api/messages', { method: 'POST', body: { text: `[回覆] ${dcard.cardId}（決策意見）：${q.text.trim()}`, requestId: newRequestId(), replyToMessageId: id, cardId: dcard.cardId, recipientIds: [m.author.participantId] } }));
+        else onNewMessage(await postMsg({ text: `[回覆] ${dcard.cardId}（決策意見）：${q.text.trim()}`, requestId: newRequestId(), replyToMessageId: id, cardId: dcard.cardId, recipientIds: [m.author.participantId] }));
         quickMap.delete(id); refreshMsg(id);
         toast(kind === 'hold' ? '已暫緩，決策卡已移出收件匣' : '已送出');
         await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]); updateTodoBadge();
@@ -2560,7 +2575,7 @@
     const text = `[回覆] ${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
     q.busy = true; q.error = ''; refreshMsg(id);
     try {
-      const r = await api('/api/messages', { method: 'POST', body: { text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] } });
+      const r = await postMsg({ text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] });
       quickMap.delete(id);
       onNewMessage(r); refreshMsg(id);
       toast('已送出');
@@ -2639,7 +2654,7 @@
       const id = send.dataset.authSend, m = state.byId.get(id), p = authPending.get(id);
       if (!m || !p || p.busy) return true;
       p.busy = true; p.error = ''; refreshMsg(id);
-      api('/api/messages', { method: 'POST', body: { text: p.text, requestId: p.requestId, replyToMessageId: id, recipientIds: [m.author.participantId] } })
+      postMsg({ text: p.text, requestId: p.requestId, replyToMessageId: id, recipientIds: [m.author.participantId] })
         .then(r => { authPending.delete(id); onNewMessage(r); refreshMsg(id); toast('已送出授權'); })
         .catch(err => {
           p.busy = false; p.error = err.message;
@@ -3438,6 +3453,7 @@
       if (rec.audience) q.set('audience', 'all');
       if (rec.recipientIds) q.set('recipientIds', rec.recipientIds.join(','));
       if (state.replyTo) q.set('replyToMessageId', state.replyTo.messageId);
+      q.set('project', sendTarget());
       try {
         const r = await fetch(`/api/files?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: file });
         const data = await r.json().catch(() => ({}));
