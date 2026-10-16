@@ -6,6 +6,7 @@
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
 import { registerCards, teamCards, autoArchive } from './cards.js';
+import { registerLogin } from './login.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 30_000;           // 人類：網頁每幾秒就會回報
@@ -59,6 +60,8 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
 export function createApp({ db, docText, config = {}, storage = null }) {
   const ROOM_CODE = config.roomCode || '';
+  // C-202：人類改用邀請連結加入；只有群組還沒有人類（建立者）或明確開放（OPEN_JOIN=1，本機測試用）才能自己加入
+  const OPEN_JOIN = config.openJoin === true || config.openJoin === '1';
   // 即時喚醒門鈴（Supabase Realtime Broadcast）：沒設 URL／金鑰就完全不動作。只送 AI 的 ID 與時間，不帶人名與內文
   const SB_URL = String(config.supabaseUrl || '').replace(/[/]+$/, '');
   const SB_KEY = config.supabaseKey || '';
@@ -93,6 +96,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     return ctx.people;
   }
   let teamCache = { at: 0, data: null };
+  let login; // C-202 登入（src/login.js），註冊路由時建立
 
   const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < (p.kind === 'ai' ? AI_ACTIVE_WINDOW_MS : ACTIVE_WINDOW_MS);
 
@@ -249,14 +253,17 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const h = req.headers.get('authorization') || '';
     const token = h.startsWith('Bearer ') ? h.slice(7).trim() : url.searchParams.get('token');
     if (!token) throw new ApiError(401, 'INVALID_TOKEN', '缺少 Authorization: Bearer <token>');
-    const p = await db.get('SELECT * FROM participants WHERE token = ?', token);
+    // C-202：人類的網頁登入是「裝置」（dv_ 開頭）；AI Token 與人類登入碼照舊
+    const { p, dev } = await login.resolve(token);
     if (!p || p.status !== 'active') throw new ApiError(401, 'INVALID_TOKEN', 'Token 不存在、已重設或已撤銷');
+    p.authKind = dev ? 'device' : 'code';
+    p.deviceId = dev?.id || null;
     if (p.owner_id) {
       const owner = await db.get('SELECT status FROM participants WHERE id = ?', p.owner_id);
       if (!owner || owner.status !== 'active') throw new ApiError(401, 'INVALID_TOKEN', '所屬人類已離開群組');
     }
     const now = Date.now();
-    if (p.token_expires_at && p.token_expires_at < now) {
+    if (p.kind !== 'human' && p.token_expires_at && p.token_expires_at < now) { // 人類登入碼長期有效（C-202）
       throw new ApiError(401, 'TOKEN_EXPIRED', 'Token 已過期，請所屬人類在網頁重新產生');
     }
     const r = rate.get(p.id) || { windowStart: now, count: 0 };
@@ -267,6 +274,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       throw new ApiError(429, 'RATE_LIMITED', '請求頻率超過限制', { retryAfter: Math.ceil((r.windowStart + 60_000 - now) / 1000) });
     }
     if (p.kind === 'human') p.token_expires_at = now + HUMAN_TOKEN_TTL_MS; // 人類使用中自動展延
+    if (dev) await login.touch(dev, now);
     // 在線狀態每 20 秒最多寫一次，減少 D1 寫入（人類的登入效期也一起展延）
     if (now - p.last_seen_at > 20_000) {
       await db.run('UPDATE participants SET last_seen_at = ?, token_expires_at = ? WHERE id = ?', now, p.token_expires_at, p.id);
@@ -516,6 +524,11 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   }
 
   async function joinHuman(ctx, body) {
+    const hasHuman = !!(await db.get("SELECT id FROM participants WHERE kind = 'human' AND status = 'active' LIMIT 1"));
+    if (hasHuman && !OPEN_JOIN) {
+      const admin = adminOf(await peopleMap(ctx));
+      throw new ApiError(403, 'JOIN_CLOSED', `要加入群組，請管理員 ${admin?.name || ''} 傳邀請連結給你`);
+    }
     if (ROOM_CODE && body.roomCode !== ROOM_CODE) throw new ApiError(403, 'FORBIDDEN', '群組密碼錯誤');
     const name = validateName(body.name);
     await assertNameFree(name);
@@ -819,7 +832,11 @@ ${trial
     routes.push({ method, re, keys, handler, open });
   };
 
-  route('GET', '/api/health', () => ({ ok: true, roomCodeRequired: !!ROOM_CODE }), { open: true });
+  // setup＝群組還沒有任何人類，登入頁顯示「建立群組」；adminName 給登入頁「請管理員 X 傳邀請連結」
+  route('GET', '/api/health', async ({ ctx }) => {
+    const admin = adminOf(await peopleMap(ctx));
+    return { ok: true, roomCodeRequired: !!ROOM_CODE, setup: !admin, openJoin: OPEN_JOIN, adminName: admin?.name || null, loginMethods: login.methods };
+  }, { open: true });
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS, environments: ENVIRONMENTS }), { open: true });
   route('POST', '/api/join', async ({ req, ctx }) => ({ __status: 201, ...(await joinHuman(ctx, await readJson(req))) }), { open: true });
 
@@ -827,6 +844,7 @@ ${trial
     ...identity(me, people),
     isOnline: true,
     expiresAt: iso(me.token_expires_at),
+    ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId } : {}),
     ...(me.kind === 'ai' ? { settings: settingsOf(me) } : {}),
   })));
   // 頭像圖片：網頁先裁成 256×256 再上傳；只收 png／jpeg／webp，200 KB 以內
@@ -1653,6 +1671,9 @@ ${trial
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
+  login = registerLogin({ route, db, ApiError, invalid, readJson, randId, newToken, randomBytes, sha256, nowIso, iso, peopleMap, invalidatePeople,
+    adminOf, requireAdmin, requireHuman, validateName, assertNameFree, newCode, PROJECTS, nameOf, createMessage, publicParticipant,
+    groupName, humanTtlMs: HUMAN_TOKEN_TTL_MS, failLimit: Number(config.authFailLimit) || 10 });
   registerCards({ route, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
   route('GET', '/api/team-status', async ({ ctx, me }) => {

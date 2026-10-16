@@ -15,6 +15,7 @@ const app = env => {
     docText,
     config: {
       roomCode: env.ROOM_CODE,
+      openJoin: env.OPEN_JOIN,
       aiTokenTtlHours: env.AI_TOKEN_TTL_HOURS,
       humanTokenTtlHours: env.HUMAN_TOKEN_TTL_HOURS,
       fileTtlHours: env.FILE_TTL_HOURS,

@@ -115,86 +115,132 @@
     : p.memberType === 'system' ? '<span class="tag sys">[系統]</span>'
     : '<span class="tag human">[人類]</span>';
 
-  // ---------- 加入 / 登入 ----------
+  // ---------- 登入（C-202）：邀請連結加入、6 位數配對、登入碼（長期保留） ----------
+  async function useDevice(token) {
+    state.token = token;
+    store.set(TOKEN_KEY, token);
+    await start();
+  }
+  const authLogin = async (method, body) => useDevice((await api('/api/auth/' + method, { method: 'POST', body })).token);
+
   async function showJoin() {
     $('#boot').hidden = true;
     $('#app').hidden = true;
+    $('#invite').hidden = true;
     $('#join').hidden = false;
-    if (store.get('aigile-switch-login-tab') === 'token' && $('#token-form').hidden) {
-      const msg = $('#join-error').textContent;
-      showLoginTab('token');
-      if (msg) $('#token-error').textContent = msg;
-    }
+    if ($('#token-error').textContent) $('#code-login').open = true;
     try {
       const h = await api('/api/health');
+      $('#join-form').hidden = !h.setup; // 群組還沒有人：建立群組
+      $('#login-main').hidden = !!h.setup;
+      $('#join-admin').textContent = h.adminName || '管理員';
       $('#room-code-field').hidden = !h.roomCodeRequired;
     } catch {}
   }
 
+  // 建立群組（第一位）：建好後同樣換成這台裝置的登入
   $('#join-form').addEventListener('submit', async e => {
     e.preventDefault();
     $('#join-error').textContent = '';
     try {
       const r = await api('/api/join', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
-      state.token = r.token;
-      store.set(TOKEN_KEY, r.token);
-      await start();
+      await authLogin('code', { code: r.token });
     } catch (err) {
-      if (err.code === 'NAME_TAKEN') {
-        showLoginTab('token');
-        $('#token-error').textContent = `${err.message}。如果是你本人，請改用「用登入碼登入」。`;
-      } else {
-        $('#join-error').textContent = err.message;
-      }
+      $('#join-error').textContent = err.message;
     }
   });
 
-  // 登入頁籤：加入群組 ／ 用 Token 登入
-  const LOGIN_TAB_KEY = 'aigile-switch-login-tab';
-  function showLoginTab(which) {
-    const token = which === 'token';
-    $('#tab-join').setAttribute('aria-selected', String(!token));
-    $('#tab-token').setAttribute('aria-selected', String(token));
-    $('#join-form').hidden = token;
-    $('#token-form').hidden = !token;
-    $('#join-error').textContent = '';
-    $('#token-error').textContent = '';
-    store.set(LOGIN_TAB_KEY, which);
-    (token ? $('#token-form input') : $('#join-form input')).focus();
-  }
-  $('#tab-join').addEventListener('click', () => showLoginTab('join'));
-  $('#tab-token').addEventListener('click', () => showLoginTab('token'));
-  $('.seg').addEventListener('keydown', e => {
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      const next = $('#tab-join').getAttribute('aria-selected') === 'true' ? 'token' : 'join';
-      showLoginTab(next);
-      $(next === 'token' ? '#tab-token' : '#tab-join').focus();
-    }
+  $('#pair-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#pair-error').textContent = '';
+    const code = String(new FormData(e.target).get('code') || '').replace(/\D/g, '');
+    if (code.length !== 6) { $('#pair-error').textContent = '請輸入 6 位數字'; return; }
+    try { await authLogin('pair', { code }); } catch (err) { state.token = null; $('#pair-error').textContent = err.message; }
+  });
+  // 配對碼：只留數字，打到 6 碼自動送出
+  $('#pair-form .pair-input').addEventListener('input', e => {
+    const v = e.target.value.replace(/\D/g, '').slice(0, 6);
+    if (e.target.value !== v) e.target.value = v;
+    if (v.length === 6) $('#pair-form').requestSubmit();
   });
 
   $('#token-form').addEventListener('submit', async e => {
     e.preventDefault();
     $('#token-error').textContent = '';
-    const token = new FormData(e.target).get('token').trim();
-    state.token = token;
-    try {
-      const me = await api('/api/me');
-      if (me.memberType !== 'human') throw new Error('這是 AI 助手的登入碼，只能給 AI 透過 API 使用。請貼「你本人」的登入碼（右上頭像 ▸ API 資訊與登入碼）。');
-      store.set(TOKEN_KEY, token);
-      await start();
-    } catch (err) {
-      state.token = null;
-      $('#token-error').textContent = err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED'
-        ? '登入碼無效或已過期。請確認是從同一個網站（網址相同）複製的。'
-        : err.message;
-    }
+    const code = new FormData(e.target).get('token').trim();
+    try { await authLogin('code', { code }); } catch (err) { state.token = null; $('#token-error').textContent = err.message; }
   });
 
+  // 被邀請頁：/invite/<連結>。連結先收進這個分頁，網址列只留 /invite，重新整理也還在
+  const INVITE_KEY = 'aigile-switch-invite';
+  const ss = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} }, del: k => { try { sessionStorage.removeItem(k); } catch {} } };
+  let inviteTimer = null;
+  async function showInvite() {
+    let tok = decodeURIComponent(location.pathname.replace(/^\/invite\/?/, ''));
+    if (tok) { ss.set(INVITE_KEY, tok); history.replaceState(null, '', '/invite'); } else tok = ss.get(INVITE_KEY) || '';
+    $('#boot').hidden = true; $('#app').hidden = true; $('#join').hidden = true; $('#invite').hidden = false;
+    const card = $('#invite-card');
+    card.innerHTML = '<p class="muted">讀取邀請中…</p>';
+    let d;
+    try { d = await api('/api/auth/invite/peek', { method: 'POST', body: { token: tok } }); } catch { d = { valid: false }; }
+    if (!d.valid) return inviteGone(d.adminName);
+    const reset = d.kind === 'reset';
+    card.innerHTML = `<p class="inv-from"><b>${esc(d.inviterName || '')}</b> 邀請你加入</p>
+      <h1 class="inv-group">${esc(d.groupName)}</h1>
+      <dl class="inv-meta"><dt>專案</dt><dd>${d.projects.length ? d.projects.map(p => esc(p.name)).join('、') : '<span class="muted">還沒有（加入後由管理員指派）</span>'}</dd>
+        <dt>角色</dt><dd>${esc(d.role || '—')}</dd></dl>
+      <form id="inv-form" class="join-pane">
+        <label>你的名字<input name="name" value="${esc(d.name)}" maxlength="40" required autocomplete="nickname" ${reset ? 'readonly' : ''}></label>
+        <p class="muted small">${reset ? '這是重設登入的連結：按「加入」後，這台裝置會以你原本的身分登入。' : '確認名字沒錯就按「加入」，這台裝置會記住你。'}</p>
+        <p id="inv-error" class="error" role="alert"></p>
+        <button class="btn primary" type="submit">加入</button>
+      </form>
+      <p class="muted small inv-left">這個連結 <b id="inv-cd"></b> 後失效，只能用一次。</p>`;
+    const end = Date.parse(d.expiresAt);
+    const tick = () => {
+      const left = end - Date.now();
+      if (!$('#inv-cd')) return clearInterval(inviteTimer);
+      if (left <= 0) { clearInterval(inviteTimer); return inviteGone(d.adminName || d.inviterName); }
+      $('#inv-cd').textContent = mmss(left);
+    };
+    clearInterval(inviteTimer); inviteTimer = setInterval(tick, 1000); tick();
+    $('#inv-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      $('#inv-error').textContent = '';
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        const r = await api('/api/auth/invite', { method: 'POST', body: { token: tok, name: new FormData(e.target).get('name').trim() } });
+        clearInterval(inviteTimer);
+        ss.del(INVITE_KEY);
+        history.replaceState(null, '', '/');
+        $('#invite').hidden = true;
+        $('#boot').hidden = false;
+        await useDevice(r.token);
+      } catch (err) {
+        btn.disabled = false;
+        if (err.code === 'INVITE_INVALID') return inviteGone(d.adminName || d.inviterName);
+        $('#inv-error').textContent = err.message;
+      }
+    });
+  }
+  function inviteGone(adminName) {
+    clearInterval(inviteTimer);
+    ss.del(INVITE_KEY);
+    $('#invite-card').innerHTML = `<h1 data-group-name>${esc(BASE_TITLE)}</h1>
+      <p class="inv-gone">這個邀請連結已失效，請${esc(adminName || '管理員')}重新傳一個給你。</p>
+      <p><a href="/" class="link" id="inv-pair">已經加入過？用原本的裝置配對</a></p>`;
+    $('#inv-pair').onclick = e => { e.preventDefault(); history.replaceState(null, '', '/'); showJoin().then(() => $('#pair-form .pair-input').focus()); };
+  }
+  const mmss = ms => { const t = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+
   async function logout(confirmFirst = true) {
-    if (confirmFirst && !await confirmDialog({ title: '登出？', confirmText: '登出', message: '登出後，要用「API 資訊與登入碼」裡的登入碼（或其他裝置的 QR Code）才能再登入此身分。建議先複製登入碼保存。' })) return;
+    if (confirmFirst && !await confirmDialog({ title: '登出這台裝置？', confirmText: '登出', message: '登出後，這台裝置要重新配對（在其他已登入的裝置點頭像 ▸「我的裝置」▸「＋配對新裝置」）或用登入碼才能再登入。其他裝置不受影響。' })) return;
+    const tok = state.token;
+    state.me = null; // 先清掉，避免登出請求失敗時又觸發登出
+    if (tok) fetch('/api/auth/logout', { method: 'POST', keepalive: true, headers: { Authorization: `Bearer ${tok}` } }).catch(() => {});
     store.del(TOKEN_KEY);
     state.token = null;
-    state.me = null;
     clearTimeout(pollTimer);
     location.replace('/');
   }
@@ -222,6 +268,7 @@
       <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
       ${isAdmin() || myLeadProjects().length ? `<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
       <button type="button" role="menuitem" data-av="settings">個人設定</button>
+      <button type="button" role="menuitem" data-av="devices">我的裝置</button>
       <button type="button" role="menuitem" data-av="api">API 資訊與登入碼</button>
       <div class="av-sep" role="separator"></div>
       <button type="button" role="menuitem" class="av-out" data-av="logout">登出</button>`;
@@ -245,6 +292,7 @@
     if (k === 'myai' || k === 'perm') goTop(k);
     else if (k === 'settings') openSettings();
     else if (k === 'api') openApi();
+    else if (k === 'devices') openDevices();
     else if (k === 'logout') logout(true);
   });
   document.addEventListener('keydown', e => {
@@ -261,8 +309,17 @@
       store.del(TOKEN_KEY);
       state.token = null;
       state.me = null;
-      $('#join-error').textContent = '這是 AI 助手的 Token，只能透過 API 存取，不能登入網頁。';
+      $('#token-error').textContent = '這是 AI 助手的 Token，只能透過 API 存取，不能登入網頁。';
       return showJoin();
+    }
+    // C-202：舊的登入方式（瀏覽器存著登入碼、或掃 QR Code 進來）自動換成「這台裝置」的登入，之後可在「我的裝置」管理
+    if (state.me.authKind === 'code') {
+      try {
+        const r = await api('/api/auth/code', { method: 'POST', body: { code: state.token } });
+        state.token = r.token;
+        store.set(TOKEN_KEY, r.token);
+        state.me = await api('/api/me');
+      } catch {}
     }
     $('#join').hidden = true; // C-195：主畫面等資料載完才顯示（先留在「載入中」）
     drawMe();
@@ -3805,9 +3862,9 @@
         <div class="copy-row"><code class="val">${esc(base)}</code><button class="btn small" type="button" data-copy="${esc(base)}">複製</button></div></div>
       <div class="kv-field"><span class="field-label">本人 participantId</span>
         <div class="copy-row"><code class="val">${esc(meId())}</code><button class="btn small" type="button" data-copy="${esc(meId())}">複製</button></div></div>
-      <div class="kv-field"><span class="field-label">本人 Token（登入用）</span>
-        <div class="copy-row"><code class="val" id="my-token">••••••••••••</code><button class="btn small" type="button" id="tok-show">顯示</button><button class="btn small" type="button" id="tok-copy">複製</button></div></div>
-      <div class="warn-box red">這是你本人的 Token，等同登入密碼：在其他裝置選「用登入碼登入」貼上即可用同一身分登入。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。</div>
+      <div class="kv-field"><span class="field-label">本人登入碼（長期有效）</span>
+        <div class="copy-row"><code class="val" id="my-token">••••••••••••</code><button class="btn small" type="button" id="tok-show">顯示</button><button class="btn small" type="button" id="tok-copy">複製</button><button class="btn small" type="button" id="tok-rotate">換一組登入碼</button></div></div>
+      <div class="warn-box red">這是你本人的登入碼，等同密碼：在其他裝置的登入頁選「用登入碼登入」貼上即可用同一身分登入（換裝置比較建議用「我的裝置」的 6 位數配對）。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。覺得外流了就按「換一組登入碼」，舊的立刻失效，已登入的裝置不受影響。</div>
       <div class="row"><button class="btn" type="button" id="api-qr">用手機掃 QR Code 登入</button><span class="muted small">掃了就以你的身分登入，等同密碼，請勿分享</span></div>
       <div class="group-title">主要端點</div>
       <ul class="endpoints">
@@ -3825,8 +3882,18 @@
       <p><a href="/api/docs/ai-integration" target="_blank" rel="noopener">完整規格：AI 代理人接入通訊協定指南</a></p>
       <div class="group-title">快速測試</div>
       <code class="block">curl -H "Authorization: Bearer &lt;TOKEN&gt;" ${esc(base)}/api/me</code>`);
-    body.querySelector('#tok-show').onclick = () => { body.querySelector('#my-token').textContent = state.token; };
-    body.querySelector('#tok-copy').onclick = async () => toast((await copyText(state.token)) ? '已複製' : '複製失敗');
+    let code = null;
+    const getCode = async () => (code ||= (await api('/api/me/login-code')).code);
+    body.querySelector('#tok-show').onclick = async () => { try { body.querySelector('#my-token').textContent = await getCode(); } catch (err) { toast(err.message); } };
+    body.querySelector('#tok-copy').onclick = async () => { try { toast((await copyText(await getCode())) ? '已複製' : '複製失敗'); } catch (err) { toast(err.message); } };
+    body.querySelector('#tok-rotate').onclick = async () => {
+      if (!await confirmDialog({ title: '換一組登入碼？', confirmText: '換一組', message: '舊的登入碼會<b>立刻失效</b>（貼過舊登入碼、還沒登入的地方要改用新的）。已經登入的裝置不受影響。' })) return;
+      try {
+        code = (await api('/api/me/rotate-code', { method: 'POST' })).code;
+        body.querySelector('#my-token').textContent = code;
+        toast('已換一組登入碼，舊的已失效');
+      } catch (err) { toast(err.message); }
+    };
     body.querySelector('#api-qr').onclick = () => openQr(); // C-186：QR Code 併進 API 資訊與登入碼
     body.addEventListener('click', async e => {
       const c = e.target.closest('[data-copy]');
@@ -3957,7 +4024,7 @@
   }
   // 小對話框：輸入名稱（改名用）
   // ---------- C-182 成員與權限（第一層，只有管理員）----------
-  const perm = { tab: 'byProject', draft: new Map(), events: {}, openLog: null, pq: '', mq: '', selProj: null, selMember: null, picker: false, pickSel: new Set(), pickQ: '', addOpen: false, mobileDetail: false };
+  const perm = { tab: 'byProject', invites: null, draft: new Map(), events: {}, openLog: null, pq: '', mq: '', selProj: null, selMember: null, picker: false, pickSel: new Set(), pickQ: '', addOpen: false, mobileDetail: false };
   const permDirty = () => perm.draft.size > 0;
   function permLeave(go) {
     confirmDialog({ title: '還有沒儲存的變更', confirmText: '放棄變更並離開', danger: true, message: `成員與權限有 <b>${perm.draft.size} 位成員</b>的變更還沒儲存，離開後會不見。` })
@@ -4101,6 +4168,7 @@
       <div class="pm-mem-body"><div class="field-label">所屬專案</div>
         <div class="pm-chips">${chips}${addable.length ? `<span class="pm-addwrap"><button type="button" class="pm-chip add" data-pm-addopen aria-expanded="${perm.addOpen}">＋ 加入專案</button>${menu}</span>` : ''}</div>
         ${gone.length ? `<p class="small pm-gone-line">這次會離開：${gone.map(x => `<s>${esc(projName(x))}</s> <button type="button" class="link small" data-pm-restore="${id}" data-pj="${esc(x)}">復原</button>`).join('、')}</p>` : ''}
+        ${isAdmin() && p.memberType === 'human' && p.participantId !== meId() ? `<div class="pm-reset-line"><button type="button" class="btn small" data-pm-reset="${id}">重設登入</button><span class="muted small">登出他所有裝置、作廢舊登入碼，產生新邀請連結</span></div>` : ''}
         ${isAdmin() ? `<div class="pm-cross-line"><span>跨專案角色</span>${pmSw(c.cross, `data-pm-cross="${id}"`, c.cross !== b.cross, `${p.name} 跨專案角色`, isAdm && c.cross ? 'aria-disabled="true" title="管理員本人不能關掉自己的跨專案角色（避免沒人能管）"' : '')}<span class="muted small">打開＝自動在所有專案</span></div>` : ''}
       </div></section>`;
     return `<div class="pm-split${narrowPerm() ? (perm.mobileDetail ? ' m-detail' : ' m-list') : ''}">${left}${right}</div>`;
@@ -4146,9 +4214,9 @@
     if (state.page !== 'perm') return;
     const keep = document.activeElement?.id, top = box.scrollTop;
     box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${isAdmin() ? '' : ' · 你是 leader'}</span></div>
-        ${isAdmin() ? `<div class="seg-scope" role="tablist" aria-label="分頁">${[['byProject', '依專案'], ['byMember', '依成員'], ['projects', '專案設定']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>` : ''}</div>
+        ${isAdmin() ? `<button type="button" class="btn primary small pm-invite" data-pm-invite>＋邀請</button><div class="seg-scope" role="tablist" aria-label="分頁">${[['byProject', '依專案'], ['byMember', '依成員'], ['invites', '邀請'], ['projects', '專案設定']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>` : ''}</div>
       ${isAdmin() ? '' : `<div class="pm-banner">你是 <b>${esc(myLeadProjects().map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(myLeadProjects().map(projName).join('、'))}的成員。其他專案只能看。</div>`}
-      <section class="wpanel pm-panel">${!isAdmin() || perm.tab === 'byProject' ? permByProjectHtml() : perm.tab === 'byMember' ? permByMemberHtml() : permProjectsHtml()}</section>
+      <section class="wpanel pm-panel">${!isAdmin() || perm.tab === 'byProject' ? permByProjectHtml() : perm.tab === 'byMember' ? permByMemberHtml() : perm.tab === 'invites' ? permInvitesHtml() : permProjectsHtml()}</section>
       <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
     box.scrollTop = top;
     drawPermBar();
@@ -4216,7 +4284,18 @@
     if (state.page !== 'perm') return;
     const t = e.target;
     const tab = t.closest('[data-pm-tab]');
-    if (tab) { perm.tab = tab.dataset.pmTab; Object.assign(perm, { picker: false, addOpen: false, mobileDetail: false }); return drawPerm(); } // 切換檢視不丟變更
+    if (tab) { perm.tab = tab.dataset.pmTab; if (perm.tab === 'invites') perm.invites = null; Object.assign(perm, { picker: false, addOpen: false, mobileDetail: false }); return drawPerm(); } // 切換檢視不丟變更
+    // C-202 邀請與重設登入
+    if (t.closest('[data-pm-invite]')) return openInvite();
+    if (t.closest('[data-pm-inv-reload]')) return loadInvites();
+    const ivR = t.closest('[data-pm-inv-regen]'), ivC = t.closest('[data-pm-inv-cancel]'), rs = t.closest('[data-pm-reset]');
+    if (ivR) { try { showInviteLink(await api(`/api/invites/${encodeURIComponent(ivR.dataset.pmInvRegen)}/regenerate`, { method: 'POST' })); loadInvites(); } catch (err) { toast(err.message); } return; }
+    if (ivC) {
+      if (!await confirmDialog({ title: '取消這個邀請？', confirmText: '取消邀請', danger: true, message: '連結會立刻失效。' })) return;
+      try { await api(`/api/invites/${encodeURIComponent(ivC.dataset.pmInvCancel)}/cancel`, { method: 'POST' }); toast('已取消邀請'); loadInvites(); } catch (err) { toast(err.message); }
+      return;
+    }
+    if (rs) return resetLogin(state.participants.get(rs.dataset.pmReset));
     const P = id => state.participants.get(id);
     const el = (sel) => t.closest(sel);
     let x;
@@ -4366,6 +4445,139 @@
     };
   }
 
+  // ---------- C-202 我的裝置：列每台、登出這台、＋配對新裝置（6 位數、5 分鐘、一次性） ----------
+  let pairTimer = null;
+  async function openDevices() {
+    const body = openModal('我的裝置', `<p class="muted small">這些裝置正以「${esc(state.me.name)}」登入。不認得的裝置請按「登出這台」。</p>
+      <ul class="dev-list" id="dev-list"><li class="muted small">讀取中…</li></ul>
+      <div class="dev-pair" id="dev-pair"><button class="btn primary" type="button" data-dev-pair>＋配對新裝置</button>
+        <span class="muted small">在新裝置的登入頁選「配對這台裝置」，輸入這裡出現的 6 位數字。</span></div>`, { size: 'narrow' });
+    const draw = async () => {
+      let items;
+      try { items = (await api('/api/devices')).items; } catch (err) { body.querySelector('#dev-list').innerHTML = `<li class="error">${esc(err.message)}</li>`; return; }
+      body.querySelector('#dev-list').innerHTML = items.map(d => `<li class="dev-row"><div class="dev-main"><b>${esc(d.label || '瀏覽器')}</b>${d.current ? '<span class="pill-tag blue">這台</span>' : ''}
+          <span class="muted small">最後使用 ${esc(d.current ? '現在' : agoText(d.lastUsedAt))} · ${esc(fmtDate(d.createdAt))} 登入</span></div>
+        <button class="btn small" type="button" data-dev-out="${esc(d.id)}" data-cur="${d.current ? 1 : ''}">登出這台</button></li>`).join('') || '<li class="muted small">沒有其他裝置</li>';
+    };
+    body.addEventListener('click', async e => {
+      const out = e.target.closest('[data-dev-out]');
+      if (out) {
+        const cur = !!out.dataset.cur;
+        if (!await confirmDialog({ title: cur ? '登出這台裝置？' : '登出那台裝置？', confirmText: '登出', danger: !cur, message: cur ? '登出後這台要重新配對或用登入碼才能再登入。' : '那台裝置會立刻被登出，要重新配對才能再用。' })) return;
+        try {
+          await api(`/api/devices/${encodeURIComponent(out.dataset.devOut)}/logout`, { method: 'POST' });
+          if (cur) { state.me = null; store.del(TOKEN_KEY); state.token = null; return location.replace('/'); }
+          toast('已登出那台裝置'); draw();
+        } catch (err) { toast(err.message); }
+        return;
+      }
+      if (e.target.closest('[data-dev-pair]')) showPairCode(body);
+    });
+    draw();
+  }
+  async function showPairCode(body) {
+    const box = body.querySelector('#dev-pair');
+    let d;
+    try { d = await api('/api/devices/pair-code', { method: 'POST' }); } catch (err) { return toast(err.message); }
+    box.innerHTML = `<div class="pair-code" aria-label="配對碼 ${d.code.split('').join(' ')}">${d.code.slice(0, 3)}<span> </span>${d.code.slice(3)}</div>
+      <p class="small">在新裝置打開 <b>${esc(location.host)}</b> ▸「配對這台裝置」輸入這 6 位數字。<span class="pair-left">剩 <b id="pair-cd"></b>，只能用一次。</span></p>
+      <button class="btn small" type="button" data-dev-pair>重新產生</button>`;
+    const end = Date.parse(d.expiresAt);
+    const tick = () => {
+      const cd = body.querySelector('#pair-cd');
+      if (!cd || !cd.isConnected) return clearInterval(pairTimer);
+      const left = end - Date.now();
+      if (left <= 0) { clearInterval(pairTimer); box.querySelector('.pair-code').classList.add('expired'); box.querySelector('.pair-left').textContent = '已過期，請重新產生。'; return; }
+      cd.textContent = mmss(left);
+    };
+    clearInterval(pairTimer); pairTimer = setInterval(tick, 1000); tick();
+  }
+  const fmtDate = iso => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+  // ---------- C-202 邀請（只有管理員）：名字、角色、專案 → 一次性連結＋QR，15 分鐘 ----------
+  let invTimer = null;
+  function openInvite() {
+    const body = openModal('＋邀請', `<form id="inv-new" class="stack">
+        <label class="field">名字<input name="name" required maxlength="40" autocomplete="off" placeholder="例如：王小明"></label>
+        <label class="field">角色<input name="role" maxlength="30" list="role-list" placeholder="PO / BA / UX / PG / QA / Sponsor"></label>
+        <fieldset class="field inv-projs"><legend class="field-label">專案</legend>
+          ${PROJECTS.map(pj => `<label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label>`).join('')}
+          <span class="muted small">不勾＝還沒有專案，之後再指派</span></fieldset>
+        <p class="error" id="inv-new-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="inv-new">產生邀請連結</button>' });
+    body.querySelector('#inv-new').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      try {
+        const out = await api('/api/invites', { method: 'POST', body: { name: f.get('name').trim(), role: f.get('role').trim(), projects: f.getAll('projects') } });
+        showInviteLink(out);
+        if (state.page === 'perm' && perm.tab === 'invites') loadInvites();
+      } catch (err) { body.querySelector('#inv-new-err').textContent = err.message; }
+    });
+  }
+  async function showInviteLink(out, title) {
+    const iv = out.invite, reset = iv.kind === 'reset';
+    const body = openModal(title || (reset ? `重設登入：${iv.name}` : '邀請連結'), `
+      <p>${reset ? `已登出 <b>${esc(iv.name)}</b> 的所有裝置、舊登入碼已作廢。把這個連結傳給他，打開就能重新登入。` : `把連結傳給 <b>${esc(iv.name)}</b>${iv.role ? `（${esc(iv.role)}）` : ''}，對方打開確認名字就能加入。`}</p>
+      <p class="muted small">專案：${iv.projects.length ? iv.projects.map(x => esc(projName(x))).join('、') : '還沒有'} · 只能用一次</p>
+      <div class="copy-row"><code class="val inv-url" id="inv-url">${esc(out.url)}</code><button class="btn small" type="button" data-inv="copy">複製</button></div>
+      <div id="inv-qr" class="qr"></div>
+      <p class="inv-count" id="inv-count"><span>剩 <b id="inv-cd"></b> 失效</span></p>
+      <div class="row inv-acts"><button class="btn" type="button" data-inv="regen">重新產生</button><button class="btn danger" type="button" data-inv="cancel">取消邀請</button></div>
+      <p class="muted small">重新產生：舊連結立刻失效，重新計時 15 分鐘。</p>`, { size: 'narrow' });
+    try {
+      if (!window.QRCode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js');
+      new window.QRCode(body.querySelector('#inv-qr'), { text: out.url, width: 200, height: 200 });
+    } catch { body.querySelector('#inv-qr').outerHTML = '<p class="muted small">QR Code 元件載入失敗（可能離線），請改用「複製」。</p>'; }
+    const end = Date.parse(iv.expiresAt);
+    const tick = () => {
+      const cd = body.querySelector('#inv-cd');
+      if (!cd || !cd.isConnected) return clearInterval(invTimer);
+      const left = end - Date.now();
+      if (left <= 0) {
+        clearInterval(invTimer);
+        body.querySelector('#inv-count').innerHTML = '<b class="bad">已過期</b>，按「重發」產生新連結（同樣內容）';
+        body.querySelector('#inv-url').classList.add('expired');
+        body.querySelector('[data-inv="regen"]').textContent = '重發';
+        return;
+      }
+      cd.textContent = mmss(left);
+    };
+    clearInterval(invTimer); invTimer = setInterval(tick, 1000); tick();
+    body.addEventListener('click', async e => {
+      const k = e.target.closest('[data-inv]')?.dataset.inv;
+      if (k === 'copy') toast((await copyText(out.url)) ? '已複製邀請連結' : '複製失敗');
+      else if (k === 'regen') {
+        try { showInviteLink(await api(`/api/invites/${encodeURIComponent(iv.id)}/regenerate`, { method: 'POST' }), title); toast('已重新產生，舊連結已失效'); if (perm.tab === 'invites') loadInvites(); } catch (err) { toast(err.message); }
+      } else if (k === 'cancel') {
+        if (!await confirmDialog({ title: '取消這個邀請？', confirmText: '取消邀請', danger: true, message: `給 ${esc(iv.name)} 的連結會立刻失效。` })) return;
+        try { await api(`/api/invites/${encodeURIComponent(iv.id)}/cancel`, { method: 'POST' }); clearInterval(invTimer); closeModal(); toast('已取消邀請'); if (perm.tab === 'invites') loadInvites(); } catch (err) { toast(err.message); }
+      }
+    });
+  }
+  // 邀請清單（最近 7 天）
+  async function loadInvites() {
+    try { perm.invites = (await api('/api/invites')).items; } catch (err) { perm.invites = []; toast(err.message); }
+    drawPerm();
+  }
+  function permInvitesHtml() {
+    if (!perm.invites) { loadInvites(); return '<p class="muted pm-pad">讀取中…</p>'; }
+    const cls = { 有效: 'green', 已使用: 'blue', 已過期: 'grey', 已取消: 'grey' };
+    const when = iv => iv.status === '有效' ? `剩 ${Math.max(1, Math.ceil((Date.parse(iv.expiresAt) - Date.now()) / 60000))} 分鐘`
+      : iv.status === '已使用' ? `${fmtDate(iv.usedAt)} 加入` : `${fmtDate(iv.createdAt)} 產生`;
+    return `<div class="inv-list-head"><span class="muted small">最近 7 天的邀請。連結 15 分鐘有效、只能用一次；過期可以「重發」（同樣內容、新連結）。</span><button type="button" class="btn small" data-pm-inv-reload>重新整理</button></div>
+      <ul class="inv-list">${perm.invites.map(iv => `<li class="inv-row"><div class="inv-main"><b>${esc(iv.name)}</b>${iv.kind === 'reset' ? '<span class="pill-tag">重設登入</span>' : ''}
+          <span class="muted small">${esc([iv.role, iv.projects.length ? iv.projects.map(projName).join('、') : '還沒有專案'].filter(Boolean).join(' · '))}</span></div>
+        <span class="inv-st ${cls[iv.status]}">${iv.status}</span><span class="muted small inv-when">${esc(when(iv))}</span>
+        <span class="inv-acts">${iv.status === '有效' ? `<button type="button" class="btn small" data-pm-inv-regen="${esc(iv.id)}">重新產生</button><button type="button" class="btn small" data-pm-inv-cancel="${esc(iv.id)}">取消</button>`
+          : iv.status === '已使用' ? '' : `<button type="button" class="btn small primary" data-pm-inv-regen="${esc(iv.id)}">重發</button>`}</span></li>`).join('') || '<li class="muted small pm-pad">最近 7 天沒有邀請。按右上「＋邀請」邀請新成員。</li>'}</ul>`;
+  }
+  async function resetLogin(p) {
+    if (!await confirmDialog({ title: `重設 ${esc(p.name)} 的登入？`, confirmText: '重設登入', danger: true,
+      message: `會<b>登出 ${esc(p.name)} 所有裝置</b>、作廢他的舊登入碼，並產生一個新的邀請連結（15 分鐘）讓他重新登入。他的 AI 不受影響。` })) return;
+    try { showInviteLink(await api(`/api/participants/${encodeURIComponent(p.participantId)}/reset-login`, { method: 'POST' })); if (perm.invites) perm.invites = null; } catch (err) { toast(err.message); }
+  }
+
   // QR Code：在另一台裝置登入同一身分
   function loadScript(src) {
     return new Promise((res, rej) => {
@@ -4375,7 +4587,8 @@
     });
   }
   async function openQr() {
-    const link = `${location.origin}/?login=${encodeURIComponent(state.token)}`;
+    let link;
+    try { link = `${location.origin}/?login=${encodeURIComponent((await api('/api/me/login-code')).code)}`; } catch (err) { return toast(err.message); }
     const body = openModal('QR Code 登入', `
       <p class="notice">用手機掃描，即可在手機上以「${esc(state.me.name)}」身分登入。此 QR Code 等同密碼，請勿分享。</p>
       <div id="qr" class="qr"></div>
@@ -4397,7 +4610,8 @@
     history.replaceState(null, '', '/');
   }
   state.token = store.get(TOKEN_KEY);
-  if (state.token) start().catch(() => { store.del(TOKEN_KEY); state.token = null; showJoin(); });
+  if (/^\/invite(\/|$)/.test(location.pathname)) showInvite(); // C-202：被邀請頁優先（這台裝置已登入別人也一樣）
+  else if (state.token) start().catch(() => { store.del(TOKEN_KEY); state.token = null; showJoin(); });
   else showJoin();
   if (!state.token) $('#boot').hidden = true;
 })();

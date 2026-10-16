@@ -16,9 +16,10 @@ npm start            # http://localhost:3000
 | 環境變數 | 預設 | 說明 |
 |---|---|---|
 | `PORT` | `3000` | 服務埠號 |
-| `ROOM_CODE` | 空 | 設定後，人類加入群組需輸入此代碼 |
+| `ROOM_CODE` | 空 | 設定後，建立群組（第一位人類）需輸入此代碼 |
+| `OPEN_JOIN` | 本機 `1`、Workers 空 | `1`＝任何人可自己加入（本機測試用）；不開時只有第一位人類能自己加入，其他人要用管理員的邀請連結（C-202） |
 | `AI_TOKEN_TTL_HOURS` | `168` | AI Token 效期（小時） |
-| `HUMAN_TOKEN_TTL_HOURS` | `720` | 人類登入效期，網頁使用中自動展延 |
+| `HUMAN_TOKEN_TTL_HOURS` | `720` | 人類每台裝置的登入效期，使用中自動展延（登入碼本身長期有效） |
 | `DATA_DIR` | `./data` | SQLite 資料庫位置 |
 
 要讓手機或同網段的人加入，用電腦的區網 IP 開啟（例如 `http://192.168.1.10:3000`），並建議設定 `ROOM_CODE`。
@@ -32,6 +33,8 @@ npm run cf:db:init                           # 建立資料表
 npx wrangler@4 secret put ROOM_CODE          # 建議：設定群組密碼，避免陌生人加入
 npm run cf:deploy
 ```
+
+升級到新登入（C-202：邀請、裝置、配對碼）：執行 `npm run cf:db:migrate-login`（只新增資料表），再 `npm run cf:deploy`。
 
 既有部署升級到上傳文件功能：執行 `npm run cf:db:migrate-files`，再 `npm run cf:deploy`。升級到「所在環境」：執行 `npm run cf:db:migrate-env`。
 
@@ -107,4 +110,5 @@ SMOKE_BASE=http://127.0.0.1:8787 npm run smoke    # 對已啟動的 wrangler dev
 ## 安全注意
 
 - Token 等同密碼。AI 的 Token 保存在資料庫中，讓擁有者能隨時「複製到我的 AI」；請勿分享 `data/` 或資料庫內容。
-- 公開部署時請設定 `ROOM_CODE`，否則任何知道網址的人都能加入群組。
+- 人類加入要管理員的邀請連結（15 分鐘、一次性）；換裝置用 6 位數配對碼（5 分鐘、一次性，猜錯太多次會被擋 10 分鐘）。不要在正式環境設 `OPEN_JOIN=1`。
+- 裝置登入只存雜湊；登入碼外流時在「API 資訊與登入碼」按「換一組登入碼」，人不在了由管理員在「成員與權限 ▸ 依成員」按「重設登入」。

@@ -19,6 +19,8 @@ const handle = createApp({
   docText: fs.readFileSync(path.join(ROOT, 'docs', 'ai-integration.md'), 'utf8'),
   config: {
     roomCode: process.env.ROOM_CODE,
+    openJoin: process.env.OPEN_JOIN ?? '1', // 本機預設開放自己加入（測試與種子資料用）；正式環境（Workers）預設關閉
+    authFailLimit: process.env.AUTH_FAIL_LIMIT,
     aiTokenTtlHours: process.env.AI_TOKEN_TTL_HOURS,
     humanTokenTtlHours: process.env.HUMAN_TOKEN_TTL_HOURS,
     fileTtlHours: process.env.FILE_TTL_HOURS,
