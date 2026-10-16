@@ -457,6 +457,7 @@
     const d = await api('/api/projects');
     state.projectList = d.items;
     state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [] };
+    document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
     PROJECTS.length = 0;
     PROJECTS.push(...state.projectList.filter(p => !p.archived).map(p => p.id));
   }
@@ -2265,7 +2266,7 @@
       ({ 'team-status': openTeam, members: openMembers, 'my-ai': openMyAi })[b.dataset.hub]();
     });
   }
-  const openers = { team: openTeamHub, members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr };
+  const openers = { team: openTeamHub, members: openMembers, 'my-ai': openMyAi, inbox: openInbox, files: openFiles, api: openApi, settings: openSettings, qr: openQr, 'proj-admin': () => openProjAdmin() };
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
   // 手機選單（底部滑出）
   const sheet = $('#sheet');
@@ -2302,6 +2303,19 @@
     return { cls: 'green', text: '正常' };
   }
 
+  // 團隊狀態「尚未回應的指派」（C-153）：只有 AI，同一個 AI 合併一列，展開看各則訊息
+  function unansweredByAi(list) {
+    if (!list.length) return '';
+    const by = new Map();
+    for (const u of list) by.set(u.participantId, [...(by.get(u.participantId) || []), u]);
+    const groups = [...by.values()].map(items => items.sort((a, b) => String(a.since).localeCompare(String(b.since))))
+      .sort((a, b) => String(a[0].since).localeCompare(String(b[0].since)));
+    return `<div class="group-title">尚未回應的指派 · ${groups.length} 個 AI</div>
+      ${groups.map(items => `<details class="note-card red unans">
+        <summary class="note-main"><span><b>${esc(items[0].name)}</b> <span class="red-text">· ${items.length} 則 · 最久 ${agoText(items[0].since).replace('前', '')}</span></span></summary>
+        <ul class="unans-list">${items.map(u => `<li><span class="muted small">已等 ${agoText(u.since).replace('前', '')}</span> <button type="button" class="link small" data-jump-team="${esc(u.messageId)}">查看訊息</button></li>`).join('')}</ul>
+      </details>`).join('')}`;
+  }
   function unansweredTag(m) {
     const who = state.unansweredByMsg.get(m.messageId);
     return who?.length ? `<span class="tag unanswered" title="指派超過 ${state.team?.unansweredMinutes || 20} 分鐘仍未讀取">尚未回應：${who.map(esc).join('、')}</span>` : '';
@@ -2399,13 +2413,10 @@
     }).join('');
     const body = openModal('團隊狀態', `
       <details class="help"><summary>狀態怎麼判斷？</summary>
-        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」。</p>
+        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；AI 被指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」，同一個 AI 合併一列（人類不列，請看收件匣）。</p>
       </details>
       <p class="muted small">要你決定、確認或採用的事都在<button type="button" class="link" data-goto-inbox>收件匣</button>，這裡只看團隊狀況。</p>
-      ${t.unanswered.length ? `<div class="group-title">尚未回應的指派 · ${t.unanswered.length}</div>
-        ${t.unanswered.map(u => `<div class="note-card red">
-          <div class="note-main"><span><b>${esc(u.name)}</b> <span class="red-text">· 已等 ${agoText(u.since).replace('前', '')}</span></span></div>
-          <button type="button" class="link small" data-jump-team="${esc(u.messageId)}">查看訊息</button></div>`).join('')}` : ''}
+      ${unansweredByAi(t.unanswered)}
       <div class="group-title">成員</div>
       <div class="tm-list">${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
     body.addEventListener('click', async e => {
@@ -3059,7 +3070,6 @@
 
   // 進階設定
   // 所屬專案（C-146 B）：一般成員只能看；群組管理員在「專案管理」調整
-  const isProjAdmin = () => state.projMeta.adminId === meId();
   function projMineHtml() {
     const rows = [state.me, ...[...state.participants.values()].filter(p => p.ownerParticipantId === meId() && p.status !== 'disabled')];
     return rows.map(p => `<div class="proj-row"><b>${esc(p.name)}${p.participantId === meId() ? '（我）' : ''}</b><span class="muted small">${(p.projects || []).filter(x => PROJECTS.includes(x)).map(projName).map(esc).join('、') || '尚未加入任何專案'}</span></div>`).join('');
@@ -3207,9 +3217,9 @@
         <button class="btn small" type="button" data-change-avatar>更換</button>
       </div>
       <div class="field"><span class="field-label">所屬專案</span>
-        <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在「專案管理」調整，這裡只能看。</p>
+        <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在「設定 ▸ 專案管理」調整，這裡只能看。</p>
         <div class="proj-rows">${projMineHtml()}</div>
-        ${isProjAdmin() ? '<button class="btn small" type="button" id="set-proj-admin">專案管理（新增、改名、封存、成員）</button>' : ''}</div>
+      </div>
       <div class="switch-row">
         <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
         <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
@@ -3219,7 +3229,6 @@
         <p class="muted small">會停用你和你名下的所有 AI，其他成員將看不到你們，Token 全部失效。</p>
         <button class="btn small danger-outline" type="button" id="set-leave">離開群組</button>
       </div>`);
-    body.querySelector('#set-proj-admin')?.addEventListener('click', () => openProjAdmin());
     body.querySelectorAll('[data-theme-opt]').forEach(b => b.addEventListener('click', () => {
       const v = b.dataset.themeOpt;
       if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);

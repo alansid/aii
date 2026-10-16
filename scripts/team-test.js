@@ -84,13 +84,15 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     await post(liu.token, 'OK 請開工', { replyToMessageId: ask.messageId });
     assert.ok(!(await team()).decisions.some(d => d.messageId === ask.messageId), '人類回覆後移出清單');
 
-    // 尚未回應：指派超過時限仍未 ACK
+    // 尚未回應：指派超過時限仍未 ACK（只列 AI，C-153）
     const assign = await post(liu.token, '請處理 X', { recipientIds: [pg.participantId] });
+    await post(pg.token, '[需確認] 請昱志看一下', { recipientIds: [liu.participant.participantId] });
     assert.ok(!(await team()).unanswered.some(u => u.messageId === assign.messageId), '剛指派 → 還不算');
     await sleep(1500);
     t = await team();
     assert.ok(t.unanswered.some(u => u.messageId === assign.messageId && u.name === '劉昱志的程式開發助手'), '超過時限 → 尚未回應');
     assert.ok(member(t, pg.participantId).pendingCount >= 1);
+    assert.ok(!t.unanswered.some(u => u.participantId === liu.participant.participantId), 'C-153：人類被指派不列入尚未回應');
     const notif = (await call(pg.token, '/api/notifications')).body.items.find(x => x.messageId === assign.messageId);
     await call(pg.token, '/api/notifications/ack', 'POST', { notificationIds: [notif.notificationId] });
     assert.ok(!(await team()).unanswered.some(u => u.messageId === assign.messageId), 'ACK 後移除');

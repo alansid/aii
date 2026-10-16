@@ -1356,10 +1356,10 @@ ${autoStandby
         oldestPendingAt: pendBy.get(p.id)?.oldest || null,
       }));
 
-    // 指派（@ 指定）超過時限仍未讀取的對象
+    // 指派（@ 指定）超過時限仍未讀取的 AI（C-153：人類不 ACK 通知，列出來只是收件匣的重複）
     const cutoff = new Date(now - UNANSWERED_MS).toISOString();
     const unanswered = pending
-      .filter(n => n.created_at <= cutoff && JSON.parse(n.reasons).includes('mention') && people.get(n.recipient_id)?.status === 'active')
+      .filter(n => n.created_at <= cutoff && JSON.parse(n.reasons).includes('mention') && people.get(n.recipient_id)?.status === 'active' && people.get(n.recipient_id)?.kind === 'ai')
       .map(n => ({ messageId: n.message_id, participantId: n.recipient_id, name: people.get(n.recipient_id).name, since: n.created_at }));
 
     // 等人決定：[需確認] 訊息，直到 (1) 人類直接回覆、(2) 人類按「已處理」、(3) PO 角色的 AI 以 [決策紀錄] 回覆

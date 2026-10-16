@@ -1236,3 +1236,8 @@ body.drawer-docked #app { padding-right: 400px; }
 @media (max-width: 720px) { .pa-grid { grid-template-columns: 1fr; } }
 .pm-new { display: flex; gap: 8px; margin-top: 8px; }
 .pm-new input { flex: 1; min-width: 0; min-height: 40px; }
+/* C-153 尚未回應的指派：同一個 AI 一列，展開看各則訊息 */
+.note-card.unans { display: block; }
+.note-card.unans summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.unans-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.unans-list li { display: flex; align-items: center; gap: 8px; }
