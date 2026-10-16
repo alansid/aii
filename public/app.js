@@ -1958,6 +1958,19 @@
   work.notes = [];
   async function loadNotes() { work.notes = (await api('/api/notifications?status=pending&limit=100')).items; }
   const ackNotes = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
+  // C-191：按下畫面立即移除、背景一次送出（每 100 則一批、並行），失敗才還原
+  async function ackNotesNow(ids, msg) {
+    if (!ids.length) return;
+    const gone = new Set(ids), backup = work.notes;
+    work.notes = work.notes.filter(n => !gone.has(n.notificationId));
+    renderWork();
+    if (msg) toast(msg);
+    try {
+      const chunks = [];
+      for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100));
+      await Promise.all(chunks.map(ackNotes));
+    } catch (err) { work.notes = backup; renderWork(); toast('沒有標成已讀：' + err.message); }
+  }
   // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
   const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
   // C-181：講已經決定完的決策卡的通知，不再列在「給你知道的」
@@ -2137,8 +2150,8 @@
     const ng = t.closest('[data-note-goto]');
     if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
     const na = t.closest('[data-note-ack]');
-    if (na) { try { await ackNotes([na.dataset.noteAck]); await loadNotes(); renderWork(); } catch (err) { toast(err.message); } return; }
-    if (t.closest('[data-note-ackall]')) { try { const ids = noteList().map(n => n.notificationId); for (let i = 0; i < ids.length; i += 100) await ackNotes(ids.slice(i, i + 100)); await loadNotes(); renderWork(); toast('已全部標為已讀'); } catch (err) { toast(err.message); } return; }
+    if (na) return ackNotesNow([na.dataset.noteAck]);
+    if (t.closest('[data-note-ackall]')) return ackNotesNow(noteList().map(n => n.notificationId), '已全部標為已讀');
     const tj = t.closest('[data-todo-jump]');
     if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
     const tr = t.closest('[data-todo-resolve]');

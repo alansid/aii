@@ -487,13 +487,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some(x => typeof x !== 'string')) {
       throw invalid('notificationIds 需為 1～100 筆字串陣列');
     }
-    const confirmedIds = [];
-    const ts = nowIso();
-    for (const id of new Set(ids)) {
-      const r = await db.run(
-        "UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE id = ? AND recipient_id = ?", ts, id, me.id);
-      if (r.changes) confirmedIds.push(id);
-    }
+    // C-191：原本每則一個 UPDATE（100 則＝100 次資料庫往返），改成查一次＋更新一次
+    const list = JSON.stringify([...new Set(ids)]);
+    const confirmedIds = (await db.all('SELECT id FROM notifications WHERE recipient_id = ? AND id IN (SELECT value FROM json_each(?))', me.id, list)).map(r => r.id);
+    if (confirmedIds.length) await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND id IN (SELECT value FROM json_each(?))", nowIso(), me.id, list);
     return { confirmedIds };
   }
 
