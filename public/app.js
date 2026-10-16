@@ -1437,6 +1437,7 @@
   function showPage(page) {
     if (work.openId) closeCard();
     state.page = ['work', 'inbox', 'team', 'overview'].includes(page) ? page : 'messages';
+    if (state.page !== 'team') work.teamScrollTab = null; // C-157：離開團隊頁就不再保留捲動位置（UX 第 1010 則），回來從頂端開始
     store.set(PAGE_KEY, state.page);
     $('#page-messages').hidden = state.page !== 'messages';
     $('#page-work').hidden = state.page === 'messages'; // 收件匣與工作共用同一個容器
