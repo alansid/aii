@@ -2634,8 +2634,7 @@
     const dec = '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;
-    // 側欄已無團隊狀態區（C-141）：有人卡住／可能斷線時，「團隊」選單旁亮小紅點
-    document.querySelectorAll('.nav-parent').forEach(el => el.toggleAttribute('data-alert', abnormal.length > 0));
+    // C-165：側欄「團隊」「設定」的紅點拿掉（受阻看今日總覽與工作頁，Token 問題看頂端警示列）
   }
   for (const el of [$('#team-bar')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
 
