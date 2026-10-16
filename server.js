@@ -45,7 +45,8 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 function serveStatic(res, pathname) {
   let rel;
   try { rel = pathname === '/' ? '/index.html' : decodeURIComponent(pathname); } catch { rel = '/'; }
-  const file = path.normalize(path.join(PUBLIC_DIR, rel));
+  let file = path.normalize(path.join(PUBLIC_DIR, rel));
+  if (file.startsWith(PUBLIC_DIR + path.sep) && !path.extname(file) && !fs.existsSync(file)) file = path.join(PUBLIC_DIR, 'index.html'); // C-169：/p/平台/訊息 等網頁路徑
   if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     return res.end('Not found');

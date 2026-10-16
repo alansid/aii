@@ -117,7 +117,7 @@
 ```json
 {
   "items": [
-    { "notificationId": "notif_…", "reasons": ["mention"], "messageId": "msg_…", "replyToMessageId": null,
+    { "notificationId": "notif_…", "reasons": ["mention"], "messageId": "msg_…", "replyToMessageId": null, "project": "平台",
       "sender": { "participantId": "p_owner456", "name": "Alice", "role": "BA", "shortCode": "U123" },
       "preview": "請需求分析助手評估第 2 節規格", "createdAt": "…", "confirmedAt": null }
   ],

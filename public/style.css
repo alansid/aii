@@ -1320,3 +1320,95 @@ body.drawer-docked #app { padding-right: 400px; }
   body.typing .new-pill .np-short { display: inline; }
   .ctx-bar { top: -12px; }
 }
+
+/* ===== C-169 導覽改兩層：第一層「我的專案」、第二層專案內 ===== */
+/* 側欄項目高 44px 緊貼：選單區 flex 撐高後 grid 會平均拉高每一列（原本約 90px） */
+.sidebar .side-nav { align-content: start; }
+.proj-switch { padding: 0; display: grid; gap: 4px; }
+.ph-back { all: unset; box-sizing: border-box; cursor: pointer; min-height: 32px; padding: 4px 8px; font-size: 13px; color: var(--sb-active, #1d4ed8); border-radius: 6px; }
+.ph-back:hover { text-decoration: underline; }
+.ph-back:focus-visible, .ph-swap:focus-visible, .crumb-link:focus-visible, .m-back:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.ph-card { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; background: var(--sb-card, var(--surface)); border: 1px solid var(--sb-line, var(--border)); }
+.ph-card.is-hub { padding: 10px 12px; }
+.ph-name { flex: 1; min-width: 0; display: grid; }
+.ph-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-name .small { font-size: 11px; color: var(--sb-muted, var(--muted)); }
+.ps-btn.ph-swap { width: 36px; min-height: 36px; height: 36px; flex: none; padding: 0; justify-content: center; border: 0; background: transparent; font-size: 16px; color: inherit; }
+.ps-btn.ph-swap:hover { background: color-mix(in srgb, var(--sb-line, #cdd5e1) 60%, transparent); }
+.pico { width: var(--psz, 36px); height: var(--psz, 36px); flex: none; border-radius: calc(var(--psz, 36px) / 4.5); background: var(--pc); color: #fff; font-weight: 700; font-size: calc(var(--psz, 36px) * .42); display: inline-flex; align-items: center; justify-content: center; }
+/* 頂端麵包屑（桌面） */
+.crumbs { flex: none; min-height: 52px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: 14px; }
+.crumbs:empty { display: none; }
+.crumb-link { all: unset; cursor: pointer; color: var(--primary); min-height: 32px; display: inline-flex; align-items: center; border-radius: 6px; padding: 0 2px; }
+.crumb-link:hover { text-decoration: underline; }
+.crumb-sep { color: var(--muted); font-size: 12px; }
+@media (max-width: 899px) { .crumbs { display: none; } }
+/* 手機頂欄「‹」 */
+.m-back { all: unset; box-sizing: border-box; cursor: pointer; width: 44px; height: 44px; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 26px; line-height: 1; border-radius: 10px; color: var(--text); }
+.m-back[hidden], .m-todo[hidden] { display: none; }
+/* 輸入框下方固定的「發到：平台」 */
+.send-to { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.send-to .ptag { margin-left: 0; }
+.ptag-all { background: var(--surface-2); color: var(--text); }
+/* 第一層 */
+.hub { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; align-items: start; }
+.hub-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.hub-main > .work-head { margin: 0; }
+.hub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.hub-card { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 12px; padding: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; color: var(--text); min-width: 0; }
+.hub-card:hover { border-color: var(--primary); box-shadow: var(--shadow); }
+.hub-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.hc-head { display: flex; align-items: center; gap: 12px; }
+.hc-name { flex: 1; min-width: 0; display: grid; }
+.hc-name b { font-size: 17px; }
+.hc-name .small { font-size: 12px; color: var(--muted); }
+.hc-todo { flex: none; padding: 0 10px; height: 24px; border-radius: 12px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; }
+.hc-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.hs { display: block; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--muted); }
+.hs b { display: block; font-size: 22px; color: var(--text); line-height: 1.3; }
+.hs.bad { background: #fee2e2; color: #991b1b; } .hs.bad b { color: #991b1b; }
+.hs.warn { background: #fef3c7; color: #92400e; } .hs.warn b { color: #92400e; }
+.hc-last { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hc-go { align-self: flex-end; color: var(--primary); font-weight: 600; font-size: 14px; }
+.hub-cross { flex-direction: row; align-items: center; padding: 14px 18px; }
+.hub-cross .hc-name .small { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub-cross .hc-go { align-self: center; }
+.hub-todo { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; position: sticky; top: 0; }
+.ht-head { display: flex; align-items: center; gap: 8px; padding: 14px; }
+.ht-head h3 { margin: 0; font-size: 16px; }
+.ht-group { padding: 6px 14px; background: var(--surface-2); border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.ht-row { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 14px; border-top: 1px solid var(--border); font-size: 14px; color: var(--text); }
+.ht-row:hover { background: var(--surface-2); }
+.ht-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.ht-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ht-go { color: var(--primary); }
+.ht-tag { flex: none; padding: 0 8px; height: 22px; border-radius: 11px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; }
+.ht-tag.dec { background: #e6eeff; color: #1d4ed8; }
+.ht-tag.ask { background: #fef3c7; color: #92400e; }
+.ht-tag.sg { background: #ede9fe; color: #5b21b6; }
+.ht-empty { padding: 4px 14px 10px; margin: 0; }
+.ht-note { padding: 10px 14px; margin: 0; border-top: 1px solid var(--border); }
+.modal .ht-group:first-child { border-top: 0; }
+.dcard.flash, .sugg-row.flash { animation: flash 1.2s ease; }
+@media (max-width: 899px) {
+  .hub { grid-template-columns: minmax(0, 1fr); }
+  .hub-todo { display: none; } /* 手機改由頂欄「要你處理 N」打開 */
+  .hub-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .hub-card { padding: 14px; gap: 10px; }
+  .hs b { font-size: 18px; }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .hs.bad { background: #450a0a; color: #fecaca; } :root:not([data-theme="light"]) .hs.bad b { color: #fecaca; }
+  :root:not([data-theme="light"]) .hs.warn { background: #451a03; color: #fde68a; } :root:not([data-theme="light"]) .hs.warn b { color: #fde68a; }
+  :root:not([data-theme="light"]) .ht-tag.dec { background: #172554; color: #bfdbfe; }
+  :root:not([data-theme="light"]) .ht-tag.ask { background: #451a03; color: #fde68a; }
+  :root:not([data-theme="light"]) .ht-tag.sg { background: #2e1065; color: #ddd6fe; }
+}
+:root[data-theme="dark"] .hs.bad { background: #450a0a; color: #fecaca; } :root[data-theme="dark"] .hs.bad b { color: #fecaca; }
+:root[data-theme="dark"] .hs.warn { background: #451a03; color: #fde68a; } :root[data-theme="dark"] .hs.warn b { color: #fde68a; }
+:root[data-theme="dark"] .ht-tag.dec { background: #172554; color: #bfdbfe; }
+:root[data-theme="dark"] .ht-tag.ask { background: #451a03; color: #fde68a; }
+:root[data-theme="dark"] .ht-tag.sg { background: #2e1065; color: #ddd6fe; }
+/* 手機第二層：標題「平台 · 訊息」優先，在線人數收起（點選單仍看得到成員） */
+.mobile-top:has(.m-back:not([hidden])) .mobile-title .presence { display: none; }
+.mobile-top:has(.m-back:not([hidden])) { padding-left: 4px; }

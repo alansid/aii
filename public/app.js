@@ -221,15 +221,18 @@
     $('#app').hidden = false;
     drawMe();
     await loadProjectList().catch(() => {});
+    const route = parseRoute();
+    state.view = route.view || 'hub';
     drawProjSwitch();
     await loadParticipants();
     await loadWindow();
     refreshInboxCount();
     loadTeam();
-    loadCards().then(() => { renderMessages(false); if (state.page === 'work') renderWork(); }).catch(() => {});
+    loadCards().then(() => { renderMessages(false); if (state.page === 'work' || state.page === 'hub') renderWork(); }).catch(() => {});
     connectEvents();
+    // C-169：網址帶專案與頁面；多專案成員打開 / 先到第一層「我的專案」，只屬一個專案的人直接進自己的專案
     const savedPage = store.get(PAGE_KEY);
-    showPage(['work', 'inbox', 'team', 'overview'].includes(savedPage) ? savedPage : !savedPage && myProjects().length > 1 ? 'overview' : 'messages');
+    showPage(route.page || (projectView() === 'hub' ? 'hub' : ['work', 'inbox', 'team'].includes(savedPage) ? savedPage : 'messages'), { replace: true });
   }
 
   async function loadParticipants() {
@@ -470,7 +473,6 @@
       || m.recipients.some(r => mine.has(r.participantId));
   }
   // ---------- 專案（C-111）：平台／銀行系統 ----------
-  const PROJ_KEY = 'aigile-switch-project';
   // 專案清單來自伺服器（可新增、改名、封存）；PROJECTS 是未封存專案的 id，專案顯示名稱用 projName
   const PROJECTS = [];
   state.projectList = [];
@@ -486,62 +488,119 @@
   }
   const myProjects = () => (state.me?.projects || []).filter(p => PROJECTS.includes(p));
   const singleProject = () => myProjects().length === 1;
-  // 目前檢視（C-146 A）：單一專案成員固定自己的專案；多專案成員可切換各專案、跨專案頻道（cross）或全部專案（all），記在瀏覽器。
-  // 下拉只列各專案與跨專案頻道；全部專案由側欄「今日總覽」進入（昱志第 997 則、UX 第 998 則），多專案成員預設就是全部專案
+  // 目前檢視（C-169 兩層導覽）：hub＝第一層「我的專案」、專案 id＝第二層專案內、cross＝跨專案頻道。
+  // 只屬一個專案的人固定自己的專案（沒有第一層），沒有專案的人只有跨專案頻道；所在位置記在網址（/p/平台/訊息、/cross/訊息）
+  state.view = 'hub';
+  const hasHub = () => myProjects().length > 1;
   function projectView() {
     if (singleProject()) return myProjects()[0];
     if (!myProjects().length) return 'cross';
-    const v = store.get(PROJ_KEY);
-    return myProjects().includes(v) || v === 'cross' ? v : 'all';
+    const v = state.view;
+    return myProjects().includes(v) || v === 'cross' ? v : 'hub';
   }
   const projTag = p => (p ? `<span class="ptag" data-p="${esc(p)}">${esc(projName(p))}</span>` : '');
   // 卡片標題（C-146 A）：不再手打「[平台]」，舊卡的前綴顯示時去掉，改看專案標籤
   const cardTitle = c => { const m = /^\s*\[([^\]\n]{1,20})\]\s*/.exec(c.title || ''); return m && state.projectList.some(p => p.id === m[1] || p.name === m[1]) ? c.title.slice(m[0].length) || c.title : c.title; };
-  // 訊息：總覽全部；跨專案頻道只看「全部專案」的訊息；選了專案只看該專案（單一專案成員另外看得到跨專案頻道）
-  const msgInView = p => { const v = projectView(); return v === 'all' || (v === 'cross' ? !p : p === v || (!p && singleProject())); };
-  const cardInView = c => { const v = projectView(); return v === 'all' || v === 'cross' || c.project === v; };
-  const inView = p => { const v = projectView(); return v === 'all' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
-  const viewLabel = v => (v === 'all' ? '全部專案' : v === 'cross' ? '跨專案頻道' : projName(v));
-  // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議
+  // 訊息：跨專案頻道只看「全部專案」的訊息；專案內只看該專案（單一專案成員沒有第一層，另外看得到跨專案頻道）
+  const msgInView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v || (!p && singleProject())); };
+  const cardInView = c => { const v = projectView(); return v === 'hub' || (v !== 'cross' && c.project === v); };
+  const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
+  const viewLabel = v => (v === 'hub' ? '我的專案' : v === 'cross' ? '跨專案頻道' : projName(v));
+  // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
   function todoByView() {
     const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || [])];
-    const n = { all: items.length, cross: items.filter(x => !x.project).length };
+    const n = { hub: items.length, cross: items.filter(x => !x.project).length };
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
   }
+  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊' };
+  const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
+  const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
+  const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc([...projName(p)][0] || '?')}</span>`;
+  const projMembers = p => [...state.participants.values()].filter(x => x.status !== 'disabled' && (x.projects || []).includes(p)).length;
+  // 側欄頂端：「‹ 我的專案」＋專案名＋⇅（不必先回第一層就能切到別的專案）；只屬一個專案的人沒有「‹ 我的專案」與 ⇅
   function drawProjSwitch() {
-    document.querySelectorAll('[data-nav="overview"]').forEach(b => { b.hidden = myProjects().length < 2; });
     const v = projectView(), counts = todoByView();
-    const opts = [...myProjects(), ...(myProjects().length > 1 ? ['cross'] : [])];
+    document.querySelectorAll('[data-proj-only]').forEach(b => { b.hidden = v === 'hub'; });
+    document.querySelectorAll('[data-no-cross]').forEach(b => { b.hidden = v === 'hub' || v === 'cross'; });
+    const opts = [...myProjects(), 'cross'];
     const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你做的 ${counts[k]} 件">${counts[k]}</span>` : '');
     document.querySelectorAll('.proj-switch').forEach((el, i) => {
-      el.innerHTML = singleProject() || !myProjects().length
-        ? `<span class="proj-fixed" title="目前專案">${myProjects().length ? esc(projName(myProjects()[0])) : '尚未加入任何專案（只看得到跨專案頻道）'}</span>`
-        : `<button type="button" class="ps-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}"><span class="ps-label">目前專案</span><b>${esc(viewLabel(v))}</b>${badge(v)}<span class="ps-chev" aria-hidden="true">▾</span></button>
-          <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${badge(k)}</li>`).join('')}</ul>`;
+      if (v === 'hub') { el.innerHTML = `<div class="ph-card is-hub"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span>${badge('hub')}</div>`; return; }
+      const sub = v === 'cross' ? '所有專案都看得到' : `成員 ${projMembers(v)}`;
+      el.innerHTML = `${hasHub() ? '<button type="button" class="ph-back" data-proj="hub">‹ 我的專案</button>' : ''}
+        <div class="ph-card">${projIcon(v)}<span class="ph-name"><b>${esc(viewLabel(v))}</b><span class="small">${esc(sub)}</span></span>
+          ${hasHub() ? `<button type="button" class="ps-btn ph-swap" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}" aria-label="切換專案" title="切換專案">⇅</button>
+          <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${badge(k)}</li>`).join('')}</ul>` : ''}</div>`;
     });
-    drawProjSel();
+    drawChrome();
   }
-  // 發訊息的專案：預設跟目前檢視；回覆時不選就繼承被回覆訊息的專案（由伺服器處理）
-  let projTouched = false;
-  const defaultProj = () => (projectView() === 'all' ? '' : projectView() === 'cross' ? 'all' : projectView());
-  function drawProjSel() {
-    const sel = $('#proj-sel');
-    if (!sel) return;
-    const opts = [['', '專案：預設'], ...myProjects().map(p => [p, projName(p)]), ['all', '全部專案']];
-    sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
-    sel.value = projTouched ? sel.value : defaultProj();
+  // 頂端麵包屑「我的專案 ▸ 平台 ▸ 訊息」、手機頂欄「‹」與標題、第一層的「要你處理 N」、輸入框的「發到」
+  function drawChrome() {
+    const v = projectView(), page = PAGE_NAME[state.page] || '訊息';
+    const home = !hasHub() ? '' : v === 'hub' ? '<b aria-current="page">我的專案</b>' : '<button type="button" class="crumb-link" data-proj="hub">我的專案</button>';
+    const parts = v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
+    $('#crumbs').innerHTML = parts.filter(Boolean).join('<span class="crumb-sep" aria-hidden="true">▸</span>');
+    $('#m-back').hidden = !hasHub() || v === 'hub';
+    $('#m-title').textContent = v === 'hub' ? '我的專案' : `${viewLabel(v)} · ${page}`;
+    const counts = todoByView(), here = counts[v] || 0; // 收件匣徽章＝所在專案的件數，切專案就跟著變
+    document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !here; b.textContent = here > 99 ? '99+' : here; });
+    const todo = $('#m-todo'), n = counts.hub, nb = todo.querySelector('.m-todo-n');
+    todo.hidden = v !== 'hub';
+    nb.hidden = !n; nb.textContent = n > 99 ? '99+' : n;
+    drawSendTo();
   }
-  function setProjectView(k) {
-    store.set(PROJ_KEY, k);
-    if (state.page === 'overview') showPage('messages');
-    projTouched = false;
+  // 發訊息的專案（C-169）：固定是目前所在的專案，不能選；跨專案頻道發的是全部專案；回覆時跟著被回覆的訊息
+  function sendTarget() {
+    if (state.replyTo) return state.replyTo.project || 'all';
+    const v = projectView();
+    return v === 'cross' || v === 'hub' ? 'all' : v;
+  }
+  function drawSendTo() {
+    const el = $('#send-to');
+    if (!el) return;
+    const t = sendTarget();
+    el.innerHTML = `<span class="muted">發到</span>${t === 'all' ? '<span class="ptag ptag-all">跨專案頻道</span><span class="muted">所有專案都看得到</span>' : projTag(t)}${state.replyTo ? '<span class="muted">（跟著被回覆的訊息）</span>' : ''}`;
+  }
+  // 網址（C-169）：/p/<專案名>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
+  const PAGE_BY_NAME = Object.fromEntries(Object.entries(PAGE_NAME).map(([k, t]) => [t, k]));
+  function parseRoute() {
+    const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
+    const page = x => PAGE_BY_NAME[x] || (PAGE_NAME[x] ? x : null);
+    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.name === seg[1] || x.id === seg[1]); return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
+    if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
+    return { view: null, page: null };
+  }
+  function routePath() {
+    const v = projectView();
+    if (v === 'hub') return '/';
+    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(projName(v))}/${encodeURIComponent(PAGE_NAME[state.page] || '訊息')}`;
+  }
+  function syncUrl(replace) {
+    const u = routePath();
+    let cur = location.pathname;
+    try { cur = decodeURIComponent(cur); } catch {}
+    if (cur === decodeURIComponent(u)) return;
+    history[replace ? 'replaceState' : 'pushState'](null, '', u);
+  }
+  // 切換所在：k＝hub／專案 id／cross；切專案時留在同一頁（工作頁在跨專案頻道沒有，改到訊息）
+  function setProjectView(k, page) {
+    state.view = k;
+    if (state.replyTo) setReply(null);
     drawProjSwitch();
     syncFilterBar();
     renderMessages(true);
-    if (state.page === 'work' || state.page === 'inbox') renderWork();
-    if (state.page === 'team') renderTeamPage();
+    const v = projectView();
+    return showPage(page || (v === 'hub' ? 'hub' : state.page === 'hub' ? 'messages' : state.page));
   }
+  window.addEventListener('popstate', () => {
+    if (!state.me) return;
+    const r = parseRoute();
+    state.view = r.view || 'hub';
+    if (state.replyTo) setReply(null);
+    drawProjSwitch(); syncFilterBar(); renderMessages(true);
+    showPage(r.page || (projectView() === 'hub' ? 'hub' : 'messages'), { noHistory: true });
+  });
   function psOpen(btn, open) {
     const list = btn.parentElement.querySelector('.ps-list');
     btn.setAttribute('aria-expanded', String(open));
@@ -553,7 +612,7 @@
     if (btn) return psOpen(btn, btn.getAttribute('aria-expanded') !== 'true');
     const b = e.target.closest('[data-proj]');
     document.querySelectorAll('.ps-btn[aria-expanded="true"]').forEach(x => psOpen(x, false));
-    if (b) setProjectView(b.dataset.proj);
+    if (b) { closeSheet(false); setProjectView(b.dataset.proj); }
   });
   document.addEventListener('keydown', e => {
     const li = e.target.closest?.('.ps-list [data-proj]');
@@ -566,7 +625,6 @@
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const b = list.parentElement.querySelector('.ps-btn'); psOpen(b, false); b.focus(); }
     else if (e.key === 'Tab') psOpen(list.parentElement.querySelector('.ps-btn'), false);
   });
-  $('#proj-sel').addEventListener('change', () => { projTouched = true; });
 
   function visible(m) {
     const f = state.filter;
@@ -606,35 +664,28 @@
     const f = state.filter;
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled').sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
-    const draft = { scope: f.scope, member: f.member, tag: f.tag, project: projectView() };
-    const showProj = !singleProject();
+    const draft = { scope: f.scope, member: f.member, tag: f.tag };
     const body = openModal('篩選', `
       <div class="stack">
         <div class="field"><span class="field-label" id="fs-scope">範圍</span>
           <div class="seg-scope full" role="group" aria-labelledby="fs-scope" id="fs-scope-g"></div></div>
-        ${showProj ? `<div class="field"><span class="field-label" id="fs-proj">專案</span>
-          <div class="seg-scope full" role="group" aria-labelledby="fs-proj" id="fs-proj-g"></div></div>` : ''}
         <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('')}</select></label>
         <label>標籤<select id="fs-tag"><option value="">所有標籤</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
       </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除</button><button class="btn primary grow" type="button" id="fs-apply">套用</button>' });
     const draw = () => {
       body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
-      const pg = body.querySelector('#fs-proj-g');
-      if (pg) pg.innerHTML = [['all', '全部專案'], ...myProjects().map(p => [p, projName(p)]), ['cross', '跨專案頻道']].map(([k, t]) => `<button type="button" data-fs-proj="${k}" aria-pressed="${draft.project === k}">${t}</button>`).join('');
       body.querySelector('#fs-member').value = draft.member;
       body.querySelector('#fs-tag').value = draft.tag;
     };
     draw();
     body.addEventListener('click', e => {
       const sc = e.target.closest('[data-fs-scope]'); if (sc) { draft.scope = sc.dataset.fsScope; draw(); }
-      const pr = e.target.closest('[data-fs-proj]'); if (pr) { draft.project = pr.dataset.fsProj; draw(); }
     });
     body.querySelector('#fs-member').onchange = e => { draft.member = e.target.value; };
     body.querySelector('#fs-tag').onchange = e => { draft.tag = e.target.value; };
-    body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '', project: projectView() }); draw(); };
+    body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '' }); draw(); };
     body.modal.querySelector('#fs-apply').onclick = () => {
       closeModal();
-      if (showProj && draft.project !== projectView()) { store.set(PROJ_KEY, draft.project); projTouched = false; drawProjSwitch(); if (state.page === 'work') renderWork(); }
       setFilter({ scope: draft.scope, member: draft.member, tag: draft.tag });
     };
   }
@@ -768,6 +819,7 @@
     const stick = nearBottom() || isMine(m);
     state.messages.push(m);
     state.byId.set(m.messageId, m);
+    if (state.page === 'hub' && work.loaded) renderWork();
     if (!stick && visible(m)) {
       if (!state.newCount) state.firstNewId = m.messageId;
       state.newCount++;
@@ -837,6 +889,8 @@
 
   document.getElementById('new-pill')?.addEventListener('click', () => { scrollBottom(); clearNew(); });
   async function jumpTo(id) {
+    const m0 = state.byId.get(id);
+    if (m0 && !msgInView(m0.project) && hasHub()) await setProjectView(m0.project && myProjects().includes(m0.project) ? m0.project : 'cross', 'messages');
     let el = document.getElementById('msg-' + id);
     if (!el && state.byId.has(id) && (filtering() || state.collapsed.size)) {
       state.collapsed.clear();
@@ -861,6 +915,7 @@
       $('#reply-to-preview').textContent = m.text.slice(0, 60);
       $('#input').focus();
     }
+    drawSendTo();
   }
   $('#reply-cancel').addEventListener('click', () => setReply(null));
 
@@ -966,10 +1021,7 @@
   }
 
   // 沒動過專案選單：回覆時不帶（繼承），否則帶目前檢視的專案；動過就照選的
-  function sendProject() {
-    const v = projTouched ? $('#proj-sel').value : (state.replyTo ? '' : defaultProj());
-    return v ? { project: v } : {};
-  }
+  const sendProject = () => ({ project: sendTarget() });
   let sending = false;
   let pendingRequestId = null; // 失敗重送時沿用同一個 requestId，避免重複發文
   async function send() {
@@ -984,7 +1036,6 @@
         body: { text, requestId: pendingRequestId, replyToMessageId: state.replyTo?.messageId, ...resolveRecipients(text), ...sendProject() },
       });
       pendingRequestId = null;
-      projTouched = false; drawProjSel();
       onNewMessage(m);
       input.value = '';
       setReply(null);
@@ -1549,7 +1600,7 @@
 
   // AI 建議區塊
   function suggHtml(batch = false) {
-    const list = work.sugg || [];
+    const list = (work.sugg || []).filter(x => inView(x.project));
     if (!list.length) return '';
     for (const id of [...work.sel]) if (!list.some(g => g.suggestionId === id)) work.sel.delete(id);
     const batchBar = batch ? `<div class="batch-bar" role="group" aria-label="批次處理"><span class="small">已選 <b>${work.sel.size}</b> 則</span><button type="button" class="btn small primary" data-batch="apply" ${work.sel.size ? '' : 'disabled'}>批次採用</button><button type="button" class="btn small" data-batch="skip" ${work.sel.size ? '' : 'disabled'}>批次略過</button><span class="muted small">逐則勾選後才能批次處理，不提供一鍵全部採用</span></div>` : '';
@@ -1558,7 +1609,7 @@
       : `${esc(g.card?.cardId || '')} ${esc(g.card?.title || '')} 狀態改為「${esc(g.to)}」${g.waitFor ? `，等 ${esc(g.waitFor.name)}` : ''}`);
     return `<section class="wsugg"><div class="wsugg-head"><span class="wdot sg"></span><h3>AI 建議</h3><span class="wcount pur">${list.length}</span><span class="muted small">由你採用後才會建立或更新卡片</span></div>
       ${batchBar}
-      ${list.map(g => `<div class="sugg-row${g.expired ? ' expired' : ''}">
+      ${list.map(g => `<div class="sugg-row${g.expired ? ' expired' : ''}" data-sugg-row="${esc(g.suggestionId)}">
         ${batch ? `<label class="sugg-check"><input type="checkbox" data-sugg-check="${esc(g.suggestionId)}" ${work.sel.has(g.suggestionId) ? 'checked' : ''} aria-label="勾選這則建議"></label>` : ''}
         <div class="sugg-main"><div class="sugg-top"><span class="sgk">${g.kind === 'create' ? '建立卡片' : '更新狀態'}</span>${g.expired ? '<span class="cmark stale" title="這張卡在建議之後已有變動，只能略過">已過期</span>' : ''}<span class="muted small">${esc(g.from?.name || '')}</span></div>
           <b>${what(g)}</b><span class="small">${esc(g.why)}</span>
@@ -1650,11 +1701,15 @@
   });
   function openTodoPage() { closeSheet(false); showPage('inbox'); }
   document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
-  function showPage(page) {
+  function showPage(page, { replace = false, noHistory = false } = {}) {
     if (work.openId) closeCard();
-    state.page = ['work', 'inbox', 'team', 'overview'].includes(page) ? page : 'messages';
+    const v = projectView();
+    state.page = v === 'hub' ? 'hub' : ['work', 'inbox', 'team'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
     if (state.page !== 'team') work.teamScrollTab = null; // C-157：離開團隊頁就不再保留捲動位置（UX 第 1010 則），回來從頂端開始
-    store.set(PAGE_KEY, state.page);
+    if (state.page !== 'hub') store.set(PAGE_KEY, state.page);
+    if (!noHistory) syncUrl(replace);
+    drawChrome();
+    document.body.classList.toggle('at-hub', state.page === 'hub');
     $('#page-messages').hidden = state.page !== 'messages';
     $('#page-work').hidden = state.page === 'messages'; // 收件匣與工作共用同一個容器
     document.querySelectorAll('[data-nav]').forEach(b => {
@@ -1662,20 +1717,20 @@
     });
     syncTeamNav();
     if (state.page === 'work') {
-      (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
+      return (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
     } else if (state.page === 'team') {
       renderTeamPage();
-    } else if (state.page === 'overview') {
-      Promise.all([work.loaded ? null : loadCards(), loadTeam().catch(() => {})]).then(renderWork).catch(err => toast(err.message));
+    } else if (state.page === 'hub') {
+      return Promise.all([work.loaded ? null : loadCards(), loadTeam().catch(() => {})]).then(renderWork).catch(err => toast(err.message));
     } else if (state.page === 'inbox') {
-      Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
+      return Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
     } else scrollBottom();
+    return Promise.resolve();
   }
   document.addEventListener('click', e => {
     const b = e.target.closest('[data-nav]');
     if (!b) return;
     closeSheet(false);
-    if (b.dataset.nav === 'overview' && projectView() !== 'all') { store.set(PROJ_KEY, 'all'); drawProjSwitch(); syncFilterBar(); renderMessages(true); }
     showPage(b.dataset.nav);
     if (b.dataset.nav === 'messages') $('#input').focus();
   });
@@ -1692,10 +1747,10 @@
 
   function renderWork() {
     const box = $('#page-work');
-    if (!['work', 'inbox', 'overview'].includes(state.page) || !work.loaded) return;
+    if (!['work', 'inbox', 'hub'].includes(state.page) || !work.loaded) return;
     box.classList.remove('is-board');
     if (state.page === 'inbox') { box.innerHTML = inboxHtml(); return; }
-    if (state.page === 'overview') { box.innerHTML = todayHtml(); return; }
+    if (state.page === 'hub') { box.innerHTML = hubHtml(); return; }
     const all = visibleCards();
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
     const keep = document.activeElement?.id;
@@ -1770,7 +1825,7 @@
     return decideMe.length ? `
       <section class="wdecisions"><div class="wdec-head"><h3>決策卡</h3><span class="wcount ora">${decideMe.length}</span></div>
         <div class="dgrid">${decideMe.map(c => `
-          <article class="dcard">
+          <article class="dcard" data-dcard="${esc(c.cardId)}">
             <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span><span class="cid">${esc(c.cardId)}</span><span class="grow"></span>
               <button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
             <h4>${esc(c.decision.question)}</h4>
@@ -1783,7 +1838,7 @@
   async function loadNotes() { work.notes = (await api('/api/notifications?status=pending&limit=100')).items; }
   const ackNotes = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
   // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
-  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview })); };
+  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview })); };
   function notesHtml() {
     const list = noteList();
     const reason = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
@@ -1798,37 +1853,66 @@
             <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">已讀</button></div></div>`;
       }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}</section>`;
   }
-  // 今日總覽（C-146 A）：每個專案一列，阻塞與跨專案頻道最新 3 則
-  function todayHtml() {
-    const cards = [...work.cards.values()], today = new Date().toDateString();
-    const isToday = iso => !!iso && new Date(iso).toDateString() === today;
-    const rows = myProjects().map(p => {
-      const cs = cards.filter(c => c.project === p);
-      const n = { done: cs.filter(c => c.status === '已完成' && isToday(c.done?.at)).length, doing: cs.filter(c => c.status === '進行中').length,
-        blocked: cs.filter(c => c.status === '受阻').length, verify: cs.filter(c => c.status === '已完成' && !c.verified).length };
-      const num = (v, cls) => (v ? `<span class="pill-tag ${cls}">${v}</span>` : '0');
-      return `<tr><th scope="row">${esc(projName(p))}</th><td>${n.done}</td><td>${n.doing}</td><td>${num(n.blocked, 'red')}</td><td>${num(n.verify, 'yellow')}</td><td class="muted">—</td>
-        <td><button type="button" class="link ov-enter" data-ov-enter="${esc(p)}">進入 ›</button></td></tr>`;
-    }).join('');
-    const blocked = cards.filter(c => c.status === '受阻' && myProjects().includes(c.project));
-    const cross = state.messages.filter(m => !m.project).slice(-3);
-    return `<div class="work-head"><div class="work-title"><h2>今日總覽</h2><span class="muted small">${esc(new Date().toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span></div></div>
-      <section class="wpanel ov-table-wrap"><table class="ov-table"><thead><tr><th scope="col">專案</th><th scope="col">今日完成</th><th scope="col">進行中</th><th scope="col">受阻</th><th scope="col">待驗收</th><th scope="col">外部依賴</th><th scope="col"><span class="sr-only">進入</span></th></tr></thead><tbody>${rows}</tbody></table></section>
-      <div class="ov-grid">
-        <section class="wpanel"><h3>阻塞</h3>${blocked.length ? blocked.map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span><span class="pill-tag red">受阻</span> ${projTag(c.project)} ${esc(c.cardId)} ${esc(cardTitle(c))}</span><span class="muted small">${c.waitFor ? '等 ' + esc(c.waitFor.name) : ''}</span></button>`).join('') : '<p class="muted small">目前沒有受阻的卡。</p>'}</section>
-        <section class="wpanel"><h3>跨專案頻道（最新 3 則）</h3>${cross.length ? cross.map(m => `<button type="button" class="wpanel-item" data-ov-cross="${esc(m.messageId)}"><span>${esc(m.text.slice(0, 60))}</span><span class="muted small">${esc(m.author.name)} · ${esc(fmtTime(m.createdAt))}</span></button>`).join('') : '<p class="muted small">還沒有跨專案訊息。</p>'}
-          <p class="muted small">規則公告、跨團隊協調請發在跨專案頻道（全部專案），所有人可見。</p></section>
-      </div>`;
+  // 第一層「我的專案」（C-169，取代今日總覽）：每個專案一張卡＋跨專案頻道卡；右欄「要你處理」依專案分組，只列不決定
+  function projStats(p) {
+    const today = new Date().toDateString();
+    const cs = [...work.cards.values()].filter(c => c.project === p);
+    return { done: cs.filter(c => c.status === '已完成' && c.done?.at && new Date(c.done.at).toDateString() === today).length, doing: cs.filter(c => c.status === '進行中').length,
+      blocked: cs.filter(c => c.status === '受阻').length, verify: cs.filter(c => c.status === '已完成' && !c.verified).length };
   }
-  document.addEventListener('click', e => {
-    const en = e.target.closest('[data-ov-enter]');
-    if (en) { setProjectView(en.dataset.ovEnter); showPage('messages'); return; }
-    const cr = e.target.closest('[data-ov-cross]');
-    if (cr) { setProjectView('cross'); showPage('messages'); jumpTo(cr.dataset.ovCross); }
+  const lastMsgOf = p => { for (let i = state.messages.length - 1; i >= 0; i--) if ((state.messages[i].project || null) === p) return state.messages[i]; return null; };
+  const whenText = iso => { const d = new Date(iso); return d.toDateString() === new Date().toDateString() ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : hm(iso); };
+  const oneLine = (t, n) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n) + '…' : x; };
+  function hubHtml() {
+    const counts = todoByView();
+    const cards = myProjects().map(p => {
+      const n = projStats(p), m = lastMsgOf(p);
+      const st = (label, v, cls) => `<span class="hs${v && cls ? ' ' + cls : ''}">${label}<b>${v}</b></span>`;
+      return `<button type="button" class="hub-card" data-proj="${esc(p)}" aria-label="進入 ${esc(projName(p))}">
+        <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}</span></span>${counts[p] ? `<span class="hc-todo">要你做 ${counts[p]}</span>` : ''}</span>
+        <span class="hc-stats">${st('今日完成', n.done)}${st('進行中', n.doing)}${st('受阻', n.blocked, 'bad')}${st('待驗收', n.verify, 'warn')}</span>
+        <span class="hc-last">${m ? `最新：${esc(m.author.name)}「${esc(oneLine(m.text, 50))}」` : '最近 12 小時沒有新訊息'}</span>
+        <span class="hc-go">進入 ›</span></button>`;
+    }).join('');
+    const cm = lastMsgOf(null);
+    return `<div class="hub"><section class="hub-main">
+        <div class="work-head"><div class="work-title"><h2>我的專案</h2><span class="muted small">${esc(new Date().toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span></div></div>
+        <div class="hub-grid">${cards}</div>
+        <button type="button" class="hub-card hub-cross" data-proj="cross" aria-label="進入跨專案頻道">${projIcon('cross', 44)}<span class="hc-name"><b>跨專案頻道</b><span class="small">規則公告、跨團隊協調。${cm ? `最新：${esc(cm.author.name)} ${whenText(cm.createdAt)}「${esc(oneLine(cm.text, 40))}」` : '最近 12 小時沒有新訊息'}</span></span><span class="hc-go">進入 ›</span></button>
+      </section>
+      <aside class="hub-todo" aria-label="要你處理">${hubTodoHtml()}</aside></div>`;
+  }
+  function hubTodoItems() {
+    const items = [];
+    for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId });
+    for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${g.card?.cardId || ''} 改為「${g.to}」`, key: 's:' + g.suggestionId });
+    return items.filter(x => !x.p || myProjects().includes(x.p));
+  }
+  function hubTodoHtml(inModal = false) {
+    const items = hubTodoItems();
+    const groups = [...myProjects(), null].map(p => [p, items.filter(x => x.p === p)]).filter(([, l]) => l.length);
+    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg' };
+    return `${inModal ? '' : `<div class="ht-head"><h3>要你處理</h3>${items.length ? `<span class="ps-count">${items.length}</span>` : ''}<span class="grow"></span><span class="muted small">各專案彙總</span></div>`}
+      ${groups.length ? groups.map(([p, l]) => `<div class="ht-group">${esc(p ? projName(p) : '跨專案頻道')}</div>
+        ${l.map(x => `<button type="button" class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(p || 'cross')}"><span class="ht-tag ${cls[x.kind]}">${x.kind}</span><span class="ht-title">${esc(x.title)}</span><span class="ht-go" aria-hidden="true">›</span></button>`).join('')}`).join('')
+        : '<p class="muted small ht-empty">目前沒有要你處理的事。</p>'}
+      <p class="muted small ht-note">點一項＝進那個專案的收件匣並打開那一項；選項、回覆都在專案裡做，這裡只列、不在這裡決定。</p>`;
+  }
+  // 點一項：進那個專案的收件匣，捲到那一項並閃一下（決策卡不在收件匣時直接打開卡片）
+  document.addEventListener('click', async e => {
+    const r = e.target.closest('[data-hub-todo]');
+    if (!r) return;
+    if (r.closest('.modal')) closeModal();
+    const key = r.dataset.hubTodo, id = key.slice(2);
+    await setProjectView(r.dataset.hubProj, 'inbox');
+    const el = document.querySelector(`#page-work [${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row' }[key[0]]}="${CSS.escape(id)}"]`);
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+    else if (key[0] === 'c') openCard(id);
   });
+  $('#m-todo').addEventListener('click', () => openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }));
   function inboxHtml() {
     const all = [...work.cards.values()].filter(cardInView);
-    const open = todoCount();
+    const open = todoByView()[projectView()] || 0;
     return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你做` : '沒有要你做的事'}</span></div></div>
       <div class="inbox-block-title">要你做的</div>
       ${todoHtml(all)}
@@ -1838,12 +1922,12 @@
 
   // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議（C-107）
   const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId && !cardOfConfirm(d) && inView(d.project));
-  const todoCount = () => (state.team ? myDecisions(state.team).length : 0) + (work.sugg?.length || 0);
   function updateTodoBadge() {
-    const n = todoCount();
+    const counts = todoByView(), n = counts[projectView()] || 0, total = counts.hub; // 收件匣徽章＝所在專案；分頁標題＝全部
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
     if (document.querySelector('.ps-btn[aria-expanded="false"]') || !document.querySelector('.ps-btn')) drawProjSwitch(); // 下拉的件數跟著更新（開著時不重畫）
-    document.title = (n ? `(${n > 99 ? '99+' : n}) ` : '') + BASE_TITLE;
+    document.title = (total ? `(${total > 99 ? '99+' : total}) ` : '') + BASE_TITLE;
+    if (state.page === 'hub' && work.loaded) renderWork();
   }
   function todoHtml(all) {
     const decideMe = all.filter(decidingMe);
@@ -1852,7 +1936,7 @@
     if (!decideMe.length && !confirms.length && !sg.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
     const confSection = confirms.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>[需確認] 訊息</h3><span class="wcount ora">${confirms.length}</span><span class="muted small">AI 發出、還沒人回覆的確認；授權列在訊息上</span></div>
-        ${confirms.map(d => `<div class="sugg-row">
+        ${confirms.map(d => `<div class="sugg-row" data-conf-row="${esc(d.messageId)}">
           <div class="sugg-main"><b>${esc(d.title || '（無標題）')}</b><span class="muted small">${esc(d.author?.name || '')} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-todo-jump="${esc(d.messageId)}">到訊息處理</button>
             <button type="button" class="link small" data-todo-resolve="${esc(d.messageId)}" title="已經決定了，從這裡移出">已處理</button></div>
@@ -2770,7 +2854,7 @@
     const t = state.team;
     if (!t) return toast('無法取得團隊狀態');
     const pv = projectView();
-    const rows = t.members.filter(mb => pv === 'all' || pv === 'cross' || (state.participants.get(mb.participantId)?.projects || []).includes(pv)).map(mb => {
+    const rows = t.members.filter(mb => pv === 'hub' || pv === 'cross' || (state.participants.get(mb.participantId)?.projects || []).includes(pv)).map(mb => {
       const h = health(mb);
       const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
       return `<div class="tm-row">

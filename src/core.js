@@ -233,6 +233,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
         reasons: JSON.parse(n.reasons),
         messageId: n.message_id,
         replyToMessageId: m.reply_to,
+        project: m.project || null,
         sender: { participantId: sender.id, name: sender.name, role: sender.role, shortCode: sender.code },
         preview: m.text.length > 100 ? m.text.slice(0, 100) + '…' : m.text,
         createdAt: n.created_at,
