@@ -704,7 +704,8 @@
     document.querySelectorAll('[data-scope]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === f.scope)));
     $('#f-tag').value = f.tag;
     const sel = $('#f-member');
-    const people = [...state.participants.values()].filter(p => p.status !== 'disabled').sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    if (f.member && !inViewPerson(f.member)) f.member = ''; // C-188：換專案時，篩選的成員不在這個專案就清掉
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
     sel.value = f.member;
     $('#f-clear').hidden = !filtering();
@@ -725,7 +726,7 @@
   }
   function openFilterSheet() {
     const f = state.filter;
-    const people = [...state.participants.values()].filter(p => p.status !== 'disabled').sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
     const draft = { scope: f.scope, member: f.member, tag: f.tag };
     const body = openModal('篩選', `
