@@ -1797,7 +1797,7 @@
     if (state.page === 'inbox') { box.innerHTML = inboxHtml(); return; }
     if (state.page === 'hub') { box.innerHTML = hubHtml(); return; }
     const all = visibleCards();
-    const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView()); // C-180
     const keep = document.activeElement?.id;
     box.innerHTML = `
       <div class="work-head">
@@ -2277,6 +2277,23 @@
     const back = work.returnFocus; work.returnFocus = null;
     if (back?.isConnected) back.focus(); // 回到原本點的膠囊
   }
+  // C-180：負責人、等誰只列該專案的成員（決策者不限）；目前值不在專案內也保留，才看得出原本是誰
+  const projPeople = project => [...state.participants.values()].filter(p => p.status !== 'disabled' && (!project || (p.projects || []).includes(project)));
+  function peopleOpts(project, cur, none) {
+    const list = projPeople(project), extra = cur && !list.some(p => p.participantId === cur) && state.participants.get(cur);
+    return `<option value="">${none}</option>` + [...list, ...(extra ? [extra] : [])].map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(p.name)}${p === extra ? '（不在此專案）' : ''}</option>`).join('');
+  }
+  // 卡片表單換專案時，負責人、等誰跟著換清單；原本選的人不在新專案就清掉
+  document.addEventListener('change', e => {
+    const sel = e.target;
+    if (sel.name !== 'project' || !sel.form?.ownerId) return;
+    for (const [n, none] of [['ownerId', '未指派'], ['waitForId', '不用等人']]) {
+      const s = sel.form[n];
+      if (!s) continue;
+      const cur = s.value, keep = projPeople(sel.value).some(p => p.participantId === cur);
+      s.innerHTML = peopleOpts(sel.value, keep ? cur : '', none);
+    }
+  });
   // 在訊息頁的桌面版，抽屜與訊息並排（不遮住訊息）；手機與工作頁維持原本的遮罩／底部面板
   const dockedMode = () => state.page === 'messages' && matchMedia('(min-width: 900px)').matches;
   function renderDrawer(focus) {
@@ -2347,10 +2364,10 @@
             <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
             <label>專案<select name="project">${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
             <label>原因<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
-            <label>負責人<select name="ownerId">${opts(d.owner?.participantId, '未指派')}</select></label>
+            <label>負責人<select name="ownerId">${peopleOpts(d.project, d.owner?.participantId, '未指派')}</select></label>
             <label>下一步<textarea name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
             <label>阻塞<input name="blocker" maxlength="300" value="${esc(d.blocker)}"></label>
-            <label>等誰<select name="waitForId">${opts(d.waitFor?.participantId, '不用等人')}</select></label>
+            <label>等誰<select name="waitForId">${peopleOpts(d.project, d.waitFor?.participantId, '不用等人')}</select></label>
             <label>完成條件<textarea name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
           </form>` : `
@@ -2408,7 +2425,8 @@
   // 新增卡片
   function openNewCard(sg, srcMsg) {
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
-    const opts = none => `<option value="">${none}</option>` + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
+    const p0 = singleProject() ? myProjects()[0] : [sg?.project, srcMsg?.project, projectView()].find(x => myProjects().includes(x)) || '';
+    const opts = none => (p0 ? peopleOpts(p0, '', none) : `<option value="">${none}</option>`); // C-180：先選專案才列人
     const body = openModal(sg ? '編輯後採用建議' : srcMsg ? '從訊息建立卡片' : '新增卡片', `
       <form id="card-new-form" class="stack">
         ${srcMsg ? `<div class="info-box">來源訊息「${esc(srcMsg.author.name)} · ${shortTime(srcMsg.createdAt)}」會自動關聯到這張卡，無法移除。</div>` : ''}
