@@ -2015,3 +2015,32 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 .wcount.ok { background: #dcfce7; color: #166534; }
 .ver-row .sugg-main b { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
 @media (max-width: 640px) { .ver-row .sugg-actions .btn { min-height: 44px; } }
+
+/* ===== C-202 登入頁：左邊品牌牆＋右邊登入卡（邀請、救援頁同版型） ===== */
+.join { padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(400px, 40%); place-items: stretch; min-height: 100%; background: var(--surface); }
+.join > .join-card { align-self: center; justify-self: center; width: min(380px, calc(100% - 48px)); border: 0; border-radius: 0; background: transparent; padding: 40px 0; }
+.join > .join-card h1 { margin: 0; font-size: 1.5rem; }
+.brand-wall { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 18px; padding: 48px 56px; color: #fff; background: linear-gradient(150deg, #14213d 0%, #1d4ed8 70%, #0ea5e9 100%); }
+.brand-wall::after { content: ""; position: absolute; right: -90px; bottom: -90px; width: 280px; height: 280px; border-radius: 50%; background: rgba(255, 255, 255, .08); pointer-events: none; }
+.bw-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.bw-head b { font-size: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bw-badge { flex: none; width: 44px; height: 44px; border-radius: 12px; background: #fff; color: #1d4ed8; font-weight: 900; font-size: 22px; display: flex; align-items: center; justify-content: center; }
+.bw-slogan { margin: 28px 0 6px; font-size: clamp(26px, 3vw, 38px); font-weight: 900; line-height: 1.35; }
+.bw-bubbles { display: grid; gap: 10px; max-width: 380px; }
+.bw-row { display: flex; align-items: center; gap: 10px; }
+.bw-row.indent { margin-left: 34px; }
+.bw-av { flex: none; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #fff; }
+.bw-av.po { background: #b45309; } .bw-av.ux { background: #047857; } .bw-av.pg { background: #6d28d9; }
+.bw-bub { background: #fff; color: #1f2937; border-radius: 14px; padding: 8px 12px; font-size: 14px; line-height: 1.5; box-shadow: 0 4px 14px rgba(0, 0, 0, .14); }
+.bw-foot { margin: auto 0 0; font-size: 13px; color: #e0ecff; }
+.join .join-first { margin-top: 4px; font-size: 13px; }
+@media (max-width: 899px) {
+  .join { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .brand-wall { min-height: 140px; box-sizing: border-box; padding: 20px 16px; gap: 6px; justify-content: center; }
+  .bw-badge { width: 36px; height: 36px; font-size: 18px; border-radius: 10px; }
+  .bw-head b { font-size: 18px; }
+  .bw-slogan { margin: 6px 0 0; font-size: 18px; }
+  .bw-slogan br { display: none; }
+  .bw-bubbles, .bw-foot { display: none; }
+  .join > .join-card { align-self: start; width: 100%; box-sizing: border-box; padding: 20px 16px 32px; }
+}

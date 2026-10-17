@@ -146,6 +146,7 @@
       const h = await api('/api/health');
       $('#join-form').hidden = !h.setup; // 群組還沒有人：建立群組
       $('#login-main').hidden = !!h.setup;
+      $('#join-title').textContent = h.setup ? '建立群組' : '歡迎回來';
       $('#join-admin').textContent = h.adminName || '管理員';
       $('#room-code-field').hidden = !h.roomCodeRequired;
     } catch {}
@@ -573,6 +574,7 @@
   function applyGroupName(name) {
     if (!name) return;
     document.querySelectorAll('[data-group-name]').forEach(el => { el.textContent = name; });
+    document.querySelectorAll('[data-group-initial]').forEach(el => { el.textContent = [...name][0] || ''; }); // C-202：品牌牆徽章＝群組名第一個字
     document.title = document.title.replace(BASE_TITLE, name);
     BASE_TITLE = name;
   }
