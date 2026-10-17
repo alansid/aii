@@ -54,6 +54,9 @@ function serveStatic(res, pathname) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     return res.end('Not found');
   }
+  if (path.extname(file) === '.html') { // 跟正式環境一樣：換上群組名與連結預覽
+    return handle.pageHtml(fs.readFileSync(file, 'utf8')).then(html => { res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' }); res.end(html); });
+  }
   res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
   fs.createReadStream(file).pipe(res);
 }

@@ -36,7 +36,14 @@ export default {
     currentCtx = ctx;
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/') && url.pathname !== '/docs/ai-integration.md') {
-      return env.ASSETS.fetch(request);
+      // 網頁頁面（沒有副檔名的網址，wrangler.toml 的 run_worker_first）：換上群組名與連結預覽；其他靜態檔照舊
+      const req = new Request(request);
+      req.headers.delete('if-none-match'); req.headers.delete('if-modified-since');
+      const res = await env.ASSETS.fetch(req);
+      if (!(res.headers.get('content-type') || '').includes('text/html')) return res;
+      const h = new Headers(res.headers);
+      h.delete('content-length'); h.delete('etag'); h.set('cache-control', 'no-cache');
+      return new Response(await app(env).pageHtml(await res.text()), { status: res.status, headers: h });
     }
     return app(env)(request, url.origin);
   },

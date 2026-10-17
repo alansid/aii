@@ -11,6 +11,8 @@ mode = "smart"
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# 網頁頁面先經過 Worker（換上群組名與連結預覽）；有副檔名的靜態檔照舊直接送
+run_worker_first = ["/*", "!/*.js", "!/*.mjs", "!/*.css", "!/*.svg", "!/*.png", "!/*.ico", "!/*.md", "!/*.json", "!/*.txt"]
 
 [[rules]]
 type = "Text"
