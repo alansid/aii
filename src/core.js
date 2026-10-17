@@ -1251,7 +1251,7 @@ ${trial
     const id = randId('prj'), at = nowIso();
     await loadCrossRoles();
     const stmts = [['INSERT INTO projects (id, name, archived, created_by, created_at) VALUES (?,?,0,?,?)', [id, name, me.id, at]], projEvent(id, me.id, `${me.name} 建立專案`, at)];
-    // 新專案只含建立者＋跨專案角色（PO、SM）；其他人由管理員在專案成員勾選加入
+    // 新專案只含建立者＋目前的跨專案角色（C-221：不一定是 PO、SM，可在成員與權限開關）；其他人由管理員在專案成員勾選加入
     for (const p of (await peopleMap(ctx)).values()) {
       if (p.kind === 'system' || p.status !== 'active' || !(p.id === me.id || crossRole(p))) continue;
       stmts.push(['UPDATE participants SET projects = ?, updated_at = ? WHERE id = ?', [[...listOf(p), id].join(','), at, p.id]]);

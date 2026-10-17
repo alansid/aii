@@ -128,6 +128,19 @@ const call = async (token, p, method = 'GET', body) => {
     assert.deepEqual((await call(solo.token, '/api/me')).body.projects, ['平台'], '自己的照舊');
     assert.ok((await call(liu.token, '/api/team-status')).body.members.find(m => m.participantId === id(kang)).projects.includes('銀行系統'), 'C-220：管理員看得到全部');
 
+    // C-221：新專案一開始的成員＝建立者＋「目前的」跨專案角色（關掉之後就不會自動加入）
+    const po = (await call(null, '/api/join', 'POST', { name: '產品負責人', role: 'PO' })).body; // 角色 PO 預設是跨專案角色
+    await call(liu.token, `/api/participants/${id(po)}/projects`, 'PUT', { projects: ['平台', '銀行系統'] });
+    const pA = (await call(liu.token, '/api/projects', 'POST', { name: '新專案甲' })).body.id;
+    assert.ok((await people()).get(id(po)).projects.includes(pA), 'C-221：跨專案角色自動加入新專案');
+    await M(liu.token, [{ id: id(po), crossRole: false, projects: ['平台'] }]);
+    const pB = (await call(liu.token, '/api/projects', 'POST', { name: '新專案乙' })).body.id;
+    const inB = [...(await people()).values()].filter(p => (p.projects || []).includes(pB)).map(p => p.name);
+    const everyone = await people();
+    const crossNow = (await call(liu.token, '/api/projects')).body.crossRoleIds.map(x => everyone.get(x)?.name);
+    assert.ok(!inB.includes('產品負責人'), 'C-221：關掉跨專案角色後，新專案不再自動加入他');
+    assert.deepEqual(inB.sort(), ['劉昱志', ...crossNow.filter(n => n && n !== '劉昱志')].sort(), 'C-221：新專案＝建立者＋目前的跨專案角色');
+
     console.log('roles: all checks passed');
   } catch (e) {
     console.error(e);

@@ -4214,7 +4214,7 @@
       body.querySelector('#pa-left').innerHTML = `<div class="pa-head"><b>專案</b></div>${rows}
         ${state.projectList.some(p => !p.archived && p.openCards) ? '<p class="muted small pa-note">「封存」不能按：還有未結案卡，請先結案或把卡移到別的專案。</p>' : ''}
         <div class="pm-new"><input id="pa-new-name" maxlength="20" placeholder="新專案名稱" aria-label="新專案名稱"><button type="button" class="btn small primary" data-pa="create">新增專案</button></div>
-        <p class="muted small">新專案一開始只有你與跨專案角色（PO、SM），其他成員請在成員清單勾選加入。</p>
+        <p class="muted small">${esc(newProjText())}，其他成員請在成員清單勾選加入。</p>
         ${selP ? `<div class="pa-head"><b>異動紀錄（${esc(selP.name)}）</b></div>
         <ul class="pa-log">${pm.events.map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul>` : ''}`;
     }
@@ -4269,7 +4269,7 @@
           const name = body.querySelector('#pa-new-name').value.trim();
           if (!name) return toast('請輸入專案名稱');
           const r = await api('/api/projects', { method: 'POST', body: { name } });
-          pm.sel = r.id; toast('已新增專案，你和 PO、SM 已加入');
+          pm.sel = r.id; toast(crossNames().length ? `已新增專案，你和 ${crossNames().join('、')} 已加入` : '已新增專案，目前只有你');
         } else if (act === 'rename') {
           const p = state.projectList.find(x => x.id === id);
           const name = await promptName('改名', p?.name || '');
@@ -4305,6 +4305,9 @@
   // ---------- C-182 成員與權限（第一層，只有管理員）----------
   const perm = { tab: 'byProject', invites: null, draft: new Map(), events: {}, openLog: null, pq: '', mq: '', selProj: null, selMember: null, picker: false, pickSel: new Set(), pickQ: '', addOpen: false, mobileDetail: false };
   const permDirty = () => perm.draft.size > 0;
+  // C-221：新專案一開始的成員＝建立者＋目前的跨專案角色（不寫死 PO、SM）
+  const crossNames = () => state.projMeta.crossRoleIds.filter(x => x !== meId()).map(x => state.participants.get(x)?.name).filter(Boolean);
+  const newProjText = () => { const n = crossNames(); return n.length ? `新專案一開始只有你與跨專案角色（${n.join('、')}）` : '新專案一開始只有你'; };
   function permLeave(go) {
     confirmDialog({ title: '還有沒儲存的變更', confirmText: '放棄變更並離開', danger: true, message: `成員與權限有 <b>${perm.draft.size} 位成員</b>的變更還沒儲存，離開後會不見。` })
       .then(ok => { if (ok) go(); });
@@ -4502,7 +4505,8 @@
       </div>`;
     }).join('')}
       ${state.projectList.some(p => !p.archived && p.openCards) ? '<p class="muted small">「封存」不能按：還有未結案卡，請先結案或把卡移到別的專案。</p>' : ''}
-      <div class="pm-new"><input id="pm-new-name" maxlength="20" placeholder="新專案名稱" aria-label="新專案名稱"><button type="button" class="btn small primary" data-pp="create">新增專案</button></div></div>`;
+      <div class="pm-new"><input id="pm-new-name" maxlength="20" placeholder="新專案名稱" aria-label="新專案名稱"><button type="button" class="btn small primary" data-pp="create">新增專案</button></div>
+      <p class="muted small" id="pm-new-hint">${esc(newProjText())}，其他成員請到「依專案」加入。</p></div>`;
   }
   function drawPermBar() {
     const bar = $('#pm-bar');
@@ -4666,7 +4670,7 @@
         const name = $('#pm-new-name').value.trim();
         if (!name) return toast('請輸入專案名稱');
         await api('/api/projects', { method: 'POST', body: { name } });
-        toast(`已新增專案「${name}」`);
+        toast(crossNames().length ? `已新增專案「${name}」，你和 ${crossNames().join('、')} 已加入` : `已新增專案「${name}」，目前只有你`);
       } else if (a === 'rename') {
         const name = await promptName('改專案名稱', projName(id));
         if (!name || name === projName(id)) return;
