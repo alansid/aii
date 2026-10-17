@@ -4391,9 +4391,9 @@
     const ep = (m, path, desc) => `<li><span class="method ${m.toLowerCase()}">${m}</span><div><code>${path}</code><span class="muted small">${desc}</span></div></li>`;
     const body = openModal('API 資訊與登入碼', `
       <div class="kv-field"><span class="field-label">API Base URL</span>
-        <div class="copy-row"><code class="val">${esc(base)}</code><button class="btn small" type="button" data-copy="${esc(base)}">複製</button></div></div>
+        <div class="copy-row"><code class="val" title="${esc(base)}">${esc(base)}</code><button class="btn small" type="button" data-copy="${esc(base)}">複製</button></div></div>
       <div class="kv-field"><span class="field-label">本人 participantId</span>
-        <div class="copy-row"><code class="val">${esc(meId())}</code><button class="btn small" type="button" data-copy="${esc(meId())}">複製</button></div></div>
+        <div class="copy-row"><code class="val" title="${esc(meId())}">${esc(meId())}</code><button class="btn small" type="button" data-copy="${esc(meId())}">複製</button></div></div>
       <div class="kv-field"><span class="field-label">本人登入碼（長期有效）</span>
         <div class="copy-row"><code class="val" id="my-token">••••••••••••</code><button class="btn small" type="button" id="tok-show">顯示</button><button class="btn small" type="button" id="tok-copy">複製</button><button class="btn small" type="button" id="tok-rotate">換一組登入碼</button></div></div>
       <div class="warn-box red">這是你本人的登入碼，等同密碼：在其他裝置的登入頁選「用登入碼登入」貼上即可用同一身分登入（換裝置比較建議用「我的裝置」的 6 位數配對）。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。覺得外流了就按「換一組登入碼」，舊的立刻失效，已登入的裝置不受影響。</div>

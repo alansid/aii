@@ -1952,3 +1952,10 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
   .pm-ptable tr.pm-prow .c-num2 { grid-area: num2; }
   .pm-ptable tr.pm-prow .c-repo { grid-area: repo; }
 }
+
+/* ===== C-236 API 資訊與登入碼：長網址不撐破彈窗，網址欄縮、太長省略，複製鈕永遠在畫面內 ===== */
+.kv-field { grid-template-columns: minmax(0, 1fr); }
+.kv-field > * { min-width: 0; }
+.kv-field .copy-row .val { overflow: hidden; text-overflow: ellipsis; }
+.kv-field .copy-row .btn { flex: none; }
+@media (max-width: 400px) { .kv-field .copy-row { flex-wrap: wrap; } .kv-field .copy-row #my-token { flex-basis: 100%; } }
