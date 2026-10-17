@@ -1796,3 +1796,9 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
   .pm-table .pm-star, .pm-table .pm-x, .pm-lock { width: 44px; height: 44px; }
   .pm-table .role-sel { height: 40px; min-height: 40px; }
 }
+
+/* ===== C-226 新卡閃一下；人類紀錄兩顆狀態鈕 ===== */
+.ctile.flash, .crow.flash, .cmini.flash, .wpanel-item.flash { animation: flash 1.2s ease; }
+.note-st { display: inline-flex; width: auto; }
+.note-st button { min-height: 36px; padding: 0 14px; }
+@media (max-width: 640px) { .note-st button { min-height: 44px; } }

@@ -79,6 +79,15 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { t.hidden = true; }, 2400);
   }
+  // C-226：提示＋一顆按鈕（例如「已建立 C-12 · 打開」），預設 6 秒消失
+  function actionToast(text, label, onClick, ms = 6000) {
+    const t = $('#toast');
+    t.innerHTML = `${esc(text)} <button type="button" class="link toast-undo" id="toast-act">${esc(label)}</button>`;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+    t.querySelector('#toast-act').onclick = () => { t.hidden = true; clearTimeout(toastTimer); onClick(); };
+  }
 
   async function copyText(text) {
     try { await navigator.clipboard.writeText(text); return true; }
@@ -1737,7 +1746,10 @@
   const NOTE = '人類紀錄'; // C-218：人類記內容，AI 不主動看到（給卡號才讀）
   const typeTag = c => (c.type !== '工作' && c.type !== NOTE ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
   const cidHtml = c => `<span class="cid">${c.type === NOTE ? '<span aria-label="人類紀錄">🔒</span> ' : ''}${esc(c.cardId)}</span>`;
-  const mergedHtml = c => (c.mergedInto ? `<button type="button" class="merged-into" data-card="${esc(c.mergedInto)}">→ 已整理到 ${esc(c.mergedInto)}</button>` : '');
+  const mergedHtml = c => (c.mergedInto ? `<button type="button" class="merged-into" data-card="${esc(c.mergedInto)}">已整理 · 已整理到 ${esc(c.mergedInto)}</button>` : '');
+  // C-226：人類紀錄只有「收集中」「已整理」兩種狀態
+  const noteStText = c => (c.status === '已完成' ? '已整理' : c.status === '已封存' ? '已封存' : '收集中');
+  const noteStPill = c => `<span class="cst" data-st="${esc(c.status)}">${noteStText(c)}</span>`;
   const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
   const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
   const doneTitle = c => [c.done ? `完成：${c.done.by?.name || ''} ${shortTime(c.done.at)}` : '', c.verified ? `驗收：${c.verified.by?.name || ''} ${shortTime(c.verified.at)}` : ''].filter(Boolean).join(' · ');
@@ -2257,7 +2269,7 @@
           <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" data-card="${esc(c.cardId)}">
             ${cidHtml(c)}
             <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
-            <span class="crow-st">${stPill(c.status)}${ownerHtml(c)}</span>
+            <span class="crow-st">${c.type === NOTE ? noteStPill(c) : stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
             <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
           </button>`).join('') : `<p class="muted">${work.filter === '已封存' && work.archived.loading ? '載入中…' : '沒有符合條件的卡片。'}</p>`}
@@ -2412,7 +2424,7 @@
     const cols = wide() ? BOARD_ORDER.filter(s => (s !== '已封存' || work.showArchived) && (s !== '待整理' || all.some(c => c.status === '待整理'))) : [work.mCol];
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
-        <div class="ctile-top">${cidHtml(c)}${typeTag(c)}${c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
+        <div class="ctile-top">${cidHtml(c)}${typeTag(c)}${c.type === NOTE ? (c.mergedInto ? '' : noteStPill(c)) : c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
         <b class="ctile-title">${cardPTag(c)} ${esc(cardTitle(c))}</b>
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
@@ -2770,10 +2782,11 @@
           ${d.type === NOTE ? `${d.mergedInto ? `<div class="merged-line">${mergedHtml(d)}</div>` : ''}<div class="lockbar"><span aria-hidden="true">🔒</span><span>AI 不會主動看到這張卡。下面的紀錄只存在卡片上，<b>不會發到群組</b>；你給 AI 卡號，它才讀得到卡片和紀錄。</span></div>` : ''}
           ${d.mergedFrom?.length ? `<div class="merged-line">整理自 ${d.mergedFrom.map(x => `<button type="button" class="merged-into" data-card="${esc(x)}">🔒${esc(x)}</button>`).join('、')}</div>` : ''}
           <div class="drawer-status">
+            ${d.type === NOTE ? `<span class="dst" id="note-st-l">狀態</span><div class="seg-scope note-st" role="group" aria-labelledby="note-st-l">${[['進行中', '收集中'], ['已完成', '已整理']].map(([v, t]) => `<button type="button" data-act="note-st" data-st="${v}" aria-pressed="${(d.status === '已完成') === (v === '已完成')}">${t}</button>`).join('')}</div>` : `
             <label class="dst">狀態<select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
-            ${!closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}
+            ${!closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}`}
             ${canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
-            ${d.status === '已完成' && !d.verified ? `<button class="btn small primary" type="button" data-act="verify" ${mine ? 'disabled title="完成者不能自己驗證"' : ''}>標為已驗證</button>` : ''}
+            ${d.status === '已完成' && !d.verified && d.type !== NOTE ? `<button class="btn small primary" type="button" data-act="verify" ${mine ? 'disabled title="完成者不能自己驗證"' : ''}>標為已驗證</button>` : ''}
           </div>
           ${d.status === '已封存' ? (() => {
             const sys = (d.log || []).find(l => /^系統自動封存/.test(l.text));
@@ -2783,7 +2796,7 @@
               <span class="muted small">重新打開後照一般卡片流程；再次完成＋驗證後重新計 ${ARCHIVE_DAYS} 天。</span></div>`;
           })() : ''}
           ${d.status === '已完成' && doneTag(d) && d.verified ? `<div class="dmarks">${doneTag(d)}<span class="muted small">${d.verified ? '已驗證：明天會自動收進已封存' : pendingDays(d) > ARCHIVE_DAYS ? '超過 7 天沒驗證，請驗證或退回' : '待驗證的卡不會自動收起'}</span></div>` : ''}
-          ${d.done || d.verified ? `<div class="dmarks">
+          ${(d.done || d.verified) && d.type !== NOTE ? `<div class="dmarks">
             ${d.verified ? `<span class="cmark ok-bg" title="${esc(doneTitle(d))}">✓ 已完成</span><span class="muted small">${esc(doneTitle(d))}</span>` : d.done ? `<span class="cmark wait" title="${esc(doneTitle(d))}">已完成 · 待驗收</span><span class="muted small">${esc(doneTitle(d))}</span>` : ''}
             ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
           </div>` : ''}
@@ -2886,6 +2899,7 @@
     if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
+    else if (a.dataset.act === 'note-st') { if (a.getAttribute('aria-pressed') !== 'true') await patchCard(id, { status: a.dataset.st }); } // C-226：已整理不必填去處
     else if (a.dataset.act === 'reopen') { await patchCard(id, { status: '待處理' }); refreshArchivedCount().then(renderWork); }
     else if (a.dataset.act === 'verify') {
       try {
@@ -2950,6 +2964,7 @@
       body.querySelector('#nc-note').hidden = !isNote;
       body.querySelector('.nc-reason-l').textContent = isNote ? '內容' : '原因';
       if (isNote) { body.querySelector('#nc-more').open = true; form.status.value = '進行中'; }
+      form.status.closest('label').hidden = isNote; // C-226：人類紀錄建立時一律「收集中」
       for (const sel of [form.ownerId, form.waitForId]) { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai; o.disabled = isNote && ai; } if (sel.selectedOptions[0]?.disabled) sel.value = ''; }
       body.modal.querySelector('button[type="submit"]').textContent = isNote ? '建立人類紀錄' : '建立卡片';
       body.querySelector('#nc-decision').hidden = t !== '決策';
@@ -2991,9 +3006,19 @@
         if (srcMsg) rememberLinks({ cardId: c.cardId, messageIds: [srcMsg.messageId] });
         renderWork();
         if (srcMsg) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
-        toast(`已建立 ${c.cardId}`);
-        openCard(c.cardId);
+        actionToast(`已建立 ${c.cardId} ·`, '打開', () => openCard(c.cardId));
+        flashCard(c.cardId);
       } catch (err) { body.querySelector('#card-new-error').textContent = err.message; }
+    });
+  }
+
+  // C-226：新卡捲到看得到的地方並閃一下（看板、工作總覽、清單）
+  function flashCard(id) {
+    requestAnimationFrame(() => {
+      const el = [...document.querySelectorAll(`#page-work [data-card="${CSS.escape(id)}"]`)].find(x => x.offsetParent && x.matches('.ctile, .crow, .cmini, .wpanel-item'));
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
     });
   }
 
