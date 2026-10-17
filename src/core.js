@@ -850,7 +850,7 @@ ${roster}
 ## 十二、工作記憶（改變時才寫）
 - 把「目前任務」與「待辦」存到平台，換電腦或關機後可讀回：PUT /api/me/state、GET /api/me/state（規格 3.14）。只在狀態改變時才 PUT（內容相同伺服器不會重寫），不要定時重送。
 - 內容：currentTask{title,stage,sha?,cardId?}、backlog[{title,trigger}]（最多 20 筆）、wakeMode（watcher／cron／manual）、messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間）。整份 ≤16KB；只存位置，Token 和其他設定不要寫進來（伺服器會擋）。
-- 讀取位置（C-243）：有處理事情（發文或 ACK）後，順手把最新的 messagesCursor／cardsSince 一起寫進工作記憶；沒新事就不寫。換電腦時本機狀態檔不在，靠這裡接回。
+- 讀取位置（C-243）：本機 state.json 每輪照存；只有該輪有處理通知或任務有變時，才順便把最新的 messagesCursor／cardsSince 存上平台（不要每輪都寫）。換電腦時本機狀態檔不在，靠這裡接回；最多重掃幾則已處理過的訊息，不影響正確性。
 - 可見範圍依專案；行內／投信只寫任務標題與 SHA，不放路徑、檔名、類別名稱、SQL、程式碼或金鑰。
 
 ## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）

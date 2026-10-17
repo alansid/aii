@@ -114,6 +114,14 @@ const rid = () => 'req_c' + (++n);
     const hh = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '人類交出', ownerId: liuId, status: '進行中' })).body;
     assert.equal((await H(liu.token, hh.cardId, { toId: qa.participantId, note: '給你' })).body.status, '進行中', 'C-242：人類交給 AI 照 C-241 維持');
     await call(liu.token, `/api/cards/${hh.cardId}`, 'PATCH', { status: '已完成' }); // 不影響後面「QA 沒負責卡片」的斷言
+    // 顧問回饋：受阻交出去維持受阻；原本待確認（不是請人類驗收）交出去 → 進行中、清掉等誰
+    const blkH = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '卡住的卡', ownerId: pg.participantId, status: '受阻', blocker: '等測試機' })).body;
+    assert.equal((await H(pg.token, blkH.cardId, { toId: qa.participantId, note: '你接' })).body.status, '受阻', '受阻交接維持受阻');
+    await call(liu.token, `/api/cards/${blkH.cardId}`, 'PATCH', { status: '已完成' });
+    const wc = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '等人的卡', ownerId: liuId, status: '待確認', waitForId: pg.participantId })).body;
+    const wcH = (await H(liu.token, wc.cardId, { toId: pg.participantId, note: '交給你' })).body;
+    assert.ok(wcH.status === '進行中' && wcH.waitFor === null, '原本待確認交出去 → 進行中、清掉等誰：' + JSON.stringify({ s: wcH.status, w: wcH.waitFor }));
+    await call(liu.token, `/api/cards/${wc.cardId}`, 'PATCH', { status: '已完成' });
     // 驗收通過＝人類標已完成（C-168 人類完成即驗收）
     const reHo = (await H(qa.token, rel.cardId, { toId: liuId, note: '修好了' })).body;
     assert.equal(reHo.status, '待確認');
