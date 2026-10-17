@@ -1744,3 +1744,23 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 .role-banner .icon-btn { margin-left: auto; min-width: 44px; min-height: 44px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .role-banner { background: #2e2410; color: #f3c97a; border-bottom-color: #5c4a14; } }
 :root[data-theme="dark"] .role-banner { background: #2e2410; color: #f3c97a; border-bottom-color: #5c4a14; }
+
+/* ===== C-218 人類紀錄卡 ===== */
+.ctile.note, .crow.note { background: var(--surface-2); border: 1px dashed #94a3b8; }
+.ctype.note-tag { background: #e2e8f0; color: #334155; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ctype.note-tag { background: #334155; color: #e2e8f0; } }
+:root[data-theme="dark"] .ctype.note-tag { background: #334155; color: #e2e8f0; }
+.lockbar { display: flex; gap: 8px; align-items: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.6; }
+.note-list { display: grid; gap: 8px; }
+.note-entry { border-left: 2px solid var(--border); padding: 2px 0 2px 10px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.note-add { display: flex; gap: 8px; align-items: flex-end; }
+.note-add textarea { flex: 1; min-height: 44px; }
+.note-add .btn { min-height: 44px; }
+.merged-into { all: unset; cursor: pointer; color: var(--primary); font-size: 13px; font-weight: 600; min-height: 32px; display: inline-flex; align-items: center; }
+.merged-into:hover { text-decoration: underline; }
+.merged-into:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.merged-line { font-size: 13px; }
+.note-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 0; }
+.note-ask .btn { min-height: 40px; }
+.pub-notes { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.pub-notes input { width: 18px; height: 18px; }

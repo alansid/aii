@@ -1734,7 +1734,10 @@
   const isMeRef = r => r && r.participantId === meId();
   const closedSt = s => s === '已完成' || s === '已封存';
   const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
-  const typeTag = c => (c.type !== '工作' ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
+  const NOTE = '人類紀錄'; // C-218：人類記內容，AI 不主動看到（給卡號才讀）
+  const typeTag = c => (c.type !== '工作' && c.type !== NOTE ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
+  const cidHtml = c => `<span class="cid">${c.type === NOTE ? '<span aria-label="人類紀錄">🔒</span> ' : ''}${esc(c.cardId)}</span>`;
+  const mergedHtml = c => (c.mergedInto ? `<button type="button" class="merged-into" data-card="${esc(c.mergedInto)}">→ 已整理到 ${esc(c.mergedInto)}</button>` : '');
   const waitText = c => (c.waitFor ? `等 ${isMeRef(c.waitFor) ? '你' : c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || '');
   const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
   const doneTitle = c => [c.done ? `完成：${c.done.by?.name || ''} ${shortTime(c.done.at)}` : '', c.verified ? `驗收：${c.verified.by?.name || ''} ${shortTime(c.verified.at)}` : ''].filter(Boolean).join(' · ');
@@ -2207,8 +2210,9 @@
       <div class="work-filters">
         <input id="card-q" type="search" placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片" value="${esc(work.q)}">
         <select id="card-owner" aria-label="負責人"><option value="">所有負責人</option>${people.map(p => `<option value="${esc(p.participantId)}" ${work.owner === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
-        <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策'].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
+      ${work.type === NOTE && all.some(c => c.type === NOTE && !closedSt(c.status)) ? (() => { const ns = all.filter(c => c.type === NOTE && !closedSt(c.status)); return `<div class="note-ask"><span class="muted small">AI 不會主動看到人類紀錄；收集夠了可以一次請 AI 讀完整理。</span><button type="button" class="btn primary small" data-ask-ai="${esc(ns.map(c => c.cardId).join(','))}">請 AI 整理這 ${ns.length} 張</button></div>`; })() : ''}
       ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
     box.classList.toggle('is-board', work.view === 'B'); // 看板：高度＝頁面剩餘高度，欄內各自捲動（C-142）
     if (work.view === 'B') boardMore();
@@ -2250,8 +2254,8 @@
       ${work.q.trim() ? '<p class="muted small">搜尋時一併找已封存</p>' : ''}
       <div class="crows">
         ${listed.length ? listed.map(c => `
-          <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}" data-card="${esc(c.cardId)}">
-            <span class="cid">${esc(c.cardId)}</span>
+          <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" data-card="${esc(c.cardId)}">
+            ${cidHtml(c)}
             <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
             <span class="crow-st">${stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
@@ -2407,12 +2411,13 @@
     const BOARD_ORDER = ['待整理', '待處理', '進行中', '受阻', '待確認', '已完成', '已封存']; // C-195：受阻提前到第三欄（待整理有卡才顯示）
     const cols = wide() ? BOARD_ORDER.filter(s => (s !== '已封存' || work.showArchived) && (s !== '待整理' || all.some(c => c.status === '待整理'))) : [work.mCol];
     const tile = c => `
-      <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
-        <div class="ctile-top"><span class="cid">${esc(c.cardId)}</span>${typeTag(c)}${c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
+      <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
+        <div class="ctile-top">${cidHtml(c)}${typeTag(c)}${c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
         <b class="ctile-title">${cardPTag(c)} ${esc(cardTitle(c))}</b>
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
         <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
+        ${mergedHtml(c)}
       </div>`;
     const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}"><span class="cid">${esc(c.cardId)}</span><span class="cmini-t">${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
     const archFoot = work.archived.count ? `<button type="button" class="bfoot" data-show-archived>更早完成的 ${work.archived.count} 張已收進「已封存」· 查看</button>` : '';
@@ -2518,6 +2523,17 @@
       return renderWork();
     }
     if (t.closest('#card-new')) return openNewCard();
+    const ask = t.closest('[data-ask-ai]');
+    if (ask) {
+      const ids = ask.dataset.askAi.split(',');
+      const pj = work.cards.get(ids[0])?.project;
+      if (pj && projectView() !== pj && myProjects().includes(pj)) await setProjectView(pj, 'messages'); else showPage('messages');
+      const inp = $('#input');
+      inp.value = `@ 請整理以下人類紀錄：${ids.join('、')}。內容相近的整理成一張新卡並回覆我；原本的卡標已完成，並註明已整理到哪張。`;
+      inp.focus(); inp.setSelectionRange(1, 1);
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      return toast('選一個 AI，確認內容後送出');
+    }
     const c = t.closest('[data-card]');
     if (c) openCard(c.dataset.card);
   });
@@ -2746,11 +2762,13 @@
       ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
       <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
-          <div class="drawer-titles"><span class="cid">${esc(d.cardId)}</span>${typeTag(d)}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
+          <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
           <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
         </div>
         <div class="drawer-body">
+          ${d.type === NOTE ? `${d.mergedInto ? `<div class="merged-line">${mergedHtml(d)}</div>` : ''}<div class="lockbar"><span aria-hidden="true">🔒</span><span>AI 不會主動看到這張卡。下面的紀錄只存在卡片上，<b>不會發到群組</b>；你給 AI 卡號，它才讀得到卡片和紀錄。</span></div>` : ''}
+          ${d.mergedFrom?.length ? `<div class="merged-line">整理自 ${d.mergedFrom.map(x => `<button type="button" class="merged-into" data-card="${esc(x)}">🔒${esc(x)}</button>`).join('、')}</div>` : ''}
           <div class="drawer-status">
             <label class="dst">狀態<select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
             ${!closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}
@@ -2775,7 +2793,7 @@
           ${work.editing ? `
           <form id="card-edit" class="stack">
             <label>標題<input name="title" required maxlength="100" value="${esc(d.title)}"></label>
-            ${d.type === '決策' ? '' : `<label>類型<select name="type">${['工作', '阻塞'].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`}
+            ${d.type === '決策' ? '' : `<label>類型<select name="type">${['工作', '阻塞', NOTE].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`}
             ${d.type === '決策' && !d.decision?.result ? `
             <label>決策問題<input name="question" required maxlength="200" value="${esc(d.decision.question)}"></label>
             <label>建議方案<textarea name="recommendation" rows="2" maxlength="500">${esc(d.decision.recommendation)}</textarea></label>
@@ -2784,7 +2802,7 @@
             <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
             <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
             <label>專案<select name="project">${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
-            <label>原因<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
+            <label>${d.type === NOTE ? '內容' : '原因'}<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
             <label>負責人<select name="ownerId">${peopleOpts(d.project, d.owner?.participantId, '未指派')}</select></label>
             <label>下一步<textarea name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
             <label>阻塞<input name="blocker" maxlength="300" value="${esc(d.blocker)}"></label>
@@ -2794,7 +2812,7 @@
           </form>` : `
           <dl class="dfields">
             <dt>專案</dt><dd>${esc(projName(d.project) || '')}</dd>
-            <dt>原因</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
+            <dt>${d.type === NOTE ? '內容' : '原因'}</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
             <dt>負責人</dt><dd>${ownerHtml(d)}</dd>
             <dt>下一步</dt><dd class="${d.next ? '' : 'muted'}">${esc(d.next || '未填寫')}</dd>
             <dt>阻塞與等誰</dt><dd class="${waitText(d) ? '' : 'muted'}">${esc(waitText(d) || '沒有阻塞')}</dd>
@@ -2803,17 +2821,40 @@
           <div><button class="btn small" type="button" data-act="edit">編輯</button></div>`}
           <div class="group-title">相關訊息 · ${(d.messageIds || []).length}</div>
           ${msgs || '<p class="muted small">還沒有關聯訊息。</p>'}
-          ${!narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
-          <div class="group-title">紀錄</div>
+          ${d.type === NOTE ? `<div class="group-title">紀錄 · ${(d.notes || []).length}</div>
+            <div class="note-list">${(d.notes || []).map(n => `<div class="note-entry"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${esc(shortTime(n.at))}</span><div>${esc(n.text)}</div></div>`).join('') || '<p class="muted small">還沒有紀錄。</p>'}</div>
+            <div class="note-add"><textarea id="note-text" rows="2" maxlength="1000" placeholder="寫一筆紀錄（只存卡上，不發群組）" aria-label="寫一筆紀錄"></textarea><button type="button" class="btn primary" data-act="add-note">記下</button></div>`
+          : !narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
+          <div class="group-title">${d.type === NOTE ? '變更紀錄' : '紀錄'}</div>
           <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>
         </div>
         ${state.page === 'messages' ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
-        ${narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="drawer-compose" aria-label="想法與回覆">${inlineHtml('k:' + d.cardId, 'card', d)}</div>` : ''}
+        ${narrowMq.matches && d.type !== NOTE && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="drawer-compose" aria-label="想法與回覆">${inlineHtml('k:' + d.cardId, 'card', d)}</div>` : ''}
       </aside>`;
+    const humanOnlySel = isNote => host.querySelectorAll('#card-edit select[name="ownerId"], #card-edit select[name="waitForId"]').forEach(sel => { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai && !o.selected; } });
+    humanOnlySel(d.type === NOTE);
+    host.querySelector('#card-edit select[name="type"]')?.addEventListener('change', ev => humanOnlySel(ev.target.value === NOTE));
     host.querySelector('#card-edit')?.addEventListener('submit', async e => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(e.target));
       for (const k of Object.keys(data)) data[k] = data[k].trim();
+      const d0 = work.detail;
+      if (data.type && d0 && data.type !== d0.type) { // C-218：改類型要確認
+        const isAi = id => id && state.participants.get(id)?.memberType === 'ai';
+        if (data.type === NOTE) {
+          const who = [data.ownerId, data.waitForId].find(isAi);
+          if (who) return toast(`${state.participants.get(who).name} 是 AI：請先改成人類負責人（等誰也是），才能改成人類紀錄。`);
+          if (!await confirmDialog({ title: '改成人類紀錄？', confirmText: '改成人類紀錄', message: '改成人類紀錄後，AI 不會再主動看到這張卡。<br><span class="warn-text">但之前發到群組的相關訊息還在，AI 看過的收不回來。</span>' })) return;
+        } else if (d0.type === NOTE) {
+          let pub = true;
+          const onChg = ev => { if (ev.target.id === 'pub-notes') pub = ev.target.checked; };
+          document.addEventListener('change', onChg);
+          const ok = await confirmDialog({ title: `改成${data.type}卡？`, confirmText: `改成${data.type}卡`, message: `改成${data.type}卡後，<b>AI 會主動看到、也會收到通知</b>：標題、內容、狀態，以及 ${(d0.notes || []).length} 筆紀錄。確定嗎？<label class="chk pub-notes"><input type="checkbox" id="pub-notes" checked> 紀錄一起公開（不勾＝紀錄刪掉，只公開卡片本身）</label>` });
+          document.removeEventListener('change', onChg);
+          if (!ok) return;
+          data.publishNotes = pub;
+        }
+      }
       if (await patchCard(work.openId, data)) { work.editing = false; openCard(work.openId); toast('已儲存'); }
     });
     host.querySelectorAll('[data-inl-text^="k:"]').forEach(ta => { const c = work.cards.get(ta.dataset.inlText.slice(2)); const list = ta.parentElement.querySelector('.mention-list'); if (c && list) attachMention(ta, list, { candidates: cardMentionCandidates(c) }); });
@@ -2824,6 +2865,8 @@
   });
   async function drawerClick(e) {
     if (e.target.closest('[data-close-drawer]')) return closeCard();
+    const mg = e.target.closest('.merged-into[data-card]'); // C-218：已整理到／整理自 的卡號
+    if (mg) return openCard(mg.dataset.card);
     const tg = e.target.closest('[data-dmsg-toggle]');
     if (tg) { work.openMsgs = work.openMsgs || new Set(); const id = tg.dataset.dmsgToggle; if (work.openMsgs.has(id)) work.openMsgs.delete(id); else work.openMsgs.add(id); return renderDrawer(false); }
     const j = e.target.closest('[data-jump-msg]');
@@ -2834,6 +2877,12 @@
     if (a.dataset.act === 'open-work') { work.returnFocus = null; closeCard(); showPage('work'); return openCard(id); }
     if (a.dataset.act === 'copy-id') return copyText(id).then(ok => toast(ok ? `已複製 ${id}` : '複製失敗'));
     if (a.dataset.act === 'handover') return openHandover();
+    if (a.dataset.act === 'add-note') {
+      const ta = $('#note-text'), t = ta?.value.trim();
+      if (!t) return ta?.focus();
+      try { const r = await api(`/api/cards/${encodeURIComponent(id)}/notes`, { method: 'POST', body: { text: t } }); work.detail.notes = r.notes; renderDrawer(false); $('#note-text')?.focus(); toast('已記下（只存卡上）'); } catch (err) { toast(err.message); }
+      return;
+    }
     if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
@@ -2862,8 +2911,9 @@
         <label>負責人<select name="ownerId">${opts('未指派')}</select></label>
         <div class="field"><span class="field-label" id="nt-label">類型</span>
           <div class="seg-scope full" role="group" aria-labelledby="nt-label">
-            <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button>
+            <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button><button type="button" data-nt="人類紀錄" aria-pressed="false">🔒 人類紀錄</button>
           </div><input type="hidden" name="type" value="工作"></div>
+        <div class="lockbar" id="nc-note" hidden><span aria-hidden="true">🔒</span><span><b>AI 不會主動看到</b>：不出現在 AI 的看板、卡片清單、團隊狀態，也不發通知或群組訊息。你在訊息裡給 AI 卡號叫它看，它才讀得到（只能讀、不能改）。</span></div>
         <details id="nc-more" ${sg || srcMsg || store.get('aigile-switch-nc-more') === '1' ? 'open' : ''}><summary>更多欄位 ▾（原因、狀態、下一步、完成條件、等誰）</summary><div class="stack nc-more-body">
         <div id="nc-decision" class="stack" hidden>
           <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
@@ -2876,7 +2926,7 @@
           </div>
           <label>決定後<input name="afterNext" maxlength="300" placeholder="決定後下一步是什麼"></label>
         </div>
-        <label>原因<textarea name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
+        <label><span class="nc-reason-l">原因</span><textarea name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
         <label>狀態<select name="status">${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
         <label>下一步<textarea name="next" rows="2" maxlength="300"></textarea></label>
         <label>完成條件<textarea name="criteria" rows="2" maxlength="500"></textarea></label>
@@ -2894,7 +2944,14 @@
       form.type.value = b.dataset.nt;
       body.querySelectorAll('[data-nt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
       const t = b.dataset.nt;
-      form.status.disabled = t !== '工作'; // 阻塞固定為受阻、決策固定為待確認
+      form.status.disabled = t !== '工作' && t !== NOTE; // 阻塞固定為受阻、決策固定為待確認
+      // C-218：人類紀錄——「原因」改叫「內容」並展開；負責人、等誰只列人類；預設進行中
+      const isNote = t === NOTE;
+      body.querySelector('#nc-note').hidden = !isNote;
+      body.querySelector('.nc-reason-l').textContent = isNote ? '內容' : '原因';
+      if (isNote) { body.querySelector('#nc-more').open = true; form.status.value = '進行中'; }
+      for (const sel of [form.ownerId, form.waitForId]) { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai; o.disabled = isNote && ai; } if (sel.selectedOptions[0]?.disabled) sel.value = ''; }
+      body.modal.querySelector('button[type="submit"]').textContent = isNote ? '建立人類紀錄' : '建立卡片';
       body.querySelector('#nc-decision').hidden = t !== '決策';
       if (t === '決策') body.querySelector('#nc-more').open = true; // 選「決策」自動展開決策欄位
       form.waitForId.closest('label').hidden = t === '決策'; // 決策卡固定等決策者
