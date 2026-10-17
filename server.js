@@ -21,6 +21,7 @@ const handle = createApp({
     roomCode: process.env.ROOM_CODE,
     openJoin: process.env.OPEN_JOIN ?? '1', // 本機預設開放自己加入（測試與種子資料用）；正式環境（Workers）預設關閉
     authFailLimit: process.env.AUTH_FAIL_LIMIT,
+    rateLimitPerMin: process.env.RATE_LIMIT_PER_MIN, // 只給本機測試用；正式環境固定每分鐘 120
     aiTokenTtlHours: process.env.AI_TOKEN_TTL_HOURS,
     humanTokenTtlHours: process.env.HUMAN_TOKEN_TTL_HOURS,
     fileTtlHours: process.env.FILE_TTL_HOURS,

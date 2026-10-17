@@ -280,7 +280,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     if (now - r.windowStart >= 60_000) { r.windowStart = now; r.count = 0; }
     r.count++;
     rate.set(p.id, r);
-    if (r.count > RATE_LIMIT_PER_MIN) {
+    if (r.count > (Number(config.rateLimitPerMin) || RATE_LIMIT_PER_MIN)) { // 測試可用 RATE_LIMIT_PER_MIN 調高
       throw new ApiError(429, 'RATE_LIMITED', '請求頻率超過限制', { retryAfter: Math.ceil((r.windowStart + 60_000 - now) / 1000) });
     }
     if (p.kind === 'human') p.token_expires_at = now + HUMAN_TOKEN_TTL_MS; // 人類使用中自動展延

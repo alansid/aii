@@ -869,7 +869,7 @@
   const viewLabel = v => (v === 'hub' ? '我的專案' : v === 'cross' ? '跨專案頻道' : projName(v));
   // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
   function todoByView() {
-    const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || [])];
+    const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || []), ...[...(work.cards?.values() || [])].filter(verifyingMe)]; // C-242：等你驗收也算
     const n = { hub: items.length, cross: items.filter(x => !x.project).length };
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
@@ -1932,6 +1932,44 @@
   const optionsOf = c => (c.decision?.options?.length ? c.decision.options : ['同意']);
   // 這張決策卡現在是在等「我」做決定
   const decidingMe = c => c.type === '決策' && c.status === '待確認' && !c.decision?.result && c.decision?.decider?.participantId === meId() && isMeRef(c.waitFor);
+  // C-242：「待確認」分兩種——決策卡＝等決定（黃）；AI 交給人類的卡＝等驗收（綠）
+  const verifyingMe = c => c.status === '待確認' && c.type !== '決策' && c.type !== NOTE && state.me?.memberType === 'human' && (isMeRef(c.waitFor) || (!c.waitFor && c.owner?.participantId === meId()));
+  function confirmPill(c) {
+    if (c.status !== '待確認' || c.type === NOTE) return '';
+    const dec = c.type === '決策', who = dec ? (c.decision?.decider || c.waitFor) : (c.waitFor || c.owner);
+    const mine = who?.participantId === meId(), act = dec ? '決定' : '驗收';
+    return `<span class="cfm-pill ${dec ? 'dec' : 'ver'}">${mine ? `等你${act}` : `等${who?.name ? ' ' + esc(who.name) + ' ' : ''}${act}`}</span>`;
+  }
+  // 驗收通過＝標已完成（人類完成即驗收）；退回＝填原因，卡回到交過來的 AI
+  async function acceptCard(id) { const r = await patchCard(id, { status: '已完成' }); if (r) { toast(`${id} 驗收通過`); loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox') renderWork(); }).catch(() => {}); } }
+  async function rejectCard(id) {
+    const c = work.cards.get(id);
+    const reason = await promptReason(`退回 ${id}？`, '退回原因（會回覆到交接訊息，交過來的 AI 會收到）');
+    if (!reason) return;
+    try {
+      const r = await api(`/api/cards/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason, version: c?.version } });
+      work.cards.set(id, r);
+      renderWork();
+      if (work.openId === id) openCard(id);
+      toast(`已退回給 ${r.owner?.name || 'AI'}`);
+      updateTodoBadge();
+    } catch (err) { toast(err.message); }
+  }
+  function promptReason(title, label) {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title, size: 'narrow', body: `<label class="field"><span class="field-label">${esc(label)}</span><textarea autocomplete="off" autocorrect="on" id="rj-input" rows="3" maxlength="500"></textarea></label><p class="error" id="rj-err" role="alert"></p>`,
+        foot: '<button class="btn" type="button" data-rj="0">取消</button><button class="btn primary" type="button" data-rj="1">退回</button>' });
+      document.body.appendChild(host);
+      const input = host.querySelector('#rj-input');
+      input.focus();
+      const done = ok => { const v = input.value.trim(); if (ok && !v) { host.querySelector('#rj-err').textContent = '請寫退回原因'; return input.focus(); } host.remove(); resolve(ok ? v : null); };
+      holdBackdrop(host.firstElementChild);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-rj]'); if (b) done(b.dataset.rj === '1'); else if (e.target.closest('[data-close]')) done(false); });
+      host.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+    });
+  }
   // [需確認] 訊息裡提到「正在等我決定的決策卡」→ 以決策卡為準，訊息不再單獨列出（C-139）
   const cardOfConfirm = d => {
     const text = state.byId.get(d.messageId)?.text || d.title || '';
@@ -2407,7 +2445,7 @@
           <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" data-card="${esc(c.cardId)}">
             ${cidHtml(c)}
             <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
-            <span class="crow-st">${c.type === NOTE ? noteStPill(c) : stPill(c.status)}${ownerHtml(c)}</span>
+            <span class="crow-st">${c.type === NOTE ? noteStPill(c) : c.status === '待確認' ? confirmPill(c) : stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
             <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
           </button>`).join('') : `<p class="muted">${work.filter === '已封存' && work.archived.loading ? '載入中…' : '沒有符合條件的卡片。'}</p>`}
@@ -2419,7 +2457,7 @@
   // 決策卡區塊（總覽與「待你處理」共用）
   function decisionSectionHtml(decideMe) {
     return decideMe.length ? `
-      <section class="wdecisions"><div class="wdec-head"><h3>決策卡</h3><span class="wcount ora">${decideMe.length}</span></div>
+      <section class="wdecisions"><div class="wdec-head"><h3>等你決定</h3><span class="wcount ora">${decideMe.length}</span></div>
         <div class="dgrid">${decideMe.map(c => `
           <article class="dcard" data-dcard="${esc(c.cardId)}">
             <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span><span class="cid">${esc(c.cardId)}</span><span class="grow"></span>
@@ -2429,6 +2467,10 @@
             ${decisionActions(c)}
           </article>`).join('')}</div></section>` : '';
   }
+  document.addEventListener('click', e => { // C-242：收件匣「等你驗收」
+    const ok = e.target.closest?.('[data-ver-ok]'), no = e.target.closest?.('[data-ver-no]');
+    if (ok) acceptCard(ok.dataset.verOk); else if (no) rejectCard(no.dataset.verNo);
+  });
   // ---------- 收件匣（C-134）：要你做的＋給你知道的 ----------
   work.notes = [];
   async function loadNotes() {
@@ -2570,7 +2612,14 @@
     const decideMe = all.filter(decidingMe);
     const confirms = legacyConfirms();
     const sg = (work.sugg || []).filter(x => inView(x.project));
-    if (!decideMe.length && !confirms.length && !sg.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
+    const verifyMe = all.filter(verifyingMe); // C-242
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
+    const verSection = verifyMe.length ? `
+      <section class="wsugg wverify"><div class="wsugg-head"><span class="wdot ok"></span><h3>等你驗收</h3><span class="wcount ok">${verifyMe.length}</span><span class="muted small">AI 做完交給你的卡：看過沒問題按「驗收通過」，要改按「退回」</span></div>
+        ${verifyMe.map(c => `<div class="sugg-row ver-row" data-ver-row="${esc(c.cardId)}">
+          <div class="sugg-main"><b>${cidHtml(c)} ${cardPTag(c)} ${esc(cardTitle(c))}</b><span class="muted small">${c.next ? '下一步：' + esc(c.next) + ' · ' : ''}${agoText(c.updatedAt)}交來</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-ver-ok="${esc(c.cardId)}">驗收通過</button><button type="button" class="btn small" data-ver-no="${esc(c.cardId)}">退回…</button><button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
+        </div>`).join('')}</section>` : '';
     const confSection = confirms.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>[需確認] 訊息</h3><span class="wcount ora">${confirms.length}</span><span class="muted small">AI 等你回答的問題，可以直接在這裡選；要看前後文按「到訊息處理」</span></div>
         ${confirms.map(d => { const cm = state.byId.get(d.messageId), quick = cm ? authHtml(cm, { inbox: true }) : ''; return `<div class="sugg-row conf-row" data-conf-row="${esc(d.messageId)}">
@@ -2580,7 +2629,7 @@
           ${cm ? `<div class="conf-text">${esc(cm.text.replace(/^\s*\[需確認\]\s*/, ''))}</div>` : ''}
           ${quick || inlineHtml('m:' + d.messageId, 'confirm', d)}
         </div>`; }).join('')}</section>` : '';
-    return decisionSectionHtml(decideMe) + confSection + suggHtml(true);
+    return decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
@@ -2589,7 +2638,7 @@
     const cols = wide() ? BOARD_ORDER.filter(s => (s !== '已封存' || work.showArchived) && (s !== '待整理' || all.some(c => c.status === '待整理'))) : [work.mCol];
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
-        <div class="ctile-top">${cidHtml(c)}${typeTag(c)}${c.type === NOTE ? (c.mergedInto ? '' : noteStPill(c)) : c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
+        <div class="ctile-top">${cidHtml(c)}${typeTag(c)}${confirmPill(c)}${c.type === NOTE ? (c.mergedInto ? '' : noteStPill(c)) : c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
         <b class="ctile-title">${cardPTag(c)} ${esc(cardTitle(c))}</b>
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
@@ -2939,7 +2988,7 @@
       ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
       <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
-          <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
+          <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
           <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
         </div>
@@ -2949,7 +2998,7 @@
           <div class="drawer-status">
             ${d.type === NOTE ? `<span class="dst" id="note-st-l">狀態</span><div class="seg-scope note-st" role="group" aria-labelledby="note-st-l">${[['進行中', '收集中'], ['已完成', '已整理']].map(([v, t]) => `<button type="button" data-act="note-st" data-st="${v}" aria-pressed="${(d.status === '已完成') === (v === '已完成')}">${t}</button>`).join('')}</div>` : `
             <label class="dst">狀態<select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
-            ${!closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}`}
+            ${verifyingMe(d) ? '<button class="btn small primary" type="button" data-act="ver-ok">驗收通過</button><button class="btn small" type="button" data-act="ver-no">退回…</button>' : !closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}`}
             ${canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
             ${d.status === '已完成' && !d.verified && d.type !== NOTE ? `<button class="btn small primary" type="button" data-act="verify" ${mine ? 'disabled title="完成者不能自己驗證"' : ''}>標為已驗證</button>` : ''}
           </div>
@@ -3064,6 +3113,8 @@
     if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
+    else if (a.dataset.act === 'ver-ok') acceptCard(id); // C-242
+    else if (a.dataset.act === 'ver-no') rejectCard(id);
     else if (a.dataset.act === 'note-st') { if (a.getAttribute('aria-pressed') !== 'true') await patchCard(id, { status: a.dataset.st }); } // C-226：已整理不必填去處
     else if (a.dataset.act === 'reopen') { await patchCard(id, { status: '待處理' }); refreshArchivedCount().then(renderWork); }
     else if (a.dataset.act === 'verify') {

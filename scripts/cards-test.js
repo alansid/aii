@@ -14,7 +14,7 @@ const BASE = `http://localhost:${PORT}`;
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-cards-'));
 
 const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0', CARD_STALE_HOURS: '0', ARCHIVE_EVERY_MS: '0' }, stdio: 'pipe',
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0', CARD_STALE_HOURS: '0', ARCHIVE_EVERY_MS: '0', RATE_LIMIT_PER_MIN: '600' }, stdio: 'pipe',
 });
 const ready = new Promise((res, rej) => {
   server.stdout.on('data', d => { if (String(d).includes('已啟動')) res(); });
@@ -93,6 +93,32 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await H(pg.token, rel.cardId, { toId: qa.participantId, note: '再交' })).body.error.code, 'NOT_CARD_OWNER', '交出後不能再交');
     const toHuman = (await H(qa.token, rel.cardId, { toId: liuId, note: '請你看' })).body;
     assert.equal(toHuman.owner.participantId, liuId, 'AI 可以交給人類');
+    // C-242：AI 交給人類＝請人類驗收 → 待確認、等誰＝那位人類；訊息寫「等你驗收」
+    assert.equal(toHuman.status, '待確認', 'C-242：AI 交給人類變待確認');
+    assert.equal(toHuman.waitFor?.participantId, liuId, 'C-242：等誰＝那位人類');
+    assert.ok((await call(liu.token, `/api/messages/${toHuman.handoverMessageId}`)).body.text.endsWith('（等你驗收）'), 'C-242：交接訊息寫等你驗收');
+    // 退回：只有負責驗收的人；原因必填；卡回到交過來的 AI、狀態回進行中、原因回覆到交接訊息
+    const RJ = (tok, id, body) => call(tok, `/api/cards/${id}/reject`, 'POST', body);
+    assert.equal((await RJ(qa.token, rel.cardId, { reason: 'x' })).status, 403, 'C-242：AI 不能退回');
+    assert.equal((await RJ(liu.token, rel.cardId, {})).status, 400, 'C-242：退回原因必填');
+    const rj = await RJ(liu.token, rel.cardId, { reason: '手機版按鈕還是擠在一起' });
+    assert.equal(rj.status, 200, JSON.stringify(rj.body));
+    assert.equal(rj.body.owner.participantId, qa.participantId, 'C-242：退回給交過來的 AI');
+    assert.equal(rj.body.status, '進行中', 'C-242：狀態回進行中');
+    assert.equal(rj.body.waitFor, null, 'C-242：不再等人');
+    const rjMsg = (await call(liu.token, `/api/messages/${rj.body.rejectMessageId}`)).body;
+    assert.equal(rjMsg.replyToMessageId, toHuman.handoverMessageId, 'C-242：原因回覆到交接訊息');
+    assert.ok(rjMsg.text.startsWith('[退回]') && rjMsg.recipients.some(r => r.participantId === qa.participantId), 'C-242：通知那個 AI');
+    assert.equal((await RJ(liu.token, rel.cardId, { reason: '再退' })).body.error.code, 'NOT_VERIFYING', 'C-242：不是等驗收的卡不能退回');
+    // 人類交給 AI、人類交給人類：狀態維持
+    const hh = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '人類交出', ownerId: liuId, status: '進行中' })).body;
+    assert.equal((await H(liu.token, hh.cardId, { toId: qa.participantId, note: '給你' })).body.status, '進行中', 'C-242：人類交給 AI 照 C-241 維持');
+    await call(liu.token, `/api/cards/${hh.cardId}`, 'PATCH', { status: '已完成' }); // 不影響後面「QA 沒負責卡片」的斷言
+    // 驗收通過＝人類標已完成（C-168 人類完成即驗收）
+    const reHo = (await H(qa.token, rel.cardId, { toId: liuId, note: '修好了' })).body;
+    assert.equal(reHo.status, '待確認');
+    const ok = (await call(liu.token, `/api/cards/${rel.cardId}`, 'PATCH', { status: '已完成' })).body;
+    assert.ok(ok.status === '已完成' && ok.verified, 'C-242：人類標已完成＝驗收通過');
     const noPrefix = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '無前綴接力', ownerId: pg.participantId })).body;
     const np = (await H(pg.token, noPrefix.cardId, { toId: liuId, note: 'ok' })).body;
     assert.ok((await call(liu.token, `/api/messages/${np.handoverMessageId}`)).body.text.startsWith(`[交接] 【${noPrefix.project}】${noPrefix.cardId} 無前綴接力`), 'C-146 A：專案標記取自卡片的專案欄位');

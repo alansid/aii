@@ -499,6 +499,32 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     return view(await load(params.id), people);
   });
 
+  // C-242：人類驗收不通過 →「退回」：卡回到交過來的那個 AI、狀態回進行中；原因發一則回覆到交接訊息
+  route('POST', '/api/cards/:id/reject', async ({ ctx, me, req, params }) => {
+    if (me.kind !== 'human') throw new ApiError(403, 'FORBIDDEN', '只有人類能退回驗收。');
+    const body = await readJson(req);
+    const c = await load(params.id, me);
+    if (c.type === NOTE || c.type === '決策' || c.status !== '待確認') throw new ApiError(400, 'NOT_VERIFYING', '只有「等驗收」（待確認、不是決策卡）的卡片可以退回。');
+    if (c.owner_id !== me.id && c.wait_for_id !== me.id) throw new ApiError(403, 'NOT_CARD_OWNER', '只有負責驗收的人能退回。');
+    if (body.version !== undefined && Number(body.version) !== c.version) throw new ApiError(409, 'CONFLICT', '這張卡片剛被別人修改過，請重新讀取後再試。');
+    const reason = text({ reason: body.reason }, 'reason', { required: true });
+    if (!reason) throw invalid('退回原因（reason）為必填');
+    const people = await peopleMap(ctx);
+    // 交過來的 AI：這張卡最近一則由 AI 發的 [交接] 訊息的作者
+    const hos = await db.all("SELECT m.id, m.author_id FROM card_msgs cm JOIN messages m ON m.id = cm.message_id WHERE cm.card_seq = ? AND m.text LIKE '[交接]%' ORDER BY m.seq DESC LIMIT 20", c.seq);
+    const ho = hos.find(m => people.get(m.author_id)?.kind === 'ai' && people.get(m.author_id)?.status === 'active');
+    if (!ho) throw new ApiError(400, 'NO_HANDOVER_SOURCE', '找不到把這張卡交過來的 AI，請改用「交接」交給要處理的人。');
+    const ai = people.get(ho.author_id), at = nowIso();
+    await save(c, { owner_id: ai.id, status: '進行中', wait_for_id: null }, [`退回 ${me.name} → ${ai.name}：${reason}（狀態 待確認 → 進行中）`], me, at);
+    invalidatePeople();
+    let messageId = null, notifyError = null;
+    try {
+      const r = await createMessage(ctx, me, { text: `[退回] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${ai.name}：${reason}`, requestId: `reject_${c.uid}_${c.version}`, replyToMessageId: ho.id, recipientIds: [ai.id], project: c.project });
+      messageId = r.message.messageId;
+      await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
+    } catch (err) { notifyError = err.message; }
+    return { ...view(await load(params.id), people), rejectMessageId: messageId, ...(notifyError ? { notifyError } : {}) };
+  });
   route('POST', '/api/cards/:id/verify', async ({ ctx, me, params }) => {
     const c = await load(params.id);
     if (c.type === NOTE && me.kind !== 'human') throw aiNoteForbidden();
@@ -544,13 +570,18 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     if (note === undefined) throw invalid('交接說明（note）為必填');
     const at = nowIso(), fromName = people.get(c.owner_id || me.id)?.name || me.name, toName = people.get(to).name;
     // C-241：交接只換負責人、留紀錄，狀態維持（進行中還是進行中）；接手者接單時自己改
+    // C-242：唯一例外——AI 交給人類＝請人類驗收：狀態改「待確認」、等誰＝那位人類（人類紀錄、決策卡不套用）
+    const fromP = people.get(c.owner_id || me.id), toP = people.get(to);
+    const verify = c.type !== NOTE && c.type !== '決策' && fromP?.kind === 'ai' && toP?.kind === 'human';
     const sets = { owner_id: to };
     if (c.wait_for_id === to) sets.wait_for_id = null;
-    const logs = [`交接 ${fromName} → ${toName}：${note}（狀態維持：${c.status}）`];
+    if (verify) Object.assign(sets, { status: '待確認', wait_for_id: to });
+    const stateNote = verify ? `狀態 ${c.status} → 待確認，等 ${toName} 驗收` : `狀態維持：${c.status}`;
+    const logs = [`交接 ${fromName} → ${toName}：${note}（${stateNote}）`];
     await save(c, sets, logs, me, at);
     invalidatePeople();
     // 專案標記取自卡片的專案欄位（C-146 A）
-    const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${toName}：${note}（狀態維持：${c.status}）`;
+    const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${toName}：${note}（${verify ? '等你驗收' : stateNote}）`;
     let messageId = null, notifyError = null;
     if (c.type === NOTE) return { ...view(await load(params.id), people), handoverMessageId: null }; // C-218：人類紀錄交接不發群組訊息
     try {
