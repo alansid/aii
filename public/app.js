@@ -580,6 +580,8 @@
         out.push(flowGroupHtml(run));
         i = j; continue;
       }
+      // UX 第 1530 則：展開過的合併列可以再收起
+      if (run.length >= 3) out.push(`<button type="button" class="flow-line flow-fold" data-flow-fold="${esc(run[0].messageId)}" aria-label="收起這 ${run.length} 則流程訊息"><span class="fl-icon" aria-hidden="true">▴</span><span class="fl-text">收起這 ${run.length} 則流程訊息</span></button>`);
       if (run.length) { out.push(...run.map(messageHtml)); i = j; continue; }
       out.push(messageHtml(list[i])); i++;
     }
@@ -877,7 +879,8 @@
     $('#f-clear').hidden = !filtering();
     const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
   }
-  const filterCount = () => (state.filter.scope !== 'all' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
+  // C-215：範圍「全部／與我相關」已在手機頂部兩顆，篩選按鈕只算成員、標籤（「給我的」不在兩顆裡，仍算一個）
+  const filterCount = () => (state.filter.scope === 'mine' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
   function setFilter(patch) {
     Object.assign(state.filter, patch);
     state.onlyMine = state.filter.scope === 'related';
@@ -888,7 +891,7 @@
   // 手機版：把範圍、成員、標籤合成一個「篩選」底部面板
   function filterSummary() {
     const f = state.filter, p = f.member ? state.participants.get(f.member)?.name : '';
-    return [{ all: '全部', mine: '給我的', related: '與我相關' }[f.scope], p || '所有成員', f.tag || ''].filter(Boolean).join(' · ');
+    return [f.scope === 'mine' ? '給我的' : '', p || '', f.tag || ''].filter(Boolean).join(' · ');
   }
   function openFilterSheet() {
     const f = state.filter;
@@ -1133,6 +1136,13 @@
       (el?.matches('button') ? el : el?.querySelector('button'))?.focus({ preventScroll: true });
       return;
     }
+    const ff = e.target.closest('[data-flow-fold]');
+    if (ff) {
+      const id = ff.dataset.flowFold, box = $('#messages'), top = box.scrollTop;
+      state.flowOpen.delete(id); renderMessages(false); box.scrollTop = top;
+      document.querySelector(`[data-flow-group="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+      return;
+    }
     const fg = e.target.closest('[data-flow-group]');
     if (fg) {
       const id = fg.dataset.flowGroup, box = $('#messages'), top = box.scrollTop;
@@ -1160,6 +1170,10 @@
 
   document.getElementById('new-pill')?.addEventListener('click', () => { scrollBottom(); clearNew(); });
   document.getElementById('mention-btn')?.addEventListener('click', () => nextMention().catch(err => toast(err.message)));
+  if (window.visualViewport) { // C-215：手機鍵盤高度，給固定在底部的卡片回覆框用
+    const kb = () => document.documentElement.style.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - visualViewport.height - visualViewport.offsetTop)) + 'px');
+    visualViewport.addEventListener('resize', kb); visualViewport.addEventListener('scroll', kb);
+  }
   narrowMq.addEventListener?.('change', () => { if (!store.get(MSG_VIEW_KEY) && state.me) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; syncFilterBar(); } });
   async function jumpTo(id) {
     const m0 = state.byId.get(id);
@@ -2222,11 +2236,11 @@
         ${list.length ? '<button type="button" class="btn small" data-note-ackall>全部標為已讀</button>' : ''}</div>
       ${list.length ? list.map(n => {
         const who = state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
-        return `<div class="sugg-row"><span class="ndot" aria-label="未讀"></span>${avatar(who)}
-          <div class="sugg-main"><div class="sugg-top"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></div>
-            <span class="small">${esc(n.preview)}</span></div>
-          <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">查看</button>
-            <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">已讀</button></div></div>`;
+        return `<div class="sugg-row fyi-row" id="fyi-${esc(n.notificationId)}"><span class="ndot" aria-hidden="true"></span>${avatar(who)}
+          <button type="button" class="fyi-main" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}" aria-label="${esc(`未讀，${n.sender.name}，${fmtTime(n.createdAt)}：${n.preview}。查看`)}">
+            <span class="fyi-top"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></span>
+            <span class="fyi-text">${esc(n.preview.replace(/\s+/g, ' '))}</span></button>
+          <button type="button" class="fyi-read" data-note-ack="${esc(n.notificationId)}" aria-label="${esc(n.sender.name)} 這則標為已讀">已讀</button></div>`;
       }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}</section>`;
   }
   // 第一層「我的專案」（C-169，取代今日總覽）：每個專案一張卡＋跨專案頻道卡；右欄「要你處理」依專案分組，只列不決定
@@ -2390,7 +2404,11 @@
     const ng = t.closest('[data-note-goto]');
     if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
     const na = t.closest('[data-note-ack]');
-    if (na) return ackNotesNow([na.dataset.noteAck]);
+    if (na) { // C-215：點了這列先淡出再移除
+      const row = document.getElementById('fyi-' + na.dataset.noteAck);
+      if (row) { row.classList.add('fading'); setTimeout(() => ackNotesNow([na.dataset.noteAck]), 220); return; }
+      return ackNotesNow([na.dataset.noteAck]);
+    }
     if (t.closest('[data-note-ackall]')) return ackNotesNow(noteList().map(n => n.notificationId), '已全部標為已讀');
     const tj = t.closest('[data-todo-jump]');
     if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
@@ -2718,11 +2736,12 @@
           <div><button class="btn small" type="button" data-act="edit">編輯</button></div>`}
           <div class="group-title">相關訊息 · ${(d.messageIds || []).length}</div>
           ${msgs || '<p class="muted small">還沒有關聯訊息。</p>'}
-          ${!(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
+          ${!narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
           <div class="group-title">紀錄</div>
           <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>
         </div>
         ${state.page === 'messages' ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
+        ${narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="drawer-compose" aria-label="想法與回覆">${inlineHtml('k:' + d.cardId, 'card', d)}</div>` : ''}
       </aside>`;
     host.querySelector('#card-edit')?.addEventListener('submit', async e => {
       e.preventDefault();
