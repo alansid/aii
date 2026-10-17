@@ -924,7 +924,11 @@
     drawMentionWarn();
     const t = sendTarget();
     const v = projectView(), base = v === 'cross' || v === 'hub' ? 'all' : v;
-    el.innerHTML = `<span class="muted">發到</span>${t === 'all' ? '<span class="ptag ptag-all">跨專案頻道</span><span class="muted">所有專案都看得到</span>' : projTag(t)}${state.replyTo && t !== base ? '<span class="muted">（跟著被回覆的訊息）</span>' : ''}`;
+    // C-231：同一列的小字「發到 X」，太長省略，完整說明放 title
+    const name = t === 'all' ? '跨專案頻道' : projName(t);
+    const note = [t === 'all' ? '所有專案都看得到' : '', state.replyTo && t !== base ? '跟著被回覆的訊息' : ''].filter(Boolean).join('，');
+    el.innerHTML = `發到 <b>${esc(name)}</b>${note ? `<span class="st-note">（${esc(note)}）</span>` : ''}`;
+    el.title = `發到 ${name}${note ? `（${note}）` : ''}`;
   }
   // 網址（C-169）：/p/<專案名>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
   const PAGE_BY_NAME = Object.fromEntries(Object.entries(PAGE_NAME).map(([k, t]) => [t, k]));
@@ -1466,8 +1470,17 @@
     if (li) { e.preventDefault(); pickMention(Number(li.dataset.i)); }
   });
 
+  // C-231：類型小膠囊顯示目前選的類型；一般＝灰框，選了別的才變藍
+  function drawTagChip() {
+    const cur = leadTagOf(input.value) || '';
+    const b = $('#tag-btn');
+    b.textContent = `類型：${cur || '一般'} ▾`;
+    b.classList.toggle('on', !!cur);
+    b.setAttribute('aria-label', `訊息類型：${cur || '一般'}`);
+  }
   function onInput() {
     sendBtn.disabled = !input.value.trim();
+    drawTagChip();
     autoGrow();
     updateMention();
     drawMentionWarn();

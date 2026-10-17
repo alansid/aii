@@ -1841,3 +1841,20 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 
 /* ===== C-230 觸控裝置：App 跟著可見區（鍵盤開時縮到鍵盤上方） ===== */
 html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); }
+
+/* ===== C-231 輸入列：輸入框在上，下一列 📎 · 類型 · 發到 · 送出靠右（手機、電腦同排列） ===== */
+.composer .composer-row { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; }
+.composer .composer-row .input-wrap { order: 0; flex: none; width: 100%; }
+.composer-tools { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.composer-tools .attach { flex: none; width: 44px; height: 44px; min-height: 44px; padding: 0; margin: 0; }
+.composer-tools .tag-btn { flex: none; height: 36px; min-height: 36px; padding: 0 12px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-weight: 400; font-size: 13px; display: inline-flex; align-items: center; white-space: nowrap; margin: 0; }
+.composer-tools .tag-btn.on { border-color: #93c5fd; background: #eef4ff; color: #1d4ed8; font-weight: 500; }
+.composer-tools .send-to { flex: 1; min-width: 0; margin: 0; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--muted); }
+.composer-tools .send-to b { font-weight: 500; color: var(--text); }
+.composer-tools .send-to .st-note { color: var(--muted); }
+.composer-tools .send { flex: none; margin: 0 0 0 auto; height: 44px; min-height: 44px; min-width: 76px; white-space: nowrap; }
+.composer-tools .send:disabled { opacity: 1; background: #c7d2fe; border-color: #c7d2fe; color: #fff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .composer-tools .tag-btn.on { border-color: #3b5b9a; background: #1b2a47; color: #93c5fd; } :root:not([data-theme="light"]) .composer-tools .send:disabled { background: #2b3a63; border-color: #2b3a63; color: #8fa3d6; } }
+:root[data-theme="dark"] .composer-tools .tag-btn.on { border-color: #3b5b9a; background: #1b2a47; color: #93c5fd; }
+:root[data-theme="dark"] .composer-tools .send:disabled { background: #2b3a63; border-color: #2b3a63; color: #8fa3d6; }
+.composer .composer-tools > * { order: 0; } /* 蓋掉舊的手機排序（C-215），照 DOM 順序：📎 → 類型 → 發到 → 送出 */

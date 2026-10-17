@@ -156,18 +156,21 @@
           <button type="button" id="reply-cancel" class="icon-btn" aria-label="取消回覆">×</button>
         </div>
         <div class="composer-row">
-          <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
-          <button id="tag-btn" class="btn tag-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="tag-menu">訊息類型 ▾</button>
           <div class="input-wrap">
             <textarea autocomplete="off" autocorrect="on" id="input" rows="1" placeholder="輸入訊息，輸入 @ 提及成員" aria-describedby="composer-hint"></textarea>
             <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>
             <ul id="tag-menu" class="mention-list tag-menu" role="listbox" aria-label="訊息類型" hidden></ul>
           </div>
-          <input id="file-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
-          <button id="send" class="btn primary send" type="button" disabled>送出</button>
+          <!-- C-231：輸入框下一列：📎 · 類型小膠囊 · 發到 · 送出靠右 -->
+          <div class="composer-tools">
+            <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
+            <button id="tag-btn" class="btn tag-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="tag-menu" aria-label="訊息類型：一般">類型：一般 ▾</button>
+            <span id="send-to" class="send-to"></span>
+            <input id="file-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
+            <button id="send" class="btn primary send" type="button" disabled>送出</button>
+          </div>
         </div>
         <p id="mention-warn" class="mention-warn" role="status" hidden></p>
-        <p id="send-to" class="send-to"></p>
         <p id="composer-error" class="error small composer-error" role="alert" hidden></p>
         <p id="composer-hint" class="composer-hint">Enter 送出 · Shift+Enter 換行 · 輸入 @ 提及成員 · 上傳的文件 1 小時後自動刪除</p>
       </footer>
