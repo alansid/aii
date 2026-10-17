@@ -510,8 +510,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     }
     // C-191：原本每則一個 UPDATE（100 則＝100 次資料庫往返），改成查一次＋更新一次
     const list = JSON.stringify([...new Set(ids)]);
-    const confirmedIds = (await db.all('SELECT id FROM notifications WHERE recipient_id = ? AND id IN (SELECT value FROM json_each(?))', me.id, list)).map(r => r.id);
-    if (confirmedIds.length) await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND id IN (SELECT value FROM json_each(?))", nowIso(), me.id, list);
+    // C-245：用通知 ID（主鍵）查，不走收件人索引（那會把這個人所有通知都讀一遍）；+recipient_id 讓資料庫不選收件人索引
+    const confirmedIds = (await db.all('SELECT id FROM notifications WHERE id IN (SELECT value FROM json_each(?)) AND +recipient_id = ?', list, me.id)).map(r => r.id);
+    if (confirmedIds.length) await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE id IN (SELECT value FROM json_each(?)) AND +recipient_id = ?", nowIso(), list, me.id);
     return { confirmedIds };
   }
 

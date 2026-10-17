@@ -261,7 +261,8 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     await maybeArchive();
     const c = (await attachMerged([await load(params.id, me)]))[0];
     const people = await peopleMap(ctx);
-    const mergedFrom = (await db.all("SELECT DISTINCT card_seq FROM card_log WHERE text = ? ORDER BY card_seq", `已整理到 ${cardNo(c.seq)}`)).map(r => cardNo(r.card_seq));
+    // C-245：只有人類紀錄卡會「已整理到」；只查這些卡的紀錄，不掃整張 card_log
+    const mergedFrom = (await db.all("SELECT DISTINCT card_seq FROM card_log WHERE card_seq IN (SELECT seq FROM cards WHERE type = ?) AND text = ? ORDER BY card_seq", NOTE, `已整理到 ${cardNo(c.seq)}`)).map(r => cardNo(r.card_seq));
     const [log, msgs] = await Promise.all([
       db.all('SELECT at, by_id, via, text FROM card_log WHERE card_seq = ? ORDER BY id DESC LIMIT 200', c.seq),
       db.all('SELECT message_id FROM card_msgs WHERE card_seq = ? ORDER BY rowid', c.seq),
