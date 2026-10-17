@@ -48,6 +48,8 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const put = (tok, id, projects) => call(tok, `/api/participants/${id}/projects`, 'PUT', { projects });
     assert.equal((await put(liu.token, plat.participantId, ['平台'])).body.projects[0], '平台', '管理員可改 AI 的專案');
     assert.equal((await put(liu.token, bank.participantId, ['銀行系統'])).status, 200);
+    assert.deepEqual((await put(liu.token, both.participantId, ['平台'])).body.projects, ['平台'], 'C-212：回應裡的專案是更新後的值');
+    await put(liu.token, both.participantId, ['平台', '銀行系統']); // 還原，後面的測試要用兩邊
     assert.equal((await put(percy.token, plat.participantId, ['平台'])).status, 403, '別人不能改');
     assert.equal((await put(plat.token, plat.participantId, ['銀行系統'])).status, 403, 'AI 不能改自己');
     assert.equal((await put(liu.token, plat.participantId, [])).status, 400, '至少選一個');

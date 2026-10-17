@@ -994,6 +994,7 @@ ${trial
     }
     await db.batch(stmts);
     invalidatePeople();
+    ctx.people = null; // C-212：同一請求接下來要讀到更新後的成員（例如回應裡的 projects）
     return impact;
   }
 
