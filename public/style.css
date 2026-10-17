@@ -1721,3 +1721,26 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
   /* 鍵盤打開時，抽屜底部貼在鍵盤上方 */
   .drawer-root:not(.docked) { bottom: var(--kb, 0px); }
 }
+
+/* ===== C-219 每個專案各自的人類角色 ===== */
+.role-sel { min-height: 40px; min-width: 120px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+.role-sel.empty { border-style: dashed; border-color: #e0a240; color: #92400e; background: #fffaf0; }
+.role-sel.chg { outline: 3px solid #f59e0b; outline-offset: 1px; }
+.role-sel:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .role-sel.empty { background: #2e2410; color: #f3c97a; border-color: #b8862b; } }
+:root[data-theme="dark"] .role-sel.empty { background: #2e2410; color: #f3c97a; border-color: #b8862b; }
+.pm-role { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.pm-role-tag { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 12px; font-size: 12px; font-weight: 600; background: rgba(59, 130, 246, .12); color: var(--primary); white-space: nowrap; }
+.pm-role-tag.empty { background: transparent; border: 1px dashed #e0a240; color: #b45309; }
+.pm-chip .role-sel { min-height: 32px; min-width: 96px; font-size: 13px; padding: 0 6px; }
+.my-role-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 52px; border-top: 1px solid var(--border); }
+.my-role-foot { display: flex; justify-content: flex-end; padding-top: 8px; }
+.my-role-foot .btn { min-height: 40px; }
+.inv-proj-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; }
+.inv-proj-row .role-sel:disabled { opacity: .5; }
+.role-banner { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px 0 16px; background: #fffaf0; color: #7c4a03; border-bottom: 1px solid #f3d29a; font-size: 14px; }
+.role-banner[hidden] { display: none; }
+.role-banner .link { min-height: 44px; font-weight: 600; }
+.role-banner .icon-btn { margin-left: auto; min-width: 44px; min-height: 44px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .role-banner { background: #2e2410; color: #f3c97a; border-bottom-color: #5c4a14; } }
+:root[data-theme="dark"] .role-banner { background: #2e2410; color: #f3c97a; border-bottom-color: #5c4a14; }

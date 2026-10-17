@@ -172,6 +172,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   const publicParticipant = (p, people, now = Date.now()) => ({
     ...identity(p, people),
+    projectRoles: projectRolesOf(p), // C-219
     duties: p.kind === 'ai' ? p.duties : undefined,
     joinedAt: p.created_at,
     expiresAt: iso(p.token_expires_at),
@@ -179,6 +180,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     isOnline: isOnline(p, now),
   });
 
+  // C-219：查詢帶 ?project= 時，人類的 role 換成那個專案的角色（未設定＝空字串）；沒帶給原本的值
+  function roleForProject(items, url) {
+    const pj = url?.searchParams.get('project');
+    if (!pj || !PROJECTS.includes(pj)) return items;
+    for (const it of items) if (it.memberType === 'human' && it.projectRoles) it.role = it.projectRoles[pj] || '';
+    return items;
+  }
   const settingsOf = p => ({
     roleKey: p.role_key, duties: p.duties, style: p.style, autonomy: p.autonomy,
     mustConfirm: p.must_confirm, handoff: p.handoff, environment: p.env || '',
@@ -841,8 +849,9 @@ ${trial
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS, environments: ENVIRONMENTS }), { open: true });
   route('POST', '/api/join', async ({ req, ctx }) => ({ __status: 201, ...(await joinHuman(ctx, await readJson(req))) }), { open: true });
 
-  route('GET', '/api/me', ({ me, ctx }) => peopleMap(ctx).then(people => ({
+  route('GET', '/api/me', ({ me, ctx }) => loadProjectRoles().then(() => peopleMap(ctx)).then(people => ({
     ...identity(me, people),
+    ...(me.kind === 'human' ? { projectRoles: projectRolesOf(me) } : {}), // C-219
     isOnline: true,
     expiresAt: iso(me.token_expires_at),
     ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId } : {}),
@@ -925,6 +934,41 @@ ${trial
     return leadersMap;
   }
   const leaderProjectsOf = (id, map = leadersMap) => Object.keys(map).filter(pj => (map[pj] || []).includes(id) && PROJECTS.includes(pj));
+  // C-219：人類在每個專案各自的角色（AI 角色、跨專案角色不變）。沒有紀錄＝「未設定」
+  const ROLE_CHOICES = ['PO', 'PG', 'UX', 'QA', 'BA', 'SM', 'Sponsor', 'BU'];
+  let projRoles = {}, projRolesAt = 0;
+  async function loadProjectRoles(force = false) {
+    if (!force && Date.now() - projRolesAt < 10_000) return projRoles;
+    let r = await db.get("SELECT value FROM app_settings WHERE key = 'project_roles'").catch(() => null);
+    if (!r) {
+      // 第一次上線：把現有人類的角色帶到他所在的每個專案（昱志第 1565 則選 A）
+      const init = {};
+      for (const p of await db.all("SELECT * FROM participants WHERE kind = 'human' AND status = 'active'")) {
+        const role = String(p.role || '').trim().slice(0, 10);
+        if (role) init[p.id] = Object.fromEntries(projectsOf(p).map(pj => [pj, role]));
+      }
+      await db.run("INSERT INTO app_settings (key, value) VALUES ('project_roles', ?) ON CONFLICT(key) DO NOTHING", JSON.stringify(init));
+      r = await db.get("SELECT value FROM app_settings WHERE key = 'project_roles'");
+    }
+    try { projRoles = JSON.parse(r?.value || '{}') || {}; } catch { projRoles = {}; }
+    projRolesAt = Date.now();
+    return projRoles;
+  }
+  async function saveProjectRoles(next) {
+    await db.run("INSERT INTO app_settings (key, value) VALUES ('project_roles', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(next));
+    projRoles = next; projRolesAt = Date.now();
+    invalidatePeople();
+  }
+  // 人類：{ 專案id: 角色 }（只列他所在的專案，未設定是空字串）；AI 沒有
+  const projectRolesOf = p => (p.kind === 'human' ? Object.fromEntries(projectsOf(p).map(pj => [pj, projRoles[p.id]?.[pj] || ''])) : undefined);
+  function readRole(v) {
+    const s = String(v ?? '').trim();
+    if (s.length > 10) throw invalid('角色最多 10 字');
+    if (/[\n\r]/.test(s)) throw invalid('角色不能換行');
+    return s;
+  }
+  // 誰能改某人在某專案的角色：管理員全部；該專案 leader；本人只改自己
+  const canSetRole = (me, target, pj, admin) => !!admin && admin.id === me.id || leaderProjectsOf(me.id).includes(pj) || me.id === target.id;
   const crossRole = (p, ov = crossOv) => p.status === 'active' && p.kind !== 'system' && !ov.remove.has(p.id) && (ov.add.has(p.id) || defaultCross(p));
   const listOf = p => String(p?.projects ?? '').split(',').map(x => x.trim()).filter(Boolean);
   const projEvent = (projectId, actorId, text, at) => ['INSERT INTO project_events (project_id, at, actor_id, text) VALUES (?,?,?,?)', [projectId, at, actorId, text]];
@@ -996,6 +1040,14 @@ ${trial
     await db.batch(stmts);
     invalidatePeople();
     ctx.people = null; // C-212：同一請求接下來要讀到更新後的成員（例如回應裡的 projects）
+    // C-219：移出某專案，那個專案的角色一起清掉（之後再加入＝未設定）
+    const rmRoles = plan.filter(x => x.removed.length && projRoles[x.target.id]);
+    if (rmRoles.length) {
+      await loadProjectRoles(true);
+      const nx = { ...projRoles };
+      for (const x of rmRoles) { const o = { ...(nx[x.target.id] || {}) }; for (const pj of x.removed) delete o[pj]; nx[x.target.id] = o; }
+      await saveProjectRoles(nx);
+    }
     return impact;
   }
 
@@ -1007,6 +1059,27 @@ ${trial
     if (body.dryRun === true) return { dryRun: true, impact };
     const people = await peopleMap(ctx);
     return { ...identity(people.get(params.id), people), impact };
+  });
+  // C-219：改某位人類在各專案的角色。管理員全部、該專案 leader、本人只改自己
+  route('PUT', '/api/participants/:id/project-roles', async ({ ctx, me, req, params }) => {
+    requireHuman(me);
+    await loadProjects(true); await loadLeaders(true); await loadProjectRoles(true);
+    const people = await peopleMap(ctx), admin = adminOf(people);
+    const target = people.get(params.id);
+    if (!target || target.status !== 'active' || target.kind !== 'human') throw new ApiError(404, 'NOT_FOUND', '找不到這位人類成員（AI 的角色在「我的 AI」改）');
+    const body = await readJson(req);
+    if (!body.roles || typeof body.roles !== 'object' || Array.isArray(body.roles)) throw invalid('roles 需為物件，例如 {"平台":"PO"}');
+    const inP = projectsOf(target), next = { ...projRoles, [target.id]: { ...(projRoles[target.id] || {}) } }, at = nowIso(), events = [];
+    for (const [pj, v] of Object.entries(body.roles)) {
+      if (!inP.includes(pj)) throw invalid(`${target.name} 不在「${nameOf(pj)}」，不能設那個專案的角色`);
+      if (!canSetRole(me, target, pj, admin)) throw new ApiError(403, 'NOT_PROJECT_LEADER', `只有管理員、「${nameOf(pj)}」的 leader 或 ${target.name} 本人能改他在這個專案的角色。`);
+      const role = readRole(v);
+      if ((next[target.id][pj] || '') === role) continue;
+      if (role) next[target.id][pj] = role; else delete next[target.id][pj];
+      events.push(projEvent(pj, me.id, `${me.name} 把 ${target.name} 的角色設為「${role || '未設定'}」`, at));
+    }
+    if (events.length) { await saveProjectRoles(next); await db.batch(events); }
+    return { participantId: target.id, projectRoles: projectRolesOf(target) };
   });
   // 批次：某專案的成員名單（專案管理畫面的「儲存」）；memberIds 以外的人移出此專案
   route('PUT', '/api/projects/:id/members', async ({ ctx, me, req, params }) => {
@@ -1101,8 +1174,30 @@ ${trial
         leaderChanges.push({ participantId: c.id, name: people.get(c.id).name, project: pj, leader: false, auto: true });
       }
     }
+    // C-219：每個專案的人類角色，跟加入／移出一起存
+    await loadProjectRoles(true);
+    const roleChanges = [];
+    for (const ch of body.changes) {
+      if (!ch.projectRoles || typeof ch.projectRoles !== 'object' || Array.isArray(ch.projectRoles)) continue;
+      const p = person(ch.id);
+      if (p.kind !== 'human') throw invalid('AI 的角色在「我的 AI」改，不分專案');
+      const after = crossRole(p, ov) ? [...PROJECTS] : projAfter(p.id);
+      for (const [pj, v] of Object.entries(ch.projectRoles)) {
+        if (!after.includes(pj)) throw invalid(`${p.name} 不在「${nameOf(pj)}」，不能設那個專案的角色`);
+        if (!isAdmin && !myLead.includes(pj)) throw forbid(`你不是「${nameOf(pj)}」的 leader，不能改那個專案的角色。`);
+        const role = readRole(v);
+        if ((projRoles[p.id]?.[pj] || '') !== role) roleChanges.push({ participantId: p.id, name: p.name, project: pj, role });
+      }
+    }
     const dryRun = body.dryRun === true;
     const impact = await applyMembership(ctx, me, memberChanges, { dryRun, ov, byLeader: !isAdmin });
+    if (!dryRun && roleChanges.length) {
+      await loadProjectRoles(true); // applyMembership 可能清掉了移出專案的角色
+      const next = { ...projRoles }, at = nowIso();
+      for (const c of roleChanges) { const o = { ...(next[c.participantId] || {}) }; if (c.role) o[c.project] = c.role; else delete o[c.project]; next[c.participantId] = o; }
+      await saveProjectRoles(next);
+      await db.batch(roleChanges.map(c => projEvent(c.project, me.id, `${me.name} 把 ${c.name} 的角色設為「${c.role || '未設定'}」`, at)));
+    }
     if (!dryRun) {
       const at = nowIso(), stmts = [];
       if (crossChanges.length) {
@@ -1124,7 +1219,7 @@ ${trial
         }
       }
     }
-    return scopeProjects(await projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges }), me);
+    return scopeProjects(await projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges, roleChanges }), me);
   });
   // UX 第 1354 則：不屬於全部專案的人，專案清單只回自己所屬的專案（不露出別專案名稱）
   const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))) }; };
@@ -1290,15 +1385,16 @@ ${trial
   // C-190：專案 leader 另外看得到「還沒有任何專案」的人類，才能把新成員加進自己的專案
   const seesPerson = (me, p) => !isolatedFrom(me) || p.id === me.id || crossRole(p) || projectsOf(p).some(x => projectsOf(me).includes(x))
     || (p.kind === 'human' && !projectsOf(p).length && leaderProjectsOf(me.id).length > 0);
-  route('GET', '/api/participants', async ({ ctx, me }) => {
-    await loadCrossRoles(); await loadLeaders();
+  route('GET', '/api/participants', async ({ ctx, me, url }) => {
+    await loadCrossRoles(); await loadLeaders(); await loadProjectRoles();
     const people = await peopleMap(ctx);
     const now = Date.now();
     const items = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && seesPerson(me, p))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(p => publicParticipant(p, people, now));
     // C-188 補（UX 第 1332 則）：不屬於全部專案的人，別人的 projects 只列自己也在的專案，不露出別專案名稱
-    if (isolatedFrom(me)) { const mine = projectsOf(me); for (const it of items) if (it.participantId !== me.id) it.projects = (it.projects || []).filter(x => mine.includes(x)); }
+    if (isolatedFrom(me)) { const mine = projectsOf(me); for (const it of items) if (it.participantId !== me.id) { it.projects = (it.projects || []).filter(x => mine.includes(x)); if (it.projectRoles) it.projectRoles = Object.fromEntries(Object.entries(it.projectRoles).filter(([k]) => mine.includes(k))); } }
+    roleForProject(items, url);
     return { items };
   });
 
@@ -1620,6 +1716,7 @@ ${trial
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(p => ({
         ...identity(p, people),
+        projectRoles: projectRolesOf(p), // C-219
         aiState: aiStates.get(p.id) || null,
         lastSeenAt: iso(p.last_seen_at),
         isOnline: isOnline(p, now),
@@ -1673,12 +1770,20 @@ ${trial
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
 
-  login = registerLogin({ route, db, ApiError, invalid, readJson, randId, newToken, randomBytes, sha256, nowIso, iso, peopleMap, invalidatePeople,
+  // C-219：邀請連結每個專案各一個角色，加入時寫進專案角色
+  async function setInitialRoles(pid, roles) {
+    const clean = Object.fromEntries(Object.entries(roles || {}).map(([k, v]) => [k, String(v || '').trim().slice(0, 10)]).filter(([k, v]) => v && PROJECTS.includes(k)));
+    if (!Object.keys(clean).length) return;
+    await loadProjectRoles(true);
+    await saveProjectRoles({ ...projRoles, [pid]: { ...(projRoles[pid] || {}), ...clean } });
+  }
+  login = registerLogin({ route, db, ApiError, invalid, readJson, randId, newToken, randomBytes, sha256, nowIso, iso, peopleMap, invalidatePeople, readRole, setInitialRoles,
     adminOf, requireAdmin, requireHuman, validateName, assertNameFree, newCode, PROJECTS, nameOf, createMessage, publicParticipant,
     groupName, humanTtlMs: HUMAN_TOKEN_TTL_MS, failLimit: Number(config.authFailLimit) || 10 });
   registerCards({ route, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
-  route('GET', '/api/team-status', async ({ ctx, me }) => {
+  route('GET', '/api/team-status', async ({ ctx, me, url }) => {
+    await loadProjectRoles();
     const d = await teamStatus(ctx);
     const people = await peopleMap(ctx);
     // C-146 A：只屬部分專案的成員，「等你決定」只留看得到的（訊息依隔離規則、決策卡依卡片專案）
@@ -1689,7 +1794,7 @@ ${trial
     await loadCrossRoles();
     const sees = id => { const p = people.get(id); return !!p && seesPerson(me, p); }; // C-188
     return { ...d, decisions, unanswered: d.unanswered.filter(u => sees(u.participantId)),
-      members: d.members.filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)) }; // 工作記憶依專案可見
+      members: roleForProject(d.members.filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url) }; // 工作記憶依專案可見；C-219 角色依專案
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);
