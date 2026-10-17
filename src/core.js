@@ -83,12 +83,12 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const MAX_TOTAL = (Number(config.fileMaxTotalMb) || 0) * 1048576 || MAX_TOTAL_BYTES; // 測試用可調低
   const rate = new Map();
 
-  // 成員快取：同一請求共用，跨請求最多沿用 10 秒；成員資料有寫入時清除
+  // 成員快取：同一請求共用，跨請求最多沿用 30 秒；成員資料有寫入時清除（C-245：原 10 秒，一天讀 4 千次）
   let peopleCache = { at: 0, map: null };
   const invalidatePeople = () => { peopleCache = { at: 0, map: null }; teamCache = { at: 0, data: null }; };
   async function peopleMap(ctx) {
     if (!ctx.people) {
-      if (!peopleCache.map || Date.now() - peopleCache.at > 10_000) {
+      if (!peopleCache.map || Date.now() - peopleCache.at > 30_000) {
         peopleCache = { at: Date.now(), map: new Map((await db.all('SELECT * FROM participants')).map(p => [p.id, p])) };
       }
       ctx.people = peopleCache.map;
@@ -105,7 +105,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const PROJECTS = [];
   let projectRows = [], projectsAt = 0;
   async function loadProjects(force = false) {
-    if (!force && Date.now() - projectsAt < 10_000 && projectRows.length) return;
+    if (!force && Date.now() - projectsAt < 60_000 && projectRows.length) return; // C-245：專案很少改，原 10 秒一天讀 8 千多次；改專案時會清除
     projectRows = await db.all('SELECT * FROM projects ORDER BY created_at, id');
     PROJECTS.length = 0;
     PROJECTS.push(...projectRows.filter(r => !r.archived).map(r => r.id));
@@ -442,12 +442,14 @@ export function createApp({ db, docText, config = {}, storage = null }) {
         const anchor = await db.get(`SELECT created_at FROM messages WHERE seq < ?${pfSql} ORDER BY seq DESC LIMIT 1`, upper, ...pfArgs);
         from = anchor ? new Date(new Date(anchor.created_at).getTime() - spanH * 3600_000).toISOString() : null;
       }
-      rows = from ? await db.all(`SELECT * FROM messages WHERE seq < ? AND created_at >= ?${pfSql} ORDER BY seq DESC LIMIT ?`, upper, from, ...pfArgs, limit) : [];
+      // C-245：訊息依 seq 遞增、時間也遞增，先找「範圍前最後一則」當下界，只讀範圍內（原本會一路掃到最舊）
+      const low = from ? ((await db.get('SELECT seq FROM messages WHERE seq < ? AND created_at < ? ORDER BY seq DESC LIMIT 1', upper, from))?.seq ?? 0) : 0;
+      rows = from ? await db.all(`SELECT * FROM messages WHERE seq < ? AND seq > ? AND created_at >= ?${pfSql} ORDER BY seq DESC LIMIT ?`, upper, low, from, ...pfArgs, limit) : [];
       const min = Math.min(Number(url.searchParams.get('min')) || 0, limit);
       if (!beforeId && !before && rows.length < min) rows = await db.all(`SELECT * FROM messages WHERE seq < ?${pfSql} ORDER BY seq DESC LIMIT ?`, upper, ...pfArgs, min);
       rows.reverse();
       const oldest = rows[0]?.seq ?? upper;
-      hasMore = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq < ?${pfSql} LIMIT 1`, oldest, ...pfArgs));
+      hasMore = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq < ?${pfSql} ORDER BY seq DESC LIMIT 1`, oldest, ...pfArgs)); // C-245：從最近的往回找
       olderCursor = hasMore ? encodeCursor(oldest) : null;
       nextCursor = encodeCursor(maxSeq);
       const items = await serializeMessages(ctx, rows);
@@ -1540,7 +1542,7 @@ ${trial
     const newer = await db.all(`SELECT * FROM messages WHERE seq > ?${sc} ORDER BY seq LIMIT ?`, m.seq, ...sa, n);
     const rows = [...older.reverse(), m, ...newer];
     const first = rows[0].seq, last = rows[rows.length - 1].seq;
-    const hasOlder = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq < ?${sc} LIMIT 1`, first, ...sa));
+    const hasOlder = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq < ?${sc} ORDER BY seq DESC LIMIT 1`, first, ...sa)); // C-245：從最近的往回找
     const hasNewer = !!(await db.get(`SELECT 1 AS x FROM messages WHERE seq > ?${sc} LIMIT 1`, last, ...sa));
     return { items: await serializeMessages(ctx, rows), olderCursor: hasOlder ? encodeCursor(first) : null, newerCursor: encodeCursor(last), hasOlder, hasNewer };
   });
@@ -1841,12 +1843,13 @@ ${trial
   async function teamStatus(ctx) {
     if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return teamCache.data;
     // C-240：互不相關的查詢同時送（每次查詢都可能要跨洲來回）
-    const [people, recent, cardWork, pending, aiRows, pendRows] = await Promise.all([
+    const [people, recent, cardWork, pending, aiRows] = await Promise.all([
       peopleMap(ctx), recentMessages(), teamCards(db),
-      db.all("SELECT * FROM notifications WHERE status = 'pending' ORDER BY created_at"),
+      // C-245：待處理通知只讀一次（原本單表一次、JOIN 訊息又一次）；LEFT JOIN 保留訊息已刪的通知，照舊算進待處理數
+      db.all("SELECT n.*, m.project AS msg_project, m.created_at AS msg_at FROM notifications n LEFT JOIN messages m ON m.id = n.message_id WHERE n.status = 'pending' ORDER BY n.created_at"),
       db.all('SELECT participant_id, state, updated_at FROM ai_state'),
-      db.all("SELECT n.recipient_id, n.created_at, m.project, m.created_at AS msg_at FROM notifications n JOIN messages m ON m.id = n.message_id WHERE n.status = 'pending' ORDER BY n.created_at"),
     ]);
+    const pendRows = pending.filter(n => n.msg_at != null).map(n => ({ recipient_id: n.recipient_id, created_at: n.created_at, project: n.msg_project, msg_at: n.msg_at }));
     const now = Date.now();
 
     // 每位成員最新一則帶狀態標籤的訊息

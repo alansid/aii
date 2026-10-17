@@ -562,6 +562,7 @@
       for (let i = 0; i < 5; i++) {
         const d = await api(`/api/messages?limit=100&after=${encodeURIComponent(state.nextCursor)}`, { timeoutMs: 8_000 });
         d.items.forEach(onNewMessage);
+        if (d.items.length) state.newMsgAt = Date.now(); // C-245：收件匣據此決定要不要重抓通知
         state.nextCursor = d.nextCursor;
         if (!d.hasMore) break;
       }
@@ -2487,6 +2488,7 @@
   // ---------- 收件匣（C-134）：要你做的＋給你知道的 ----------
   work.notes = [];
   async function loadNotes() {
+    work.notesAt = Date.now();
     const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=100'), api('/api/me/notices').catch(() => ({ items: [] }))]);
     work.notes = a.items; work.sec = b.items;
   }
@@ -4207,7 +4209,7 @@
   // 收件匣：有新訊息通知時更新（徽章只算「要你做的」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
   async function refreshInboxCount() {
     try {
-      if (state.page === 'inbox') { await loadNotes(); renderWork(); }
+      if (state.page === 'inbox' && ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > 300_000)) { await loadNotes(); renderWork(); } // C-245：沒新訊息就不重抓
       updateTodoBadge();
     } catch {}
   }
