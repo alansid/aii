@@ -1173,10 +1173,17 @@
   let latestRaf = 0;
   $('#messages').addEventListener('scroll', () => { if (!latestRaf) latestRaf = requestAnimationFrame(() => { latestRaf = 0; drawLatestBtn(); }); }, { passive: true });
   // C-216：App 畫面整頁固定不捲，只有訊息清單、卡片抽屜等內容區會捲；整頁被捲走就拉回來
-  const pinPage = () => { if (!$('#app').hidden && (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop)) { window.scrollTo(0, 0); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; } };
-  window.addEventListener('scroll', pinPage, { passive: true });
-  window.visualViewport?.addEventListener('resize', () => setTimeout(pinPage, 50));
-  document.addEventListener('focusout', () => setTimeout(pinPage, 100));
+  // UX 第 1551 則：打字時（輸入框有焦點、鍵盤開著）iPhone Safari 會自己把整頁往上推讓輸入框露出來，這時不拉回，否則輸入框會被鍵盤蓋住；收起鍵盤或離開輸入框才拉回
+  const typingField = () => document.activeElement?.matches?.('input, textarea, select, [contenteditable="true"]');
+  const keyboardOpen = () => !!window.visualViewport && visualViewport.height < window.innerHeight * 0.85;
+  const pinPage = (force = false) => {
+    if ($('#app').hidden || !(window.scrollY || document.documentElement.scrollTop || document.body.scrollTop)) return;
+    if (!force && typingField() && keyboardOpen()) return;
+    window.scrollTo(0, 0); document.documentElement.scrollTop = 0; document.body.scrollTop = 0;
+  };
+  window.addEventListener('scroll', () => pinPage(), { passive: true });
+  window.visualViewport?.addEventListener('resize', () => setTimeout(() => { if (!keyboardOpen()) pinPage(true); }, 80));
+  document.addEventListener('focusout', () => setTimeout(() => { if (!typingField()) pinPage(true); }, 150));
   if (window.visualViewport) { // C-215：手機鍵盤高度，給固定在底部的卡片回覆框用
     const kb = () => document.documentElement.style.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - visualViewport.height - visualViewport.offsetTop)) + 'px');
     visualViewport.addEventListener('resize', kb); visualViewport.addEventListener('scroll', kb);
