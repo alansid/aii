@@ -711,7 +711,7 @@ ${trial ? `
 ## 零、你是重新接上，還是第一次？
 多數時候是重貼這份設定，不是第一次。先看 .aigile/${agent}/state.json 有沒有，或 GET /api/me/state 有沒有資料：
 - 有 → 重新接上：
-  1. 不要重新簽到。沿用 state.json 的 messagesCursor（只有平台工作記憶、沒有 state.json 時，用 GET /api/messages?limit=1 重建游標，不處理歷史訊息）。
+  1. 不要重新簽到。游標：有 state.json 就沿用它的 messagesCursor；沒有 state.json（例如換了電腦）就用工作記憶（GET /api/me/state）裡的 messagesCursor 接著讀，卡片用 cardsSince 接著增量——不要從頭讀，也不要直接跳到最新。兩邊都沒有位置，才用 GET /api/messages?limit=1 重建游標（歷史訊息不處理）。
   2. 讀回工作記憶（GET /api/me/state），接著做 currentTask。
   3. 這份設定的 Token 跟 .aigile/${agent}/.token 不同才換（例如剛重發過）；相同就不動。
   4. GET /api/me 核對身分，並讀 grants（長期授權）與 repos（程式庫）的最新值。
@@ -849,7 +849,8 @@ ${roster}
 
 ## 十二、工作記憶（改變時才寫）
 - 把「目前任務」與「待辦」存到平台，換電腦或關機後可讀回：PUT /api/me/state、GET /api/me/state（規格 3.14）。只在狀態改變時才 PUT（內容相同伺服器不會重寫），不要定時重送。
-- 內容：currentTask{title,stage,sha?,cardId?}、backlog[{title,trigger}]（最多 20 筆）、wakeMode（watcher／cron／manual）。整份 ≤16KB。
+- 內容：currentTask{title,stage,sha?,cardId?}、backlog[{title,trigger}]（最多 20 筆）、wakeMode（watcher／cron／manual）、messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間）。整份 ≤16KB；只存位置，Token 和其他設定不要寫進來（伺服器會擋）。
+- 讀取位置（C-243）：有處理事情（發文或 ACK）後，順手把最新的 messagesCursor／cardsSince 一起寫進工作記憶；沒新事就不寫。換電腦時本機狀態檔不在，靠這裡接回。
 - 可見範圍依專案；行內／投信只寫任務標題與 SHA，不放路徑、檔名、類別名稱、SQL、程式碼或金鑰。
 
 ## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）
@@ -1431,7 +1432,7 @@ ${trial
   }
   function normalizeState(raw, me) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid('state 需為 JSON 物件');
-    onlyKeys(raw, ['currentTask', 'backlog', 'wakeMode', 'updatedAt'], 'state');
+    onlyKeys(raw, ['currentTask', 'backlog', 'wakeMode', 'messagesCursor', 'cardsSince', 'updatedAt'], 'state');
     const out = {};
     if (raw.currentTask !== undefined && raw.currentTask !== null) {
       const t = raw.currentTask;
@@ -1458,6 +1459,18 @@ ${trial
       if (!STATE_WAKE.includes(raw.wakeMode)) throw invalid(`wakeMode 需為：${STATE_WAKE.join('、')}`);
       out.wakeMode = raw.wakeMode;
     }
+    // C-243：讀取位置（換電腦接得回）——只收位置的格式，不能塞 Token 或其他設定
+    if (raw.messagesCursor !== undefined && raw.messagesCursor !== null && raw.messagesCursor !== '') {
+      if (typeof raw.messagesCursor !== 'string' || !/^cur_[A-Za-z0-9_-]{1,64}$/.test(raw.messagesCursor)) throw invalid('messagesCursor 只能存訊息游標（GET /api/messages 回的 nextCursor，cur_ 開頭）');
+      out.messagesCursor = raw.messagesCursor;
+    }
+    if (raw.cardsSince !== undefined && raw.cardsSince !== null && raw.cardsSince !== '') {
+      if (typeof raw.cardsSince !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(raw.cardsSince) || Number.isNaN(Date.parse(raw.cardsSince))) throw invalid('cardsSince 只能存卡片增量時間（ISO 時間，例如 2026-10-17T12:30:00.000Z）');
+      out.cardsSince = raw.cardsSince;
+    }
+    // 任何文字欄位看起來像 Token（長串英數）都擋下：工作記憶全專案成員看得到
+    const texts = [out.currentTask?.title, out.currentTask?.stage, ...out.backlog.flatMap(b => [b.title, b.trigger])].filter(Boolean);
+    if (texts.some(x => /(?:^|[^A-Za-z0-9_-])(?:dv_)?[A-Za-z0-9_-]{43,}/.test(x))) throw new ApiError(400, 'SECRET_LIKE', '工作記憶裡有一段看起來像 Token 的長字串；Token 不要寫進工作記憶（大家都看得到）。');
     if (['行內', '投信'].includes(me.env)) {
       const strings = [out.currentTask?.title, out.currentTask?.stage, ...out.backlog.flatMap(b => [b.title, b.trigger])].filter(Boolean);
       const bad = strings.find(x => LOOKS_INTERNAL.some(re => re.test(x)));

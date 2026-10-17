@@ -3569,6 +3569,9 @@
   sheet.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
   $('#presence-pill').addEventListener('click', openMembers);
 
+  // C-243：工作記憶裡的讀取位置 →「讀到：第 N 則・卡片到 10/17 20:30」
+  const curSeq = c => { try { const b = String(c).slice(4).replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(atob(b + '==='.slice((b.length + 3) % 4))).s; } catch { return null; } };
+  const posLine = st => { const n = st?.messagesCursor ? curSeq(st.messagesCursor) : null, c = st?.cardsSince; return n == null && !c ? '' : `<br><span class="muted small astate-pos">讀到：${[n != null ? `第 ${n} 則` : '', c ? `卡片到 ${fmtDate(c)}` : ''].filter(Boolean).join('・')}</span>`; };
   // ---------- 團隊狀態 ----------
   const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定', todo: '待處理' };
   // 「等你決定」：訊息型的所有人都看；決策卡只給指定的決策者看
@@ -3673,7 +3676,7 @@
       const sync = `${m.stale ? '◐ 可能離線' : '● 在線'} · ${agoText(s.updatedAt)}同步`;
       return `<details class="astate${ct ? ' on' : ''}"><summary>
         <div>${head}<br><span class="small ${m.stale ? 'warn-text' : 'ok-text'}">${sync}</span></div>
-        <div>${ct ? `${ct.stage ? stagePill(ct.stage) : ''} <span>${esc(ct.title)}</span>${ct.cardId ? ` <button type="button" class="link small" data-open-card="${esc(ct.cardId)}">${esc(ct.cardId)}</button>` : ''}` : '<span class="muted">目前沒有進行中的任務</span>'}${m.stale ? '<br><span class="small warn-text">以下是最後同步的狀態，可能已變動。</span>' : ''}</div>
+        <div>${ct ? `${ct.stage ? stagePill(ct.stage) : ''} <span>${esc(ct.title)}</span>${ct.cardId ? ` <button type="button" class="link small" data-open-card="${esc(ct.cardId)}">${esc(ct.cardId)}</button>` : ''}` : '<span class="muted">目前沒有進行中的任務</span>'}${posLine(s)}${m.stale ? '<br><span class="small warn-text">以下是最後同步的狀態，可能已變動。</span>' : ''}</div>
         <span class="muted small">待辦 ${s.backlog?.length || 0}</span></summary>
         <div class="astate-detail">
           <div class="small"><b>待辦（${s.backlog?.length || 0}）</b></div>

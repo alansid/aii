@@ -85,6 +85,23 @@ const call = async (token, p, method = 'GET', body, raw) => {
     assert.ok(tsPercy.find(m => m.participantId === bank.participantId).aiState?.currentTask, '兩邊成員看得到全部');
     assert.equal(percyId.length > 0, true);
 
+    // C-243：工作記憶可存讀取位置（訊息游標、卡片增量時間），換電腦接得回；只收位置格式，不能塞 Token
+    const cur = (await call(plat.token, '/api/messages?limit=1')).body.nextCursor;
+    const pos = { ...good, messagesCursor: cur, cardsSince: '2026-10-17T12:30:00.000Z' };
+    assert.equal((await put(plat.token, pos)).status, 200, 'C-243：可以存位置');
+    const back = (await call(plat.token, '/api/me/state')).body.state;
+    assert.equal(back.messagesCursor, cur, 'C-243：讀回訊息游標');
+    assert.equal(back.cardsSince, '2026-10-17T12:30:00.000Z', 'C-243：讀回卡片增量時間');
+    assert.equal((await call(plat.token, `/api/messages?limit=5&after=${encodeURIComponent(back.messagesCursor)}`)).status, 200, 'C-243：讀回的游標可以直接接著讀');
+    assert.equal((await put(plat.token, { ...good, messagesCursor: 'Bearer abc' })).status, 400, 'C-243：游標格式不對擋');
+    assert.equal((await put(plat.token, { ...good, messagesCursor: 'cur_' + 'x'.repeat(70) })).status, 400, 'C-243：游標太長擋');
+    assert.equal((await put(plat.token, { ...good, cardsSince: '昨天' })).status, 400, 'C-243：時間格式不對擋');
+    assert.equal((await put(plat.token, { ...good, token: plat.token })).status, 400, 'C-243：不能多塞欄位');
+    const sneak = (await put(plat.token, { ...good, currentTask: { title: '記一下 ' + plat.token } })).body;
+    assert.equal(sneak.error?.code, 'SECRET_LIKE', 'C-243：文字裡像 Token 的長字串擋下');
+    assert.equal((await put(plat.token, { ...good, currentTask: { title: '做 C-108', sha } })).status, 200, '40 碼 SHA 照常可以');
+    assert.ok((await call(liu.token, '/api/team-status')).body.members.find(m => m.participantId === plat.participantId).aiState, 'C-243：團隊狀態照樣帶工作記憶');
+
     console.log('state: all checks passed');
   } catch (e) {
     console.error(e);

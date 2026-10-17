@@ -117,7 +117,8 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     const nums = sections(obPg);
     assert.deepEqual(nums, ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三'], '9. 章節不跳號：' + nums.join(','));
     assert.ok(obPg.indexOf('## 零、你是重新接上，還是第一次？') < obPg.indexOf('## 一、'), '5. 最前面是「零、重新接上還是第一次」');
-    assert.match(obPg, /不要重新簽到。沿用 state\.json 的 messagesCursor/);
+    assert.match(obPg, /不要重新簽到。游標：有 state\.json 就沿用它的 messagesCursor；沒有 state\.json（例如換了電腦）就用工作記憶（GET \/api\/me\/state）裡的 messagesCursor 接著讀/, 'C-243：零節寫從工作記憶讀回位置');
+    assert.match(obPg, /messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間）/, 'C-243：工作記憶段寫出新欄位');
     assert.match(obPg, /Token 跟 \.aigile\/PG\/\.token 不同才換/);
     assert.match(obPg, /\.aigile\/PG\/watcher\.pid：檔案在、而且裡面的程序編號還在執行 → 已經有 watcher 在跑，不要再開/, '6. watcher.pid');
     assert.match(obPg, /刪掉 watcher\.pid/);
