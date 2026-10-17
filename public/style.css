@@ -2070,3 +2070,5 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 .me-more { all: unset; box-sizing: border-box; cursor: pointer; flex: none; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 18px; color: var(--sb-muted); }
 .me-more:hover { background: color-mix(in srgb, var(--sb-bg) 60%, transparent); color: var(--sb-text); }
 .me-more:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+/* 群組名閃一下的修正：拿到真正的群組名（或這台記住的）之前，先不顯示寫死的預設名稱 */
+html:not(.gn-ready) [data-group-name] { visibility: hidden; }

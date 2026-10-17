@@ -583,8 +583,13 @@
     document.querySelectorAll('[data-group-name]').forEach(el => { el.textContent = name; });
     document.title = document.title.replace(BASE_TITLE, name);
     BASE_TITLE = name;
+    document.documentElement.classList.add('gn-ready');
+    store.set(GN_KEY, name);
   }
-  fetch('/api/group').then(r => r.json()).then(d => applyGroupName(d.name)).catch(() => {});
+  // 群組名閃一下的修正：先用這台裝置記住的名稱，還沒拿到之前不顯示（CSS 藏起），拿到再換成伺服器的
+  const GN_KEY = 'aigile-switch-group-name';
+  { const cached = store.get(GN_KEY); if (cached) applyGroupName(cached); }
+  fetch('/api/group').then(r => r.json()).then(d => applyGroupName(d.name)).catch(() => {}).finally(() => document.documentElement.classList.add('gn-ready'));
   const meId = () => state.me.participantId;
   const isToMe = m => m.recipients.some(r => r.participantId === meId());
   const isReplyToMe = m => {
