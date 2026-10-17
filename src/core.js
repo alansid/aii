@@ -476,7 +476,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     if (['1', 'true'].includes(url.searchParams.get('brief')) && me) {
       const parentIds = rows.map(m => m.reply_to).filter(Boolean);
       const mine = new Set(parentIds.length
-        ? (await db.all('SELECT id FROM messages WHERE id IN (SELECT value FROM json_each(?)) AND +author_id = ?', JSON.stringify(parentIds), me.id)) // C-245：用主鍵查，不把我所有訊息讀一遍.map(r => r.id)
+        ? (await db.all('SELECT id FROM messages WHERE id IN (SELECT value FROM json_each(?)) AND +author_id = ?', JSON.stringify(parentIds), me.id)).map(r => r.id) // C-245：用主鍵查，不把我所有訊息讀一遍
         : []);
       items = items.map(m => {
         const related = m.author.participantId === me.id || m.audience === 'all'
