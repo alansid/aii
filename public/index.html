@@ -31,41 +31,40 @@
       </form>
       <div id="login-main" class="login-main">
         <p class="join-first">第一次使用？請管理員 <b id="join-admin">（管理員）</b> 傳邀請連結給你。</p>
-        <form id="pair-form" class="join-pane pair-pane" aria-labelledby="pair-h">
-          <h2 id="pair-h" class="join-h">配對這台裝置</h2>
-          <p class="muted small">已經加入過：在已登入的裝置點右上頭像 ▸「我的裝置」▸「＋配對新裝置」，把畫面上的 6 位數字輸入這裡。</p>
+        <!-- C-238：三種登入方式改成分頁，一次只顯示一種 -->
+        <div class="login-tabs" role="tablist" aria-label="登入方式">
+          <button type="button" role="tab" id="lt-pwd" data-lt="pwd" aria-controls="pwd-form" aria-selected="true" tabindex="0">帳號密碼</button>
+          <button type="button" role="tab" id="lt-pair" data-lt="pair" aria-controls="pair-form" aria-selected="false" tabindex="-1">配對裝置</button>
+          <button type="button" role="tab" id="lt-code" data-lt="code" aria-controls="token-form" aria-selected="false" tabindex="-1">登入碼</button>
+        </div>
+        <form id="pwd-form" class="join-pane pwd-pane" role="tabpanel" aria-labelledby="lt-pwd">
+          <label>帳號
+            <input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false">
+          </label>
+          <label>密碼
+            <span class="pwd-wrap"><input name="password" type="password" required maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span>
+          </label>
+          <p id="pwd-error" class="error" role="alert"></p>
+          <button class="btn primary" type="submit">登入</button>
+          <p class="muted small">還沒設帳號密碼？用「配對裝置」或「登入碼」登入後，在個人設定設定。</p>
+        </form>
+        <form id="pair-form" class="join-pane pair-pane" role="tabpanel" aria-labelledby="lt-pair" hidden>
+          <p class="muted small">在已登入的裝置點右上頭像 ▸「我的裝置」▸「＋配對新裝置」，把 6 位數字輸入這裡。</p>
           <label>6 位數字
             <input name="code" class="pair-input" required inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000000" spellcheck="false">
           </label>
           <p id="pair-error" class="error" role="alert"></p>
           <button class="btn primary" type="submit">配對並登入</button>
         </form>
-        <details id="code-login" class="code-login">
-          <summary>用登入碼登入</summary>
-          <form id="token-form" class="join-pane">
-            <p class="muted small">在已登入的裝置點右上頭像 ▸「API 資訊與登入碼」複製登入碼，貼到這裡。登入碼像密碼一樣，不要給別人。</p>
-            <label>登入碼
-              <input name="token" required autocomplete="off" spellcheck="false" placeholder="貼上登入碼">
-            </label>
-            <p id="token-error" class="error" role="alert"></p>
-            <button class="btn" type="submit">用登入碼登入</button>
-          </form>
-        </details>
-        <div class="pwd-entry"><span class="muted small">有設帳號密碼？</span><button type="button" class="link" id="pwd-open">用帳號密碼登入 ›</button></div>
+        <form id="token-form" class="join-pane" role="tabpanel" aria-labelledby="lt-code" hidden>
+          <label>登入碼
+            <input name="token" required autocomplete="off" spellcheck="false" placeholder="貼上登入碼">
+          </label>
+          <p id="token-error" class="error" role="alert"></p>
+          <button class="btn primary" type="submit">登入</button>
+          <p class="muted small">在已登入的裝置：頭像 ▸ API 資訊與登入碼 ▸ 複製。登入碼像密碼一樣，不要給別人。</p>
+        </form>
       </div>
-      <!-- C-223 帳號密碼登入 -->
-      <form id="pwd-form" class="join-pane pwd-pane" aria-labelledby="pwd-h" hidden>
-        <h2 id="pwd-h" class="join-h">帳號密碼登入</h2>
-        <label>帳號
-          <input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false">
-        </label>
-        <label>密碼
-          <span class="pwd-wrap"><input name="password" type="password" required maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span>
-        </label>
-        <p id="pwd-error" class="error" role="alert"></p>
-        <button class="btn primary" type="submit">登入</button>
-        <button type="button" class="link pwd-back" id="pwd-back">‹ 回其他登入方式</button>
-      </form>
       <datalist id="role-list">
         <option value="PO"><option value="BA"><option value="UX"><option value="PG"><option value="QA"><option value="Sponsor">
       </datalist>

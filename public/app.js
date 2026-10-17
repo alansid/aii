@@ -141,12 +141,11 @@
     $('#app').hidden = true;
     $('#invite').hidden = true;
     $('#join').hidden = false;
-    if ($('#token-error').textContent) $('#code-login').open = true;
+    if ($('#token-error').textContent) setLoginTab('code', false); // 登入碼出錯就停在登入碼分頁
     try {
       const h = await api('/api/health');
       $('#join-form').hidden = !h.setup; // 群組還沒有人：建立群組
-      $('#login-main').hidden = !!h.setup || pwdMode;
-      $('#pwd-form').hidden = !!h.setup || !pwdMode;
+      $('#login-main').hidden = !!h.setup;
       $('#join-admin').textContent = h.adminName || '管理員';
       $('#room-code-field').hidden = !h.roomCodeRequired;
     } catch {}
@@ -169,7 +168,7 @@
     $('#pair-error').textContent = '';
     const code = String(new FormData(e.target).get('code') || '').replace(/\D/g, '');
     if (code.length !== 6) { $('#pair-error').textContent = '請輸入 6 位數字'; return; }
-    try { await authLogin('pair', { code }); } catch (err) { state.token = null; $('#pair-error').textContent = err.message; }
+    try { await authLogin('pair', { code }); rememberLoginTab('pair'); } catch (err) { state.token = null; $('#pair-error').textContent = err.message; }
   });
   // 配對碼：只留數字，打到 6 碼自動送出
   $('#pair-form .pair-input').addEventListener('input', e => {
@@ -178,23 +177,36 @@
     if (v.length === 6) $('#pair-form').requestSubmit();
   });
 
-  // ---------- C-223 帳號密碼登入 ----------
-  let pwdMode = false;
-  function setPwdMode(on) {
-    pwdMode = on;
-    $('#login-main').hidden = on;
-    $('#pwd-form').hidden = !on;
-    $('#pwd-error').textContent = '';
-    if (on) $('#pwd-form [name=username]').focus(); else $('#pwd-open').focus();
+  // ---------- C-238 登入方式分頁：帳號密碼｜配對裝置｜登入碼；記住這台裝置上次成功用的分頁 ----------
+  const LOGIN_TAB_KEY = 'aigile-switch-login-tab';
+  const LOGIN_TABS = { pwd: 'pwd-form', pair: 'pair-form', code: 'token-form' };
+  function setLoginTab(k, focus = true) {
+    if (!LOGIN_TABS[k]) k = 'pwd';
+    for (const [t, panel] of Object.entries(LOGIN_TABS)) {
+      const on = t === k, tab = document.querySelector(`[data-lt="${t}"]`);
+      tab.setAttribute('aria-selected', String(on)); tab.tabIndex = on ? 0 : -1;
+      $('#' + panel).hidden = !on;
+    }
+    if (focus) document.querySelector(`#${LOGIN_TABS[k]} input`)?.focus();
   }
-  $('#pwd-open').addEventListener('click', () => setPwdMode(true));
-  $('#pwd-back').addEventListener('click', () => setPwdMode(false));
+  const rememberLoginTab = k => store.set(LOGIN_TAB_KEY, k);
+  setLoginTab(store.get(LOGIN_TAB_KEY) || 'pwd', false); // 第一次預設帳號密碼
+  document.querySelector('.login-tabs').addEventListener('click', e => { const t = e.target.closest('[data-lt]'); if (t) setLoginTab(t.dataset.lt); });
+  document.querySelector('.login-tabs').addEventListener('keydown', e => {
+    const keys = Object.keys(LOGIN_TABS), cur = keys.indexOf(document.activeElement?.dataset?.lt);
+    if (cur < 0) return;
+    const next = e.key === 'ArrowRight' ? (cur + 1) % keys.length : e.key === 'ArrowLeft' ? (cur + keys.length - 1) % keys.length : e.key === 'Home' ? 0 : e.key === 'End' ? keys.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    setLoginTab(keys[next], false);
+    document.querySelector(`[data-lt="${keys[next]}"]`).focus();
+  });
   $('#pwd-form').addEventListener('submit', async e => {
     e.preventDefault();
     $('#pwd-error').textContent = '';
     const f = new FormData(e.target), btn = e.target.querySelector('button[type=submit]');
     btn.disabled = true;
-    try { await authLogin('password', { username: String(f.get('username')).trim(), password: f.get('password') }); }
+    try { await authLogin('password', { username: String(f.get('username')).trim(), password: f.get('password') }); rememberLoginTab('pwd'); }
     catch (err) { state.token = null; $('#pwd-error').textContent = err.message; e.target.password.select(); }
     finally { btn.disabled = false; }
   });
@@ -213,7 +225,7 @@
     e.preventDefault();
     $('#token-error').textContent = '';
     const code = new FormData(e.target).get('token').trim();
-    try { await authLogin('code', { code }); } catch (err) { state.token = null; $('#token-error').textContent = err.message; }
+    try { await authLogin('code', { code }); rememberLoginTab('code'); } catch (err) { state.token = null; $('#token-error').textContent = err.message; }
   });
 
   // 被邀請頁：/invite/<連結>。連結先收進這個分頁，網址列只留 /invite，重新整理也還在
@@ -5366,14 +5378,18 @@
 
   // ---------- 進入點 ----------
   const params = new URLSearchParams(location.search);
-  if (params.get('login')) {
-    store.set(TOKEN_KEY, params.get('login'));
+  const qrCode = params.get('login');
+  if (qrCode) {
+    store.set(TOKEN_KEY, qrCode);
     history.replaceState(null, '', '/');
+    // C-238：先開登入碼分頁並帶入；自動登入成功就直接進去，失敗就停在這裡顯示原因
+    setLoginTab('code', false);
+    document.querySelector('#token-form [name=token]').value = qrCode;
   }
   state.token = store.get(TOKEN_KEY);
   if (/^\/invite(\/|$)/.test(location.pathname)) showInvite(); // C-202：被邀請頁優先（這台裝置已登入別人也一樣）
   else if (/^\/rescue(\/|$)/.test(location.pathname)) showRescue(); // C-223：主機救援連結
-  else if (state.token) start().catch(() => { store.del(TOKEN_KEY); state.token = null; showJoin(); });
+  else if (state.token) start().then(() => { if (qrCode && state.me) rememberLoginTab('code'); }).catch(() => { store.del(TOKEN_KEY); state.token = null; if (qrCode) $('#token-error').textContent = '這個登入碼無效或已換過，請在已登入的裝置重新複製。'; showJoin(); });
   else showJoin();
   if (!state.token) $('#boot').hidden = true;
 })();
