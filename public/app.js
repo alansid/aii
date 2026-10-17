@@ -4386,25 +4386,35 @@
       ${list.map(x => { const n = permPeople().filter(p => inProj(p, x)).length, ch = projChanges(x); return `<button type="button" class="pm-li${x === pj ? ' sel' : ''}" data-pm-proj="${esc(x)}" aria-current="${x === pj}"><b>${esc(projName(x))}</b>${ch ? `<span class="pm-chg-tag">${ch} 變更</span>` : ''}<span class="muted small">${n} 人</span></button>`; }).join('') || '<p class="muted small pm-pad">找不到專案</p>'}</section>`;
     if (!pj) return `<div class="pm-split">${left}</div>`;
     const members = permPeople().filter(p => inProj(p, pj));
+    // C-222：真正的表格，四欄固定寬「成員｜角色｜leader｜移出」，每列同欄對齊；手機每人一張小卡
+    const lockCell = why => `<span class="pm-lock" role="img" aria-label="${esc(why)}" title="${esc(why)}">🔒</span>`;
     const row = p => {
       const c = permCur(p), b = permBase(p), id = esc(p.participantId), isNew = !(b.cross || b.projects.has(pj));
-      const lead = (c.leaders || b.leaders).has(pj), lchg = lead !== b.leaders.has(pj);
-      const tags = [p.participantId === state.projMeta.adminId ? '<span class="pill-tag blue">管理員</span>' : '', isNew ? '<span class="pill-tag yellow">新加入</span>' : '', lead ? '<span class="lead-tag">★ leader</span>' : '', !admin && p.participantId === meId() ? '<span class="muted small">· 你</span>' : ''].join('');
-      const star = admin && p.memberType === 'human' && !c.cross ? `<button type="button" class="pm-star on-${lead}${lchg ? ' chg' : ''}" data-pm-star="${id}" data-pj="${esc(pj)}" aria-pressed="${lead}" aria-label="${esc(p.name)} ${esc(projName(pj))} leader" title="${lead ? '取消 leader' : '設為 leader'}">${lead ? '★' : '☆'}</button>` : '';
-      const right = c.cross ? '<span class="muted small">跨專案角色，固定</span>'
-        : star + (canRemove(p, pj) ? `<button type="button" class="pm-x" data-pm-rm="${id}" data-pj="${esc(pj)}" aria-label="把 ${esc(p.name)} 移出${esc(projName(pj))}" title="移出">✕</button>` : p.participantId === meId() ? '<span class="muted small">（自己不能移出）</span>' : '');
-      return `<div class="pm-row${isNew || lchg ? ' chg' : ''}"><span class="pm-name"><b>${esc(p.name)}</b>${tags}${permSub(p) ? `<span class="muted small"> · ${esc(permSub(p))}</span>` : ''}</span><span class="pm-role">${permRoleHtml(p, pj)}</span>${right}</div>`;
+      const lead = (c.leaders || b.leaders).has(pj), lchg = lead !== b.leaders.has(pj), isAdm = p.participantId === state.projMeta.adminId;
+      const tags = [isAdm ? '<span class="pill-tag blue">管理員</span>' : c.cross ? '<span class="pm-cross-tag">跨專案</span>' : '', isNew ? '<span class="pill-tag yellow">新加入</span>' : '', !admin && p.participantId === meId() ? '<span class="muted small">· 你</span>' : ''].join('');
+      const roleCell = p.memberType === 'human' ? permRoleHtml(p, pj) : `<span class="pm-ai-role">${esc(p.role || '')}</span>`;
+      const leadCell = p.memberType !== 'human' ? '<span class="muted">—</span>'
+        : isAdm ? '<span class="muted" title="管理員本來就能管所有專案">—</span>'
+        : admin && !c.cross ? `<button type="button" class="pm-star on-${lead}${lchg ? ' chg' : ''}" data-pm-star="${id}" data-pj="${esc(pj)}" aria-pressed="${lead}" aria-label="${esc(p.name)} 是${esc(projName(pj))}的 leader" title="${lead ? '取消 leader' : '設為 leader'}">${lead ? '★' : '☆'}</button>`
+        : lead ? '<span class="pm-star-ro" aria-label="leader">★</span>' : '<span class="muted">—</span>';
+      const actCell = isAdm ? lockCell('管理員自動在所有專案')
+        : c.cross ? lockCell('跨專案角色自動在所有專案；要移出請先到「依成員」關掉跨專案角色')
+        : canRemove(p, pj) ? `<button type="button" class="pm-x" data-pm-rm="${id}" data-pj="${esc(pj)}" aria-label="把 ${esc(p.name)} 移出${esc(projName(pj))}" title="移出">✕</button>`
+        : p.participantId === meId() ? lockCell('自己不能移出') : '<span class="muted">—</span>';
+      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name"><b>${esc(p.name)}</b>${tags}${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role">${roleCell}</td><td class="c-lead">${leadCell}</td><td class="c-act">${actCell}</td></tr>`;
     };
     const removed = permPeople().filter(p => { const b = permBase(p); return (b.cross || b.projects.has(pj)) && !inProj(p, pj); });
-    const rmRow = p => `<div class="pm-row chg pm-gone"><span class="pm-name"><s>${esc(p.name)}</s><span class="pill-tag red">將移出</span>${permSub(p) ? `<span class="muted small"> · ${esc(permSub(p))}</span>` : ''}</span><button type="button" class="link small" data-pm-restore="${esc(p.participantId)}" data-pj="${esc(pj)}">復原</button></div>`;
+    const rmRow = p => `<tr class="pm-tr chg pm-gone"><td class="c-name"><s>${esc(p.name)}</s><span class="pill-tag red">將移出</span>${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role"><span class="muted">—</span></td><td class="c-lead"><span class="muted">—</span></td><td class="c-act"><button type="button" class="link small" data-pm-restore="${esc(p.participantId)}" data-pj="${esc(pj)}">復原</button></td></tr>`;
     const humans = members.filter(p => p.memberType === 'human'), ais = members.filter(p => p.memberType === 'ai');
+    const grp = t => `<tr class="pm-grp-tr"><td colspan="4">${t}</td></tr>`;
     const mid = `<section class="pm-col pm-detail" aria-label="${esc(projName(pj))} 的成員">
       ${narrowPerm() ? '<button type="button" class="ph-back pm-back" data-pm-back>‹ 專案清單</button>' : ''}
       <div class="pm-dhead"><strong>${esc(projName(pj))} · 成員 ${members.length}</strong><span class="grow"></span>${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
-      <div class="pm-grp">人類 · 角色只在「${esc(projName(pj))}」有效</div>${humans.map(row).join('') || '<p class="muted small pm-pad">沒有人類成員</p>'}
-      <div class="pm-grp">AI · 角色跟著 AI 設定，不分專案</div>${ais.map(row).join('') || '<p class="muted small pm-pad">沒有 AI</p>'}
-      ${removed.length ? `<div class="pm-grp">這次會移出</div>${removed.map(rmRow).join('')}` : ''}
-      <p class="muted small pm-note">只列在這個專案的人。✕＝移出（人類名下的 AI 會一起移出）${admin ? '；☆＝設為 leader（只有人類）' : ''}。</p></section>`;
+      <table class="pm-table"><thead><tr><th scope="col">成員</th><th scope="col" class="c-role">在「${esc(projName(pj))}」的角色</th><th scope="col" class="c-lead">leader</th><th scope="col" class="c-act">移出</th></tr></thead>
+      <tbody>${grp('人類')}${humans.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有人類成員</td></tr>'}
+      ${grp('AI · 角色跟著 AI 設定，不分專案')}${ais.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有 AI</td></tr>'}
+      ${removed.length ? grp('這次會移出') + removed.map(rmRow).join('') : ''}</tbody></table>
+      <p class="muted small pm-note">🔒＝管理員或跨專案角色，自動在所有專案，滑過看怎麼移出。✕＝移出（人類名下的 AI 會一起移出）${admin ? '；☆ 點了變 ★＝設為 leader（只有人類）' : ''}。</p></section>`;
     const cls = narrowPerm() ? (perm.picker ? ' m-pick' : perm.mobileDetail ? ' m-detail' : ' m-list') : perm.picker ? ' with-pick' : '';
     return `<div class="pm-split${cls}">${left}${mid}${perm.picker ? permPickerHtml(pj) : ''}</div>`;
   }

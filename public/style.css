@@ -1764,3 +1764,35 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 .note-ask .btn { min-height: 40px; }
 .pub-notes { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 .pub-notes input { width: 18px; height: 18px; }
+
+/* ===== C-222 成員與權限：四欄對齊的成員表 ===== */
+.pm-table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; }
+.pm-table th { height: 36px; background: var(--surface-2); font-size: 12px; color: var(--muted); font-weight: 500; text-align: left; padding: 0 14px; }
+.pm-table td { height: 52px; border-top: 1px solid var(--border); padding: 0 14px; vertical-align: middle; overflow-wrap: anywhere; }
+.pm-table .c-role { width: 170px; }
+.pm-table .c-lead { width: 96px; text-align: center; }
+.pm-table .c-act { width: 72px; text-align: center; }
+.pm-table .role-sel { width: 140px; min-width: 0; height: 36px; min-height: 36px; }
+.pm-table .pm-tr.chg { background: rgba(245, 158, 11, .07); }
+.pm-grp-tr td { height: 30px; background: var(--surface-2); font-size: 12px; color: var(--muted); }
+.pm-sub { font-size: 12px; color: var(--muted); }
+.pm-cross-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; margin-left: 6px; border-radius: 11px; font-size: 12px; font-weight: 500; background: var(--surface-2); color: var(--muted); }
+.pm-table .pill-tag { margin-left: 6px; }
+.pm-lock { cursor: help; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; }
+.pm-star-ro { color: #b45309; font-size: 18px; }
+.pm-table .pm-star, .pm-table .pm-x { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; }
+@media (max-width: 640px) {
+  /* 手機：每人一張小卡，名字一行、下面「角色 · ★ · ✕」 */
+  .pm-table, .pm-table tbody { display: block; }
+  .pm-table thead { display: none; }
+  .pm-table tr.pm-tr { display: grid; grid-template-columns: 1fr auto auto; grid-template-areas: "name name name" "role lead act"; align-items: center; gap: 4px 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+  .pm-table tr.pm-tr td { display: block; height: auto; border: 0; padding: 0; width: auto; }
+  .pm-table tr.pm-tr .c-name { grid-area: name; }
+  .pm-table tr.pm-tr .c-role { grid-area: role; text-align: left; }
+  .pm-table tr.pm-tr .c-lead { grid-area: lead; }
+  .pm-table tr.pm-tr .c-act { grid-area: act; }
+  .pm-table tr.pm-grp-tr { display: block; }
+  .pm-table tr.pm-grp-tr td { display: block; height: auto; padding: 6px 12px; }
+  .pm-table .pm-star, .pm-table .pm-x, .pm-lock { width: 44px; height: 44px; }
+  .pm-table .role-sel { height: 40px; min-height: 40px; }
+}
