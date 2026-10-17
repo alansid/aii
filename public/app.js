@@ -4,6 +4,7 @@
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
+  const MSG_VIEW_KEY = 'aigile-switch-view'; // C-215：訊息顯示「精簡／完整」，記在這台裝置
   const ALL = { participantId: '__all__', name: '所有人', role: '通知全體成員', memberType: 'all', isOnline: true };
 
   const store = {
@@ -25,6 +26,9 @@
     filter: { scope: store.get(FILTER_KEY) === '1' ? 'related' : 'all', member: '', tag: '' },
     expanded: new Set(),  // 已展開全文的長訊息
     collapsed: new Set(), // 已收合回覆的訊息
+    open: new Set(),      // C-215：從一行／精簡點開的訊息
+    flowOpen: new Set(),  // C-215：已展開的「N 則流程訊息」（以第一則的 id 記）
+    groupOf: new Map(),   // C-215：訊息 id → 所在流程訊息群組的第一則 id（收起時）
     events: null,
     roles: null,
     team: null,
@@ -525,12 +529,104 @@
     return `<span class="lead lead-${kind}">${esc(tag)}</span>`;
   }
 
+  // ---------- C-215 手機好滑 ----------
+  // 流程訊息（接單／交接／通知／進度）收成一行灰字；手機寬度（或選「精簡」）其他 AI 訊息只露第一句。
+  // 需確認、人類發的、提到我／回覆我的、附檔案的永遠照常顯示。
+  const FLOW_TAGS = ['接單', '交接', '通知', '進度'];
+  const narrowMq = matchMedia('(max-width: 640px)');
+  const slimMode = () => { const v = store.get(MSG_VIEW_KEY); return v ? v === 'slim' : narrowMq.matches; };
+  const authorKind = m => (state.participants.get(m.author.participantId) || m.author).memberType;
+  const mentionsMe = m => !isMine(m) && ((isToMe(m) && m.audience !== 'all') || isReplyToMe(m));
+  const keepFull = m => !!m.file || /^\s*\[需確認\]/.test(m.text) || authorKind(m) === 'human' || mentionsMe(m);
+  const isFlowLine = m => !state.open.has(m.messageId) && FLOW_TAGS.includes(tagOf(m.text)) && !keepFull(m);
+  const isSlim = m => !state.open.has(m.messageId) && slimMode() && !keepFull(m) && !FLOW_TAGS.includes(tagOf(m.text));
+  // 提到我／回覆我、我還沒回的（需確認有人類回過也算處理了）
+  const needReply = m => mentionsMe(m) && !repliesOf(m.messageId).some(isMine) && !work.answered?.has(m.messageId);
+  const cardIdOf = t => String(t).match(/\bC-\d{3,}\b/)?.[0] || '';
+  // 第一句：去掉開頭的 [標籤] 和【專案名】，取第一行到第一個句號為止
+  function firstSentence(t) {
+    const lines = String(t).replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').replace(/^\s*【[^】\n]{1,20}】\s*/, '').split('\n').map(x => x.trim()).filter(Boolean);
+    const line = lines[0] || '';
+    const cut = line.search(/[。！？!?]/);
+    return cut > 0 ? line.slice(0, cut + 1) : line;
+  }
+  function flowLineHtml(m) {
+    const tag = tagOf(m.text), card = cardIdOf(m.text);
+    const to = tag === '交接' ? (m.audience === 'all' ? '所有人' : m.recipients.map(r => r.name).join('、')) : '';
+    const desc = [tag, card, to ? '給 ' + to : ''].filter(Boolean).join(' ');
+    return `<button type="button" class="flow-line" id="msg-${esc(m.messageId)}" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${m.author.name} ${desc}，${fmtTime(m.createdAt)}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text"><b>${esc(m.author.name)}</b> ${esc(desc)} · <time datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span></button>`;
+  }
+  function slimHtml(m) {
+    const tag = tagOf(m.text), card = cardIdOf(m.text), need = needReply(m);
+    return `<article class="msg slim${need ? ' need-me' : ''}" id="msg-${esc(m.messageId)}"><button type="button" class="slim-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false">
+      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span>
+      <span class="slim-text">${esc(firstSentence(m.text))}</span><span class="sr-only">，展開全文</span></button></article>`;
+  }
+  function flowGroupHtml(run) {
+    const tags = [...new Set(run.map(m => tagOf(m.text)))].join('、');
+    const t1 = fmtTime(run[0].createdAt), t2 = fmtTime(run[run.length - 1].createdAt);
+    return `<button type="button" class="flow-line flow-group" data-flow-group="${esc(run[0].messageId)}" aria-expanded="false" aria-label="${esc(`${run.length} 則流程訊息（${tags}），${t1} 到 ${t2}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text">${run.length} 則流程訊息（${esc(tags)}）· ${t1 === t2 ? t1 : t1 + '–' + t2}</span><span aria-hidden="true">▸</span></button>`;
+  }
+  // 整串清單：連續 3 則以上的一行流程訊息合成一列
+  function listHtml(list) {
+    state.groupOf = new Map();
+    const out = [];
+    for (let i = 0; i < list.length;) {
+      let j = i;
+      while (j < list.length && isFlowLine(list[j])) j++;
+      const run = list.slice(i, j);
+      if (run.length >= 3 && !state.flowOpen.has(run[0].messageId)) {
+        for (const m of run) state.groupOf.set(m.messageId, run[0].messageId);
+        out.push(flowGroupHtml(run));
+        i = j; continue;
+      }
+      if (run.length) { out.push(...run.map(messageHtml)); i = j; continue; }
+      out.push(messageHtml(list[i])); i++;
+    }
+    return out.join('');
+  }
+  // 「下一則提到我 ↓N」：已載入、提到我、我還沒回的
+  function drawMentionBtn() {
+    const b = $('#mention-btn');
+    if (!b) return;
+    const n = state.messages.filter(m => visible(m) && needReply(m)).length;
+    b.hidden = !n;
+    b.innerHTML = `<span class="np-long">下一則提到我 ↓ ${n}</span><span class="np-short" aria-hidden="true">@${n}</span>`;
+    b.setAttribute('aria-label', `下一則提到我、你還沒回的，共 ${n} 則`);
+  }
+  // 讓某則訊息出現在畫面上（在收起的流程群組、一行或精簡裡就打開）
+  function revealMsg(id) {
+    const m = state.byId.get(id);
+    if (!m) return null;
+    if (state.groupOf.has(id) || isFlowLine(m) || isSlim(m)) { state.open.add(id); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
+    return document.getElementById('msg-' + id);
+  }
+  async function nextMention() {
+    const box = $('#messages'), edge = box.getBoundingClientRect().top + 8;
+    const list = state.messages.filter(m => visible(m) && needReply(m));
+    if (!list.length) return;
+    const below = list.find(m => { const el = document.getElementById('msg-' + m.messageId); return el && el.getBoundingClientRect().top > edge + 4; });
+    const target = below || list[0];
+    const el = revealMsg(target.messageId) || document.getElementById('msg-' + target.messageId);
+    if (!el) return jumpTo(target.messageId);
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  }
+  function setView(v) {
+    store.set(MSG_VIEW_KEY, v);
+    syncFilterBar();
+    const box = $('#messages'), top = box.scrollTop;
+    renderMessages(false); box.scrollTop = top;
+  }
+
   function messageHtml(m) {
+    if (isFlowLine(m)) return flowLineHtml(m);
+    if (isSlim(m)) return slimHtml(m);
     const toMe = isToMe(m);
     const replyMe = isReplyToMe(m);
     const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
     const a = m.author;
-    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) ? 'to-me' : ''].join(' ');
+    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) ? 'to-me' : '', needReply(m) ? 'need-me' : ''].join(' ');
     const recipients = m.audience === 'all'
       ? '<span class="mention">@所有人</span>'
       : m.recipients.map(r => `<span class="mention">@${esc(r.name)}</span>`).join(' ');
@@ -552,7 +648,7 @@
           <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
           ${m.file ? '' : `<button class="reply-btn newcard" type="button" data-newcard="${esc(m.messageId)}">＋建卡</button>`}
           ${linkedCapsules(m)}
-          ${!m.file && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
+          ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
           ${threadToggle(m)}
         </div>
       </article>`;
@@ -561,7 +657,7 @@
   // 長訊息預設折疊（超過 6 行或 400 字）
   const isLong = t => t.split('\n').length > 6 || t.length > 400;
   function textHtml(m) {
-    const clamp = isLong(m.text) && !state.expanded.has(m.messageId);
+    const clamp = isLong(m.text) && !state.expanded.has(m.messageId) && !state.open.has(m.messageId);
     return `<div class="msg-text${clamp ? ' clamp' : ''}">${renderText(m.text, true)}</div>`;
   }
   // 回覆串：已載入的直接回覆數，可收合
@@ -771,6 +867,7 @@
   function syncFilterBar() {
     const f = state.filter;
     document.querySelectorAll('[data-scope]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === f.scope)));
+    document.querySelectorAll('[data-msg-view]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.msgView === 'slim') === slimMode())));
     $('#f-tag').value = f.tag;
     const sel = $('#f-member');
     if (f.member && !inViewPerson(f.member)) f.member = ''; // C-188：換專案時，篩選的成員不在這個專案就清掉
@@ -797,33 +894,40 @@
     const f = state.filter;
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
-    const draft = { scope: f.scope, member: f.member, tag: f.tag };
+    const draft = { scope: f.scope, member: f.member, tag: f.tag, view: slimMode() ? 'slim' : 'full' };
     const body = openModal('篩選', `
       <div class="stack">
         <div class="field"><span class="field-label" id="fs-scope">範圍</span>
           <div class="seg-scope full" role="group" aria-labelledby="fs-scope" id="fs-scope-g"></div></div>
         <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('')}</select></label>
         <label>訊息類型<select id="fs-tag"><option value="">所有類型</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
+        <div class="field"><span class="field-label" id="fs-view">顯示</span>
+          <div class="seg-scope full" role="group" aria-labelledby="fs-view" id="fs-view-g"></div>
+          <span class="muted small">精簡：AI 訊息只露第一句，點了看全文。記在這台裝置。</span></div>
       </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除</button><button class="btn primary grow" type="button" id="fs-apply">套用</button>' });
     const draw = () => {
       body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
+      body.querySelector('#fs-view-g').innerHTML = [['slim', '精簡'], ['full', '完整']].map(([k, t]) => `<button type="button" data-fs-view="${k}" aria-pressed="${draft.view === k}">${t}</button>`).join('');
       body.querySelector('#fs-member').value = draft.member;
       body.querySelector('#fs-tag').value = draft.tag;
     };
     draw();
     body.addEventListener('click', e => {
       const sc = e.target.closest('[data-fs-scope]'); if (sc) { draft.scope = sc.dataset.fsScope; draw(); }
+      const vw = e.target.closest('[data-fs-view]'); if (vw) { draft.view = vw.dataset.fsView; draw(); }
     });
     body.querySelector('#fs-member').onchange = e => { draft.member = e.target.value; };
     body.querySelector('#fs-tag').onchange = e => { draft.tag = e.target.value; };
     body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '' }); draw(); };
     body.modal.querySelector('#fs-apply').onclick = () => {
       closeModal();
+      if (draft.view !== (slimMode() ? 'slim' : 'full')) store.set(MSG_VIEW_KEY, draft.view);
       setFilter({ scope: draft.scope, member: draft.member, tag: draft.tag });
     };
   }
   $('#f-open').onclick = openFilterSheet;
   document.querySelectorAll('[data-scope]').forEach(b => { b.onclick = () => setFilter({ scope: b.dataset.scope }); });
+  document.querySelectorAll('[data-msg-view]').forEach(b => { b.onclick = () => setView(b.dataset.msgView); });
   $('#f-member').onchange = e => setFilter({ member: e.target.value });
   $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
   $('#f-clear').onclick = () => setFilter({ scope: 'all', member: '', tag: '' });
@@ -870,11 +974,12 @@
       ? `${state.ctx ? '這段沒有符合篩選條件的訊息。' : `最近 ${WIN_H} 小時沒有符合的訊息`}${!state.ctx && state.hasOlder ? ' · <button type="button" class="link" id="load-older-empty">載入更早</button>' : ''}`
       : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。';
     const tail = state.ctx && state.ctx.hasNewer ? '<button type="button" class="load-older" id="ctx-newer">再往後</button>' : '';
-    $('#messages').innerHTML = headHtml(list) + (list.length ? list.map(messageHtml).join('') : `<div class="empty">${empty}</div>`) + tail;
+    $('#messages').innerHTML = headHtml(list) + (list.length ? listHtml(list) : `<div class="empty">${empty}</div>`) + tail;
     const nl = state.firstNewId && document.getElementById('msg-' + state.firstNewId);
     if (nl && state.newCount) nl.insertAdjacentHTML('beforebegin', `<div class="new-line" id="new-line"><span>以下 ${state.newCount} 則是新的</span></div>`);
     syncScrollbar();
     if (toBottom) scrollBottom();
+    drawMentionBtn();
   }
 
   // 載入更早：一次往前 12 小時、最多 100 則；那段沒訊息就自動往更早找；保留捲動位置
@@ -963,7 +1068,7 @@
       state.newCount++;
       if (isToMe(m) || isReplyToMe(m)) state.newMention++;
     }
-    if (m.replyToMessageId && state.byId.has(m.replyToMessageId)) {
+    if ((m.replyToMessageId && state.byId.has(m.replyToMessageId)) || (visible(m) && isFlowLine(m))) {
       const box = $('#messages'), top = box.scrollTop;
       renderMessages(stick);
       if (stick) trimWindow(); else box.scrollTop = top;
@@ -978,7 +1083,7 @@
     else if (!stick) { const nl = $('#new-line'); if (nl) nl.firstElementChild.textContent = `以下 ${state.newCount} 則是新的`; }
     box.insertAdjacentHTML('beforeend', messageHtml(m));
     if (stick) { scrollBottom(); trimWindow(); }
-    drawNewPill();
+    drawNewPill(); drawMentionBtn();
     if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
   }
   // 膠囊貼在輸入框上方：跟著輸入框高度
@@ -1013,6 +1118,28 @@
     if (authClick(e)) return;
     const sha = e.target.closest('[data-sha]');
     if (sha) return copyText(sha.dataset.sha).then(ok => toast(ok ? '已複製完整 SHA' : '複製失敗'));
+    const op = e.target.closest('[data-open-msg]');
+    if (op) {
+      const id = op.dataset.openMsg, box = $('#messages'), top = box.scrollTop;
+      state.open.add(id); renderMessages(false); box.scrollTop = top;
+      document.getElementById('msg-' + id)?.querySelector('[data-fold]')?.focus({ preventScroll: true });
+      return;
+    }
+    const fold = e.target.closest('[data-fold]');
+    if (fold) {
+      const id = fold.dataset.fold, box = $('#messages'), top = box.scrollTop;
+      state.open.delete(id); renderMessages(false); box.scrollTop = top;
+      const el = document.getElementById('msg-' + id);
+      (el?.matches('button') ? el : el?.querySelector('button'))?.focus({ preventScroll: true });
+      return;
+    }
+    const fg = e.target.closest('[data-flow-group]');
+    if (fg) {
+      const id = fg.dataset.flowGroup, box = $('#messages'), top = box.scrollTop;
+      state.flowOpen.add(id); renderMessages(false); box.scrollTop = top;
+      document.getElementById('msg-' + id)?.focus({ preventScroll: true });
+      return;
+    }
     const more = e.target.closest('[data-more]');
     if (more) {
       const id = more.dataset.more;
@@ -1032,10 +1159,13 @@
   });
 
   document.getElementById('new-pill')?.addEventListener('click', () => { scrollBottom(); clearNew(); });
+  document.getElementById('mention-btn')?.addEventListener('click', () => nextMention().catch(err => toast(err.message)));
+  narrowMq.addEventListener?.('change', () => { if (!store.get(MSG_VIEW_KEY) && state.me) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; syncFilterBar(); } });
   async function jumpTo(id) {
     const m0 = state.byId.get(id);
     if (m0 && !msgInView(m0.project) && hasHub()) await setProjectView(m0.project && myProjects().includes(m0.project) ? m0.project : 'cross', 'messages');
     let el = document.getElementById('msg-' + id);
+    if (state.byId.has(id) && (!el || el.matches('.flow-line, .slim'))) el = revealMsg(id) || el;
     if (!el && state.byId.has(id) && (filtering() || state.collapsed.size)) {
       state.collapsed.clear();
       Object.assign(state.filter, { scope: 'all', member: '', tag: '' });

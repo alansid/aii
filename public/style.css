@@ -1650,3 +1650,45 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 .dev-main .small { flex-basis: 100%; }
 .dev-pair { display: grid; gap: 8px; margin-top: 14px; justify-items: start; }
 .pair-code { font-size: 2.2rem; font-weight: 800; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
+
+/* ===== C-215 手機好滑：流程訊息一行、精簡顯示、下一則提到我 ===== */
+:root { --need-line: #b45309; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --need-line: #e0a240; } }
+:root[data-theme="dark"] { --need-line: #e0a240; }
+.flow-line {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex: none; align-items: center; gap: 6px; width: 100%;
+  min-height: 36px; padding: 0 10px; border-radius: 8px; font-size: .85rem; color: var(--muted);
+}
+.flow-line .fl-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-line b { font-weight: 600; color: var(--text); }
+.flow-line:hover { background: var(--surface-2); }
+.flow-line:focus-visible, .slim-btn:focus-visible, .mention-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.flow-line.flash { animation: flash 1.2s ease; }
+.msg.slim { padding: 0; min-width: 0; flex: none; } /* flex: none：清單是直向 flex，不能被壓扁 */
+/* 按鈕預設依內容撐寬，要明確限制在訊息框內，第一句才會省略號而不是撐出橫向捲動 */
+.slim-btn { all: unset; box-sizing: border-box; cursor: pointer; display: block; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; padding: 8px 12px; min-height: 44px; }
+.slim-head { display: flex; align-items: center; gap: 6px; font-size: .88rem; min-width: 0; }
+.slim-head .lead { margin-right: 0; }
+.slim-head .msg-time { margin-left: auto; }
+.slim-card { font-size: .78rem; font-weight: 600; color: var(--primary); white-space: nowrap; }
+.slim-text { display: block; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.msg.need-me { box-shadow: inset 4px 0 0 var(--need-line); }
+.msg.need-me.flash { animation: flash 1.2s ease; }
+.mention-btn {
+  position: absolute; right: 16px; bottom: calc(var(--composer-h, 110px) + 10px); z-index: 21; border: 0; border-radius: 999px;
+  min-height: 44px; padding: 0 16px; background: #b45309; color: #fff; font: inherit; font-size: 14px; font-weight: 600;
+  box-shadow: var(--shadow); cursor: pointer;
+}
+.mention-btn .np-short { display: none; }
+.seg-view { margin-left: 4px; }
+@media (max-width: 899px) {
+  /* 新訊息膠囊在手機是整列寬，兩個同時出現時「提到我」疊在上面 */
+  .new-pill:not([hidden]) ~ .mention-btn { bottom: calc(var(--composer-h, 110px) + 62px); }
+  body.typing .mention-btn { width: 48px; height: 48px; padding: 0; border-radius: 50%; }
+  body.typing .mention-btn .np-long { display: none; }
+  body.typing .mention-btn .np-short { display: inline; }
+  body.typing .new-pill:not([hidden]) ~ .mention-btn { bottom: calc(var(--composer-h, 110px) + 10px); right: 72px; }
+}
+@media (max-width: 600px) {
+  .flow-line { min-height: 44px; }
+}
