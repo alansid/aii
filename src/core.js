@@ -1820,6 +1820,23 @@ ${trial
   handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db) });
   return handle;
 
+  // C-220：只屬部分專案的人，回應裡別人的 projects、projectRoles 只留看的人自己也在的專案（不露出別專案的名稱或代號）。
+  // 統一在回傳前處理，訊息作者、團隊狀態、成員清單都適用；先複製再改，不動到快取
+  function scrubProjects(out, me) {
+    const mine = new Set(projectsOf(me));
+    const walk = v => {
+      if (Array.isArray(v)) return v.map(walk);
+      if (!v || typeof v !== 'object') return v;
+      const o = {};
+      for (const [k, x] of Object.entries(v)) o[k] = walk(x);
+      if (o.participantId && o.participantId !== me.id) {
+        if (Array.isArray(o.projects)) o.projects = o.projects.filter(p => mine.has(p));
+        if (o.projectRoles && typeof o.projectRoles === 'object') o.projectRoles = Object.fromEntries(Object.entries(o.projectRoles).filter(([k]) => mine.has(k)));
+      }
+      return o;
+    };
+    return walk(out);
+  }
   async function handle(req, base) {
     const url = new URL(req.url);
     if (url.pathname === '/api/docs/ai-integration' || url.pathname === '/docs/ai-integration.md') {
@@ -1840,7 +1857,7 @@ ${trial
         if (out instanceof Response) return out;
         const status = out.__status || 200;
         delete out.__status;
-        return json(status, out);
+        return json(status, me && isolatedFrom(me) ? scrubProjects(out, me) : out);
       }
       throw new ApiError(404, 'NOT_FOUND', '找不到此 API');
     } catch (e) {
