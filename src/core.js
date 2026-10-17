@@ -268,9 +268,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     p.authKind = dev ? 'device' : 'code';
     p.deviceId = dev?.id || null;
     if (p.owner_id) {
-      const owner = await db.get('SELECT status FROM participants WHERE id = ?', p.owner_id);
-      if (!owner || owner.status !== 'active') throw new ApiError(401, 'INVALID_TOKEN', '所屬人類已離開群組');
+      const ownerStatus = 'owner_status' in p ? p.owner_status : (await db.get('SELECT status FROM participants WHERE id = ?', p.owner_id))?.status; // C-240：驗證時已一起查回
+      if (ownerStatus !== 'active') throw new ApiError(401, 'INVALID_TOKEN', '所屬人類已離開群組');
     }
+    delete p.owner_status;
     const now = Date.now();
     if (p.kind !== 'human' && p.token_expires_at && p.token_expires_at < now) { // 人類登入碼長期有效（C-202）
       throw new ApiError(401, 'TOKEN_EXPIRED', 'Token 已過期，請所屬人類在網頁重新產生');
@@ -283,10 +284,12 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       throw new ApiError(429, 'RATE_LIMITED', '請求頻率超過限制', { retryAfter: Math.ceil((r.windowStart + 60_000 - now) / 1000) });
     }
     if (p.kind === 'human') p.token_expires_at = now + HUMAN_TOKEN_TTL_MS; // 人類使用中自動展延
-    if (dev) await login.touch(dev, now);
-    // 在線狀態每 20 秒最多寫一次，減少 D1 寫入（人類的登入效期也一起展延）
-    if (now - p.last_seen_at > 20_000) {
-      await db.run('UPDATE participants SET last_seen_at = ?, token_expires_at = ? WHERE id = ?', now, p.token_expires_at, p.id);
+    // C-240：裝置展延和在線時間合成一次送出（各自每 20 秒最多寫一次，減少 D1 寫入與來回）
+    const touches = [dev && login.touchStmt(dev, now)].filter(Boolean);
+    const seen = now - p.last_seen_at > 20_000;
+    if (seen) touches.push(['UPDATE participants SET last_seen_at = ?, token_expires_at = ? WHERE id = ?', [now, p.token_expires_at, p.id]]);
+    if (touches.length) await (touches.length === 1 ? db.run(touches[0][0], ...touches[0][1]) : db.batch(touches));
+    if (seen) {
       p.last_seen_at = now;
       const cached = peopleCache.map?.get(p.id);
       if (cached) { cached.last_seen_at = now; cached.token_expires_at = p.token_expires_at; }
@@ -1822,9 +1825,14 @@ ${trial
 
   async function teamStatus(ctx) {
     if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return teamCache.data;
-    const people = await peopleMap(ctx);
+    // C-240：互不相關的查詢同時送（每次查詢都可能要跨洲來回）
+    const [people, recent, cardWork, pending, aiRows, pendRows] = await Promise.all([
+      peopleMap(ctx), recentMessages(), teamCards(db),
+      db.all("SELECT * FROM notifications WHERE status = 'pending' ORDER BY created_at"),
+      db.all('SELECT participant_id, state, updated_at FROM ai_state'),
+      db.all("SELECT n.recipient_id, n.created_at, m.project, m.created_at AS msg_at FROM notifications n JOIN messages m ON m.id = n.message_id WHERE n.status = 'pending' ORDER BY n.created_at"),
+    ]);
     const now = Date.now();
-    const recent = await recentMessages();
 
     // 每位成員最新一則帶狀態標籤的訊息
     const stateBy = new Map();
@@ -1838,10 +1846,8 @@ ${trial
     }
 
     // 有負責的未完成卡片 → 工作狀態取自卡片（較準）；沒有卡片的成員仍用訊息標籤推斷
-    const cardWork = await teamCards(db);
     for (const [id, w] of cardWork.work) stateBy.set(id, w);
 
-    const pending = await db.all("SELECT * FROM notifications WHERE status = 'pending' ORDER BY created_at");
     const pendBy = new Map();
     for (const n of pending) {
       const x = pendBy.get(n.recipient_id) || { count: 0, oldest: n.created_at };
@@ -1849,7 +1855,7 @@ ${trial
       pendBy.set(n.recipient_id, x);
     }
 
-    const aiStates = new Map((await db.all('SELECT participant_id, state, updated_at FROM ai_state')).map(r => [r.participant_id, { ...JSON.parse(r.state), updatedAt: r.updated_at }]));
+    const aiStates = new Map(aiRows.map(r => [r.participant_id, { ...JSON.parse(r.state), updatedAt: r.updated_at }]));
     const members = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system')
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(p => ({
@@ -1903,7 +1909,6 @@ ${trial
     }
     const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
     // C-235：只屬部分專案的人看團隊狀態時，目前工作／張數／待處理則數要依他的專案重算，原始資料留在這裡（不回傳）
-    const pendRows = await db.all("SELECT n.recipient_id, n.created_at, m.project, m.created_at AS msg_at FROM notifications n JOIN messages m ON m.id = n.message_id WHERE n.status = 'pending' ORDER BY n.created_at");
     teamCache = { at: Date.now(), data, priv: { cards: cardWork.open, stateMsgs, pendRows } };
     return data;
   }

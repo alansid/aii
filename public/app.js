@@ -434,13 +434,15 @@
     }
     $('#join').hidden = true; // C-195：主畫面等資料載完才顯示（先留在「載入中」）
     drawMe();
-    await loadProjectList().catch(() => {});
+    // C-240：專案、成員、訊息同時抓（原本一支等一支，每支都要等資料庫）
+    const winP = api(windowUrl());
+    winP.catch(() => {});
+    await Promise.all([loadProjectList().catch(() => {}), loadParticipants()]);
     const route = parseRoute();
     state.view = route.view || 'hub';
     drawProjSwitch();
     drawAvatarMenu(); refreshMyAiCount();
-    await loadParticipants();
-    await loadWindow();
+    await loadWindow(winP);
     refreshInboxCount();
     loadTeam();
     loadCards().then(() => { renderMessages(false); if (state.page === 'work' || state.page === 'hub') renderWork(); }).catch(() => {});
@@ -1106,9 +1108,10 @@
     state.messages = items;
     for (const m of items) state.byId.set(m.messageId, m);
   }
-  async function loadWindow() {
+  const windowUrl = () => (narrowMq.matches ? `/api/messages?limit=${MOBILE_N}` : `/api/messages?limit=${WIN_MAX}&span=${WIN_H}&min=${WIN_MIN}`);
+  async function loadWindow(pre) {
     const mobile = narrowMq.matches;
-    const d = await api(mobile ? `/api/messages?limit=${MOBILE_N}` : `/api/messages?limit=${WIN_MAX}&span=${WIN_H}&min=${WIN_MIN}`);
+    const d = await (pre || api(windowUrl())); // C-240：開頁時先發出去的請求
     state.mobileWin = mobile;
     state.byId = state.byId || new Map();
     setMessages(d.items);

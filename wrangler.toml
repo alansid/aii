@@ -2,6 +2,11 @@ name = "aigile-switch"
 main = "worker.js"
 compatibility_date = "2026-09-01"
 
+# C-240：智慧放置——資料庫（D1）在亞太，請求卻常在西雅圖等節點執行，每查一次都要跨太平洋；
+# 開了之後 Cloudflare 會把 Worker 放到靠近資料庫的地方跑。效果不好就刪掉這兩行再部署。
+[placement]
+mode = "smart"
+
 [assets]
 directory = "./public"
 binding = "ASSETS"

@@ -158,18 +158,24 @@ export function registerLogin(d) {
     return { ok: true };
   });
   // authenticate 用：把 Bearer 換成成員；回傳 { p, dev }，找不到回 null
+  // C-240：一次查完（每次查詢都可能要跨洲來回）：裝置＋成員 JOIN；AI 的所屬人類狀態一起帶回（owner_status）
   async function resolve(token) {
-    if (!token.startsWith(DEVICE_PREFIX)) return { p: await db.get('SELECT * FROM participants WHERE token = ?', token), dev: null };
-    const dev = await db.get('SELECT * FROM devices WHERE token_hash = ?', await sha256(token));
-    if (!dev || dev.revoked_at) throw new ApiError(401, 'INVALID_TOKEN', '這台裝置已登出，請重新配對或用登入碼登入');
-    if (dev.expires_at < Date.now()) throw new ApiError(401, 'TOKEN_EXPIRED', '這台裝置太久沒使用，登入已過期，請重新配對');
-    return { p: await db.get('SELECT * FROM participants WHERE id = ?', dev.participant_id), dev };
+    if (!token.startsWith(DEVICE_PREFIX)) {
+      const row = await db.get('SELECT p.*, o.status AS owner_status FROM participants p LEFT JOIN participants o ON o.id = p.owner_id WHERE p.token = ?', token);
+      return { p: row, dev: null };
+    }
+    const row = await db.get('SELECT p.*, d.id AS dv_id, d.revoked_at AS dv_revoked, d.expires_at AS dv_expires, d.last_used_at AS dv_last FROM devices d LEFT JOIN participants p ON p.id = d.participant_id WHERE d.token_hash = ?', await sha256(token));
+    if (!row || row.dv_revoked) throw new ApiError(401, 'INVALID_TOKEN', '這台裝置已登出，請重新配對或用登入碼登入');
+    if (row.dv_expires < Date.now()) throw new ApiError(401, 'TOKEN_EXPIRED', '這台裝置太久沒使用，登入已過期，請重新配對');
+    const { dv_id, dv_revoked, dv_expires, dv_last, ...p } = row;
+    return { p: p.id ? p : null, dev: { id: dv_id, last_used_at: dv_last } };
   }
-  // 使用中自動展延；每 20 秒最多寫一次
-  async function touch(dev, now = Date.now()) {
-    if (now - dev.last_used_at < 20_000) return;
-    await db.run('UPDATE devices SET last_used_at = ?, expires_at = ? WHERE id = ?', now, now + humanTtlMs, dev.id);
+  // 使用中自動展延；每 20 秒最多寫一次（回傳要執行的語句，讓呼叫端跟其他更新一起送）
+  function touchStmt(dev, now = Date.now()) {
+    if (now - dev.last_used_at < 20_000) return null;
+    return ['UPDATE devices SET last_used_at = ?, expires_at = ? WHERE id = ?', [now, now + humanTtlMs, dev.id]];
   }
+  async function touch(dev, now = Date.now()) { const s = touchStmt(dev, now); if (s) await db.run(s[0], ...s[1]); }
 
   // ---------- 邀請 ----------
   const listOf = s => String(s || '').split(',').map(x => x.trim()).filter(x => PROJECTS.includes(x));
@@ -473,5 +479,5 @@ export function registerLogin(d) {
     return { token, participant: publicParticipant(p, await peopleMap(ctx)) };
   }, { open: true });
 
-  return { resolve, touch, methods: Object.keys(PROVIDERS) };
+  return { resolve, touch, touchStmt, methods: Object.keys(PROVIDERS) };
 }
