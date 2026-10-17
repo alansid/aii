@@ -1858,3 +1858,12 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 :root[data-theme="dark"] .composer-tools .tag-btn.on { border-color: #3b5b9a; background: #1b2a47; color: #93c5fd; }
 :root[data-theme="dark"] .composer-tools .send:disabled { background: #2b3a63; border-color: #2b3a63; color: #8fa3d6; }
 .composer .composer-tools > * { order: 0; } /* 蓋掉舊的手機排序（C-215），照 DOM 順序：📎 → 類型 → 發到 → 送出 */
+
+/* ===== C-232 個人設定「我的角色」：兩欄格線，跟成員與權限一致 ===== */
+.my-roles .my-role-row { display: grid; grid-template-columns: minmax(0, 1fr) 160px; align-items: center; gap: 12px; min-height: 52px; border-top: 1px solid var(--border); }
+.my-roles .my-role-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.my-roles .my-role-row .role-sel { width: 160px; min-width: 0; height: 36px; min-height: 36px; justify-self: end; margin: 0; }
+@media (max-width: 640px) {
+  .my-roles .my-role-row { grid-template-columns: minmax(0, 1fr) 140px; }
+  .my-roles .my-role-row .role-sel { width: 140px; }
+}

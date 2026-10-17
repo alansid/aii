@@ -4994,7 +4994,7 @@
       </div>
       ${state.me.memberType === 'human' && myProjects().length ? `<div class="field my-roles" id="my-roles"><span class="field-label">我的角色</span>
         <p class="muted small">每個專案各一個，只能改自己的；跨專案角色在成員與權限。</p>
-        ${myProjects().map(pj => `<div class="my-role-row"><b>${esc(projName(pj))}</b>${roleSelectHtml(state.me.projectRoles?.[pj] || '', `data-myrole="${esc(pj)}"`, { label: `我在${projName(pj)}的角色` })}</div>`).join('')}
+        ${myProjects().map(pj => `<div class="my-role-row"><b class="my-role-name" title="${esc(projName(pj))}">${esc(projName(pj))}</b>${roleSelectHtml(state.me.projectRoles?.[pj] || '', `data-myrole="${esc(pj)}"`, { label: `我在${projName(pj)}的角色` })}</div>`).join('')}
         <div class="my-role-foot"><button type="button" class="btn primary small" id="my-roles-save">儲存角色</button></div></div>` : ''}
       <div class="field pwd-set" id="pwd-set"><span class="field-label" id="pwd-set-h">帳號密碼</span>
         <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">讀取中…</span></div>
