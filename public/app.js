@@ -302,7 +302,7 @@
       <p id="rsc-error" class="error" role="alert"></p>
       <button class="btn primary" type="button" id="rsc-go">登入</button>
       <p><a href="/" class="link" id="rsc-home">回登入頁</a></p>`;
-    if (!tok) { $('#rsc-error').textContent = '這個救援連結已失效。請在主機重新執行 npm run admin-rescue。'; $('#rsc-go').hidden = true; }
+    if (!tok) { $('#rsc-error').textContent = '這個救援連結已失效（15 分鐘、只能用一次）。請聯絡管理員。'; $('#rsc-go').hidden = true; }
     $('#rsc-go').onclick = async () => {
       $('#rsc-error').textContent = '';
       $('#rsc-go').disabled = true;

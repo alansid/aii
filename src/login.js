@@ -455,7 +455,7 @@ export function registerLogin(d) {
   };
   const FAIL_MSG = {
     password: '帳號或密碼不對。',
-    rescue: '這個救援連結已失效（15 分鐘、只能用一次）。請在主機重新執行 npm run admin-rescue。',
+    rescue: '這個救援連結已失效（15 分鐘、只能用一次）。請聯絡管理員。',
     invite: '這個邀請連結已失效',
     pair: '配對碼不對或已過期，請在已登入的裝置重新產生',
     code: '登入碼無效。請確認是從同一個網站（網址相同）複製的。',
