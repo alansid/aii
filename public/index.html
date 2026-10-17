@@ -51,7 +51,21 @@
             <button class="btn" type="submit">用登入碼登入</button>
           </form>
         </details>
+        <div class="pwd-entry"><span class="muted small">有設帳號密碼？</span><button type="button" class="link" id="pwd-open">用帳號密碼登入 ›</button></div>
       </div>
+      <!-- C-223 帳號密碼登入 -->
+      <form id="pwd-form" class="join-pane pwd-pane" aria-labelledby="pwd-h" hidden>
+        <h2 id="pwd-h" class="join-h">帳號密碼登入</h2>
+        <label>帳號
+          <input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false">
+        </label>
+        <label>密碼
+          <span class="pwd-wrap"><input name="password" type="password" required maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span>
+        </label>
+        <p id="pwd-error" class="error" role="alert"></p>
+        <button class="btn primary" type="submit">登入</button>
+        <button type="button" class="link pwd-back" id="pwd-back">‹ 回其他登入方式</button>
+      </form>
       <datalist id="role-list">
         <option value="PO"><option value="BA"><option value="UX"><option value="PG"><option value="QA"><option value="Sponsor">
       </datalist>

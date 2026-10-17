@@ -145,7 +145,8 @@
     try {
       const h = await api('/api/health');
       $('#join-form').hidden = !h.setup; // 群組還沒有人：建立群組
-      $('#login-main').hidden = !!h.setup;
+      $('#login-main').hidden = !!h.setup || pwdMode;
+      $('#pwd-form').hidden = !!h.setup || !pwdMode;
       $('#join-admin').textContent = h.adminName || '管理員';
       $('#room-code-field').hidden = !h.roomCodeRequired;
     } catch {}
@@ -177,6 +178,37 @@
     if (v.length === 6) $('#pair-form').requestSubmit();
   });
 
+  // ---------- C-223 帳號密碼登入 ----------
+  let pwdMode = false;
+  function setPwdMode(on) {
+    pwdMode = on;
+    $('#login-main').hidden = on;
+    $('#pwd-form').hidden = !on;
+    $('#pwd-error').textContent = '';
+    if (on) $('#pwd-form [name=username]').focus(); else $('#pwd-open').focus();
+  }
+  $('#pwd-open').addEventListener('click', () => setPwdMode(true));
+  $('#pwd-back').addEventListener('click', () => setPwdMode(false));
+  $('#pwd-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#pwd-error').textContent = '';
+    const f = new FormData(e.target), btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try { await authLogin('password', { username: String(f.get('username')).trim(), password: f.get('password') }); }
+    catch (err) { state.token = null; $('#pwd-error').textContent = err.message; e.target.password.select(); }
+    finally { btn.disabled = false; }
+  });
+  // 密碼欄的「顯示／隱藏」
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-eye]');
+    if (!b) return;
+    const inp = b.parentElement.querySelector('input');
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    b.textContent = show ? '隱藏' : '顯示';
+    b.setAttribute('aria-pressed', String(show));
+  });
+
   $('#token-form').addEventListener('submit', async e => {
     e.preventDefault();
     $('#token-error').textContent = '';
@@ -205,6 +237,12 @@
       <form id="inv-form" class="join-pane">
         <label>你的名字<input name="name" value="${esc(d.name)}" maxlength="40" required autocomplete="nickname" ${reset ? 'readonly' : ''}></label>
         <p class="muted small">${reset ? '這是重設登入的連結：按「加入」後，這台裝置會以你原本的身分登入。' : '確認名字沒錯就按「加入」，這台裝置會記住你。'}</p>
+        <fieldset class="inv-pwd"><legend>設帳號密碼（選填）</legend>
+          <p class="muted small">設了以後換裝置、清掉瀏覽器也能自己登入。</p>
+          <label>帳號<input name="username" maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+          <label>密碼（至少 10 碼）<span class="pwd-wrap"><input name="password" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span></label>
+          <label>再輸入一次<input name="passwordAgain" type="password" maxlength="128" autocomplete="new-password"></label>
+        </fieldset>
         <p id="inv-error" class="error" role="alert"></p>
         <button class="btn primary" type="submit">加入</button>
       </form>
@@ -221,9 +259,16 @@
       e.preventDefault();
       $('#inv-error').textContent = '';
       const btn = e.target.querySelector('button[type=submit]');
+      const fd = new FormData(e.target);
+      const cred = { username: String(fd.get('username') || '').trim(), password: fd.get('password') || '', passwordAgain: fd.get('passwordAgain') || '' };
+      const anyCred = Object.values(cred).some(Boolean); // 三格都空＝不設
+      if (anyCred) {
+        const bad = credError(cred.username, cred.password, cred.passwordAgain);
+        if (bad) { $('#inv-error').textContent = bad; return; }
+      }
       btn.disabled = true;
       try {
-        const r = await api('/api/auth/invite', { method: 'POST', body: { token: tok, name: new FormData(e.target).get('name').trim() } });
+        const r = await api('/api/auth/invite', { method: 'POST', body: { token: tok, name: fd.get('name').trim(), ...(anyCred ? cred : {}) } });
         clearInterval(inviteTimer);
         ss.del(INVITE_KEY);
         history.replaceState(null, '', '/');
@@ -236,6 +281,44 @@
         $('#inv-error').textContent = err.message;
       }
     });
+  }
+  // C-223：帳號密碼的前端檢查（伺服器也會再檢查）
+  function credError(username, password, again) {
+    if (!/^[a-z0-9._-]{4,30}$/i.test(username)) return '帳號需為 4～30 字，只能用英文、數字、. _ -';
+    if (password.length < 10) return '密碼至少 10 碼';
+    if (password !== again) return '兩次輸入的密碼不一樣';
+    return '';
+  }
+  // C-223 主機救援連結：/rescue/<連結>，按「登入」才用掉（避免連結預覽先把它用掉）
+  const RESCUE_KEY = 'aigile-switch-rescue';
+  function showRescue() {
+    let tok = decodeURIComponent(location.pathname.replace(/^\/rescue\/?/, ''));
+    if (tok) { ss.set(RESCUE_KEY, tok); history.replaceState(null, '', '/rescue'); } else tok = ss.get(RESCUE_KEY) || '';
+    $('#boot').hidden = true; $('#app').hidden = true; $('#join').hidden = true; $('#invite').hidden = false;
+    const card = $('#invite-card');
+    card.innerHTML = `<h1 data-group-name>${esc(BASE_TITLE)}</h1>
+      <p class="inv-from">主機救援登入</p>
+      <p>用這個一次性連結，以<b>管理員</b>身分登入這台裝置。連結 15 分鐘內有效、只能用一次；登入後管理員的收件匣會收到安全通知。</p>
+      <p id="rsc-error" class="error" role="alert"></p>
+      <button class="btn primary" type="button" id="rsc-go">登入</button>
+      <p><a href="/" class="link" id="rsc-home">回登入頁</a></p>`;
+    if (!tok) { $('#rsc-error').textContent = '這個救援連結已失效。請在主機重新執行 npm run admin-rescue。'; $('#rsc-go').hidden = true; }
+    $('#rsc-go').onclick = async () => {
+      $('#rsc-error').textContent = '';
+      $('#rsc-go').disabled = true;
+      try {
+        const r = await api('/api/auth/rescue', { method: 'POST', body: { token: tok } });
+        ss.del(RESCUE_KEY);
+        history.replaceState(null, '', '/');
+        $('#invite').hidden = true; $('#boot').hidden = false;
+        await useDevice(r.token);
+      } catch (err) {
+        $('#rsc-go').disabled = false;
+        $('#rsc-error').textContent = err.message;
+        if (err.code === 'RESCUE_INVALID') { ss.del(RESCUE_KEY); $('#rsc-go').hidden = true; }
+      }
+    };
+    $('#rsc-home').onclick = e => { e.preventDefault(); ss.del(RESCUE_KEY); history.replaceState(null, '', '/'); showJoin(); };
   }
   function inviteGone(adminName) {
     clearInterval(inviteTimer);
@@ -2293,7 +2376,32 @@
   }
   // ---------- 收件匣（C-134）：要你做的＋給你知道的 ----------
   work.notes = [];
-  async function loadNotes() { work.notes = (await api('/api/notifications?status=pending&limit=100')).items; }
+  async function loadNotes() {
+    const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=100'), api('/api/me/notices').catch(() => ({ items: [] }))]);
+    work.notes = a.items; work.sec = b.items;
+  }
+  // C-223：安全通知（新裝置用帳密登入、主機救援）只存在本人帳號，不是群組訊息
+  work.sec = [];
+  const secDev = d => String(d || '').replace(/^[^·]+·\s*/, '');
+  function secHtml(n) {
+    const when = fmtDate(n.createdAt);
+    const [text, hint] = n.kind === 'password_login' ? [`有新裝置用你的帳號密碼登入：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它並改密碼。']
+      : n.kind === 'rescue_login' ? [`有裝置用主機救援連結登入你的帳號：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並檢查誰有主機部署權限。']
+      : [`主機產生了一次性救援登入連結（${n.detail}）· ${when}，15 分鐘內有效。`, '不是你或你的團隊？請檢查誰有主機部署權限。'];
+    return `<div class="sec-note" id="sec-${esc(n.id)}"><span class="sec-ico" aria-hidden="true">🔐</span>
+      <div class="sec-main"><span>${esc(text)}</span><span class="small">${esc(hint)}</span></div>
+      <div class="sec-acts">${n.kind === 'rescue_link' ? '' : '<button type="button" class="btn small" data-sec-devices>我的裝置</button>'}<button type="button" class="btn small" data-sec-read="${esc(n.id)}" aria-label="${esc(text)} 知道了">知道了</button></div></div>`;
+  }
+  document.addEventListener('click', async e => {
+    if (!e.target.closest?.('#page-work')) return;
+    if (e.target.closest('[data-sec-devices]')) return openDevices();
+    const r = e.target.closest('[data-sec-read]');
+    if (!r) return;
+    const id = r.dataset.secRead, backup = work.sec;
+    work.sec = work.sec.filter(n => n.id !== id);
+    renderWork();
+    try { await api('/api/me/notices/read', { method: 'POST', body: { ids: [id] } }); } catch (err) { work.sec = backup; renderWork(); toast(err.message); }
+  });
   const ackNotes = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
   // C-191：按下畫面立即移除、背景一次送出（每 100 則一批、並行），失敗才還原
   async function ackNotesNow(ids, msg) {
@@ -2315,9 +2423,11 @@
   function notesHtml() {
     const list = noteList();
     const reason = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
-    return `<section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>給你知道的</h3><span class="wcount">${list.length}</span><span class="grow"></span>
+    const sec = work.sec || [];
+    return `<section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>給你知道的</h3><span class="wcount">${list.length + sec.length}</span><span class="grow"></span>
         ${list.length ? '<button type="button" class="btn small" data-note-ackall>全部標為已讀</button>' : ''}</div>
-      ${list.length ? list.map(n => {
+      ${sec.map(secHtml).join('')}
+      ${list.length || sec.length ? list.map(n => {
         const who = state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
         return `<div class="sugg-row fyi-row" id="fyi-${esc(n.notificationId)}"><span class="ndot" aria-hidden="true"></span>${avatar(who)}
           <button type="button" class="fyi-main" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}" aria-label="${esc(`未讀，${n.sender.name}，${fmtTime(n.createdAt)}：${n.preview}。查看`)}">
@@ -2388,7 +2498,7 @@
     return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你做` : '沒有要你做的事'}</span></div></div>
       <div class="inbox-block-title">要你做的</div>
       ${todoHtml(all)}
-      ${noteList().length ? `<div class="inbox-block-title">給你知道的</div>
+      ${noteList().length || work.sec?.length ? `<div class="inbox-block-title">給你知道的</div>
       ${notesHtml()}` : ''}`;
   }
 
@@ -4764,6 +4874,18 @@
         <p class="muted small">每個專案各一個，只能改自己的；跨專案角色在成員與權限。</p>
         ${myProjects().map(pj => `<div class="my-role-row"><b>${esc(projName(pj))}</b>${roleSelectHtml(state.me.projectRoles?.[pj] || '', `data-myrole="${esc(pj)}"`, { label: `我在${projName(pj)}的角色` })}</div>`).join('')}
         <div class="my-role-foot"><button type="button" class="btn primary small" id="my-roles-save">儲存角色</button></div></div>` : ''}
+      <div class="field pwd-set" id="pwd-set"><span class="field-label" id="pwd-set-h">帳號密碼</span>
+        <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">讀取中…</span></div>
+        <form id="pwd-set-form" class="stack" aria-labelledby="pwd-set-h" hidden>
+          <label>帳號<input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="field-hint">4～30 字，英文、數字、. _ -；不分大小寫</span></label>
+          <label id="pwd-cur-l">目前密碼<span class="pwd-wrap"><input name="current" type="password" maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示目前密碼">顯示</button></span><span class="field-hint">改帳號或密碼都要先填</span></label>
+          <label><span id="pwd-new-t">新密碼</span><span class="pwd-wrap"><input name="newPassword" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示新密碼">顯示</button></span><span class="field-hint" id="pwd-new-hint">至少 10 碼</span></label>
+          <label>再輸入一次<input name="again" type="password" maxlength="128" autocomplete="new-password"></label>
+          <p class="error" id="pwd-set-err" role="alert"></p>
+          <div><button class="btn primary small" type="submit">儲存</button></div>
+          <p class="muted small" id="pwd-forgot"></p>
+        </form>
+      </div>
       <div class="switch-row">
         <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
         <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
@@ -4791,6 +4913,7 @@
       } catch (err) { toast(err.message); }
     });
     if (opts.focusRoles) setTimeout(() => body.querySelector('#my-roles [data-myrole]')?.focus(), 50);
+    initPwdSettings(body);
     body.querySelectorAll('[data-theme-opt]').forEach(b => b.addEventListener('click', () => {
       const v = b.dataset.themeOpt;
       if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);
@@ -4809,6 +4932,47 @@
       await api('/api/leave', { method: 'POST' }).catch(() => {});
       logout(false);
     };
+  }
+
+  // ---------- C-223 個人設定 › 帳號密碼 ----------
+  async function initPwdSettings(body) {
+    const form = body.querySelector('#pwd-set-form'), status = body.querySelector('#pwd-status');
+    if (!form) return;
+    let cur;
+    const draw = (saved = '') => {
+      status.innerHTML = cur.set
+        ? `<div class="ok-box">已設定 · 帳號 <b>${esc(cur.username)}</b> · 上次修改 ${esc(fmtDate(cur.updatedAt))}</div>`
+        : '<p class="muted small">還沒設定。設了以後換裝置、清掉瀏覽器也能自己登入。</p>';
+      if (saved) status.insertAdjacentHTML('beforeend', `<p class="ok-text small pwd-saved">${saved}</p>`);
+      form.hidden = false;
+      form.username.value = cur.username || form.username.value;
+      body.querySelector('#pwd-cur-l').hidden = !cur.set;
+      body.querySelector('#pwd-new-hint').textContent = cur.set ? '至少 10 碼；只改帳號可以留白' : '至少 10 碼';
+      form.newPassword.required = !cur.set;
+      body.querySelector('#pwd-forgot').textContent = isAdmin() ? '忘記密碼要請有主機權限的人用救援指令（npm run admin-rescue）。' : `忘記密碼請管理員（${state.projMeta.adminName || '管理員'}）在「成員與權限」按「重設登入」。`;
+      for (const k of ['current', 'newPassword', 'again']) form[k].value = '';
+    };
+    try { cur = await api('/api/me/password'); } catch (err) { status.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+    draw();
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = body.querySelector('#pwd-set-err');
+      err.textContent = '';
+      const username = form.username.value.trim(), np = form.newPassword.value, again = form.again.value;
+      if (!/^[a-z0-9._-]{4,30}$/i.test(username)) { err.textContent = '帳號需為 4～30 字，只能用英文、數字、. _ -'; return form.username.focus(); }
+      if (np || !cur.set) { const bad = credError(username, np, again); if (bad) { err.textContent = bad; return form.newPassword.focus(); } }
+      if (cur.set && !form.current.value) { err.textContent = '請先填目前密碼'; return form.current.focus(); }
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        const r = await api('/api/me/password', { method: 'PUT', body: { username, ...(cur.set ? { currentPassword: form.current.value } : {}), ...(np ? { newPassword: np, newPasswordAgain: again } : {}) } });
+        const first = !cur.set;
+        cur = r;
+        draw(`已儲存。建議存到密碼管理器。${r.loggedOut ? `另外 ${r.loggedOut} 台用帳號密碼登入的裝置已登出。` : ''}`);
+        toast(first ? '已設定帳號密碼' : '已儲存帳號密碼');
+      } catch (e2) { err.textContent = e2.message; }
+      finally { btn.disabled = false; }
+    });
   }
 
   // ---------- C-202 我的裝置：列每台、登出這台、＋配對新裝置（6 位數、5 分鐘、一次性） ----------
@@ -4896,7 +5060,7 @@
   async function showInviteLink(out, title) {
     const iv = out.invite, reset = iv.kind === 'reset';
     const body = openModal(title || (reset ? `重設登入：${iv.name}` : '邀請連結'), `
-      <p>${reset ? `已登出 <b>${esc(iv.name)}</b> 的所有裝置、舊登入碼已作廢。把這個連結傳給他，打開就能重新登入。` : `把連結傳給 <b>${esc(iv.name)}</b>${iv.role ? `（${esc(iv.role)}）` : ''}，對方打開確認名字就能加入。`}</p>
+      <p>${reset ? `已登出 <b>${esc(iv.name)}</b> 的所有裝置、舊登入碼已作廢、帳號密碼已清掉。把這個連結傳給他，打開就能重新登入（可以順便重設帳號密碼）。` : `把連結傳給 <b>${esc(iv.name)}</b>${iv.role ? `（${esc(iv.role)}）` : ''}，對方打開確認名字就能加入。`}</p>
       <p class="muted small">專案：${iv.projects.length ? iv.projects.map(x => esc(projName(x))).join('、') : '還沒有'} · 只能用一次</p>
       <div class="copy-row"><code class="val inv-url" id="inv-url">${esc(out.url)}</code><button class="btn small" type="button" data-inv="copy">複製</button></div>
       <div id="inv-qr" class="qr"></div>
@@ -4952,7 +5116,7 @@
   }
   async function resetLogin(p) {
     if (!await confirmDialog({ title: `重設 ${esc(p.name)} 的登入？`, confirmText: '重設登入', danger: true,
-      message: `會<b>登出 ${esc(p.name)} 所有裝置</b>、作廢他的舊登入碼，並產生一個新的邀請連結（15 分鐘）讓他重新登入。他的 AI 不受影響。` })) return;
+      message: `會<b>登出 ${esc(p.name)} 所有裝置</b>、作廢他的舊登入碼、清掉他的帳號密碼，並產生一個新的邀請連結（15 分鐘）讓他重新登入。他的 AI 不受影響。` })) return;
     try { showInviteLink(await api(`/api/participants/${encodeURIComponent(p.participantId)}/reset-login`, { method: 'POST' })); if (perm.invites) perm.invites = null; } catch (err) { toast(err.message); }
   }
 
@@ -4989,6 +5153,7 @@
   }
   state.token = store.get(TOKEN_KEY);
   if (/^\/invite(\/|$)/.test(location.pathname)) showInvite(); // C-202：被邀請頁優先（這台裝置已登入別人也一樣）
+  else if (/^\/rescue(\/|$)/.test(location.pathname)) showRescue(); // C-223：主機救援連結
   else if (state.token) start().catch(() => { store.del(TOKEN_KEY); state.token = null; showJoin(); });
   else showJoin();
   if (!state.token) $('#boot').hidden = true;

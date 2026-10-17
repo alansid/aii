@@ -40,7 +40,7 @@ const tokenOf = url => url.split('/invite/')[1];
     h = (await call(null, '/api/health')).body;
     assert.equal(h.setup, false);
     assert.equal(h.adminName, '劉昱志', '登入頁顯示管理員名字');
-    assert.deepEqual(h.loginMethods, ['invite', 'pair', 'code'], '身分來源是可替換的一層');
+    assert.deepEqual(h.loginMethods, ['invite', 'pair', 'code', 'password', 'rescue'], '身分來源是可替換的一層（C-223 加帳號密碼、主機救援）');
     // 9. 拿掉群組密碼自己加入
     const j2 = await call(null, '/api/join', 'POST', { name: '路人', role: 'PG' });
     assert.equal(j2.status, 403);

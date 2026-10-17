@@ -3,11 +3,18 @@
 // 成功後一律由 issueDevice 發這台裝置的登入（dv_ 開頭，資料庫只存雜湊）。之後要接公司 SSO（OIDC／SAML），
 // 加一個 provider（例如 sso: { verify }）就好，裝置清單、登出、重設登入都不用改。
 // AI 的 Token 不經過這裡，維持原樣。
+// C-223：再加帳號密碼（人類自己設）與主機救援連結（只救管理員，只能在主機用 npm run admin-rescue 產生）。
+import { hashPassword, verifyPassword, normUsername, validUsername, USERNAME_RULE, PASSWORD_MIN, PASSWORD_MAX } from './password.js';
 
 const INVITE_TTL_MS = 15 * 60_000;     // 邀請連結 15 分鐘
 const PAIR_TTL_MS = 5 * 60_000;        // 配對碼 5 分鐘
 const INVITE_LIST_MS = 7 * 86_400_000; // 邀請清單顯示最近 7 天
 const DEVICE_PREFIX = 'dv_';
+const LOCK_FAILS = 5;                  // C-223：同一個帳號連錯 5 次
+const LOCK_MS = 15 * 60_000;           // 鎖 15 分鐘
+const NOTICE_MS = 30 * 86_400_000;     // 安全通知留 30 天
+const PWD_DEVICE = '帳號密碼登入';
+const RESCUE_DEVICE = '救援登入';
 
 // 由 User-Agent 推出「瀏覽器 · 系統」，只用來在「我的裝置」辨認
 export function deviceLabel(ua = '') {
@@ -16,6 +23,11 @@ export function deviceLabel(ua = '') {
   const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android'
     : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
   return os ? `${b} · ${os}` : b;
+}
+// C-223：「帳號密碼登入 · Safari（iPhone）」
+export function deviceLabelAs(prefix, ua = '') {
+  const [b, os] = deviceLabel(ua).split(' · ');
+  return `${prefix} · ${b}${os ? `（${os}）` : ''}`;
 }
 
 export function registerLogin(d) {
@@ -45,13 +57,106 @@ export function registerLogin(d) {
   }
 
   // ---------- 裝置 ----------
-  async function issueDevice(participantId, req) {
+  async function issueDevice(participantId, req, label = deviceLabel(req.headers.get('user-agent') || '')) {
     const token = DEVICE_PREFIX + newToken();
     const now = Date.now();
     await db.run('INSERT INTO devices (id, participant_id, token_hash, label, created_at, last_used_at, expires_at) VALUES (?,?,?,?,?,?,?)',
-      randId('dev'), participantId, await sha256(token), deviceLabel(req.headers.get('user-agent') || ''), now, now, now + humanTtlMs);
+      randId('dev'), participantId, await sha256(token), label, now, now, now + humanTtlMs);
     return token;
   }
+
+  // ---------- C-223 帳號密碼 ----------
+  const credOf = pid => db.get('SELECT * FROM credentials WHERE participant_id = ?', pid);
+  const credView = c => (c ? { set: true, username: c.username, updatedAt: iso(c.updated_at) } : { set: false, username: null, updatedAt: null });
+  const taken = () => new ApiError(409, 'USERNAME_TAKEN', '這個帳號已經有人用了，換一個。');
+  const locked = until => new ApiError(429, 'ACCOUNT_LOCKED', '輸錯太多次，請 15 分鐘後再試。', { retryAfter: Math.ceil((until - Date.now()) / 1000) });
+  function readUsername(raw) {
+    const u = normUsername(raw);
+    if (!validUsername(u)) throw invalid(USERNAME_RULE);
+    return u;
+  }
+  function readPassword(raw, again) {
+    const p = typeof raw === 'string' ? raw : '';
+    if (p.length < PASSWORD_MIN) throw invalid(`密碼至少 ${PASSWORD_MIN} 碼`);
+    if (p.length > PASSWORD_MAX) throw invalid(`密碼最多 ${PASSWORD_MAX} 碼`);
+    if (again !== undefined && again !== p) throw invalid('兩次輸入的密碼不一樣');
+    return p;
+  }
+  async function assertUsernameFree(u, pid) {
+    const row = await db.get('SELECT participant_id FROM credentials WHERE username = ?', u);
+    if (row && row.participant_id !== pid) throw taken();
+  }
+  async function saveCred(pid, username, password) {
+    const now = Date.now();
+    const hash = password ? await hashPassword(password) : null;
+    try {
+      if (hash) await db.run('INSERT INTO credentials (participant_id, username, pwd_hash, updated_at) VALUES (?,?,?,?) ON CONFLICT(participant_id) DO UPDATE SET username = excluded.username, pwd_hash = excluded.pwd_hash, updated_at = excluded.updated_at', pid, username, hash, now);
+      else await db.run('UPDATE credentials SET username = ?, updated_at = ? WHERE participant_id = ?', username, now, pid);
+    } catch (e) { if (/UNIQUE/i.test(e.message)) throw taken(); throw e; }
+  }
+  // 同帳號連錯 5 次鎖 15 分鐘；不存在的帳號一樣記、一樣鎖，不透露有沒有這個帳號
+  async function lockedUntil(u) {
+    const r = await db.get('SELECT locked_until FROM login_fails WHERE username = ?', u);
+    return r && r.locked_until > Date.now() ? r.locked_until : 0;
+  }
+  async function addFail(u) {
+    const now = Date.now();
+    const r = await db.get('SELECT * FROM login_fails WHERE username = ?', u);
+    const count = r && now - r.last_at < LOCK_MS && !r.locked_until ? r.count + 1 : 1;
+    const until = count >= LOCK_FAILS ? now + LOCK_MS : 0;
+    await db.run('INSERT INTO login_fails (username, count, last_at, locked_until) VALUES (?,?,?,?) ON CONFLICT(username) DO UPDATE SET count = excluded.count, last_at = excluded.last_at, locked_until = excluded.locked_until', u, until ? 0 : count, now, until);
+    if (Math.random() < 0.05) await db.run('DELETE FROM login_fails WHERE last_at < ? AND locked_until < ?', now - 86_400_000, now);
+    return until;
+  }
+  const clearFails = u => db.run('DELETE FROM login_fails WHERE username = ?', u);
+  let dummyHash = null; // 帳號不存在時也算一次雜湊，花的時間一樣
+  const dummy = async () => (dummyHash ||= await hashPassword(newToken()));
+
+  // 只給本人看的安全通知（不發群組訊息，AI 看不到）
+  const notice = (pid, kind, detail) => db.run('INSERT INTO account_notices (id, participant_id, kind, detail, created_at) VALUES (?,?,?,?,?)', randId('ntc'), pid, kind, String(detail || '').slice(0, 200), Date.now());
+
+  route('GET', '/api/me/password', async ({ me }) => { requireHuman(me); return credView(await credOf(me.id)); });
+  // 第一次設：帳號＋新密碼；之後改帳號或密碼都要先填目前密碼。改密碼後，其他用帳號密碼登入的裝置一起登出（這台不登出）
+  route('PUT', '/api/me/password', async ({ me, req }) => {
+    requireHuman(me);
+    const body = await readJson(req);
+    const cur = await credOf(me.id);
+    const username = readUsername(body.username ?? cur?.username);
+    const wantNew = body.newPassword !== undefined && body.newPassword !== null && body.newPassword !== '';
+    const password = wantNew ? readPassword(body.newPassword, body.newPasswordAgain) : null;
+    if (!cur && !password) throw invalid(`第一次設定請輸入新密碼（至少 ${PASSWORD_MIN} 碼）`);
+    if (cur) {
+      const until = await lockedUntil(cur.username);
+      if (until) throw locked(until);
+      if (!(await verifyPassword(String(body.currentPassword ?? ''), cur.pwd_hash))) {
+        const u2 = await addFail(cur.username);
+        if (u2) throw locked(u2);
+        throw new ApiError(400, 'WRONG_PASSWORD', '目前密碼不對');
+      }
+      await clearFails(cur.username);
+      if (!password && username === cur.username) throw invalid('沒有要改的內容');
+    }
+    await assertUsernameFree(username, me.id);
+    await saveCred(me.id, username, password);
+    let loggedOut = 0;
+    if (cur && password) {
+      const r = await db.run(`UPDATE devices SET revoked_at = ? WHERE participant_id = ? AND revoked_at IS NULL AND label LIKE '${PWD_DEVICE} · %' AND id != ?`, Date.now(), me.id, me.deviceId || '');
+      loggedOut = r.changes;
+    }
+    return { ...credView(await credOf(me.id)), loggedOut };
+  });
+  route('GET', '/api/me/notices', async ({ me }) => {
+    requireHuman(me);
+    const rows = await db.all('SELECT * FROM account_notices WHERE participant_id = ? AND read_at IS NULL AND created_at > ? ORDER BY created_at DESC LIMIT 50', me.id, Date.now() - NOTICE_MS);
+    return { items: rows.map(r => ({ id: r.id, kind: r.kind, detail: r.detail, createdAt: iso(r.created_at) })) };
+  });
+  route('POST', '/api/me/notices/read', async ({ me, req }) => {
+    requireHuman(me);
+    const ids = (await readJson(req)).ids;
+    if (!Array.isArray(ids) || ids.length > 100) throw invalid('ids 需為陣列（最多 100 個）');
+    for (const id of ids) await db.run('UPDATE account_notices SET read_at = ? WHERE id = ? AND participant_id = ? AND read_at IS NULL', Date.now(), String(id), me.id);
+    return { ok: true };
+  });
   // authenticate 用：把 Bearer 換成成員；回傳 { p, dev }，找不到回 null
   async function resolve(token) {
     if (!token.startsWith(DEVICE_PREFIX)) return { p: await db.get('SELECT * FROM participants WHERE token = ?', token), dev: null };
@@ -180,6 +285,7 @@ export function registerLogin(d) {
       ['UPDATE participants SET token = ?, updated_at = ? WHERE id = ?', [newToken(), nowIso(), t.id]],
       ['UPDATE devices SET revoked_at = ? WHERE participant_id = ? AND revoked_at IS NULL', [now, t.id]],
       ['DELETE FROM pair_codes WHERE participant_id = ?', [t.id]],
+      ['DELETE FROM credentials WHERE participant_id = ?', [t.id]], // C-223：密碼一起清掉，用新邀請連結重設
       ['UPDATE invites SET revoked_at = ? WHERE participant_id = ? AND used_at IS NULL AND revoked_at IS NULL', [now, t.id]],
       ['INSERT INTO invites (id, token_hash, name, role, projects, participant_id, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?)',
         [id, await sha256(token), t.name, t.role || '', String(t.projects || ''), t.id, me.id, now, now + INVITE_TTL_MS]],
@@ -247,6 +353,13 @@ export function registerLogin(d) {
           if (!t) throw gone();
           name = t.name;
         }
+        // C-223：選填帳號密碼；三格都空＝不設，填了就要都對（在佔用邀請前檢查，錯了連結還能用）
+        const any = [body.username, body.password, body.passwordAgain].some(x => x !== undefined && x !== null && x !== '');
+        let cred = null;
+        if (any) {
+          cred = { username: readUsername(body.username), password: readPassword(body.password, body.passwordAgain) };
+          await assertUsernameFree(cred.username, pid);
+        }
         // 先佔用（一次性）：同時按兩次只有一次成功
         const r = await db.run('UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?', now, iv.id, now);
         if (!r.changes) throw gone();
@@ -261,6 +374,7 @@ export function registerLogin(d) {
           created = true;
         }
         await db.run('UPDATE invites SET used_by = ? WHERE id = ?', pid, iv.id);
+        if (cred) await saveCred(pid, cred.username, cred.password);
         // 通知邀請的管理員「X 已加入」
         invalidatePeople();
         const c2 = {};
@@ -302,8 +416,46 @@ export function registerLogin(d) {
         return p;
       },
     },
+    // C-223 帳號密碼：錯誤只說「帳號或密碼不對」；鎖住時密碼對也不放行
+    password: {
+      label: '帳號密碼',
+      device: PWD_DEVICE,
+      notice: 'password_login',
+      async verify(body) {
+        const u = normUsername(body.username);
+        const pw = typeof body.password === 'string' ? body.password : '';
+        if (!validUsername(u) || !pw || pw.length > PASSWORD_MAX) { await verifyPassword('x', await dummy()); return null; }
+        const until = await lockedUntil(u);
+        if (until) throw locked(until);
+        const c = await db.get('SELECT * FROM credentials WHERE username = ?', u);
+        const ok = await verifyPassword(pw, c?.pwd_hash || await dummy());
+        const p = ok && c ? await db.get("SELECT * FROM participants WHERE id = ? AND kind = 'human' AND status = 'active'", c.participant_id) : null;
+        if (!p) { const u2 = await addFail(u); if (u2) throw locked(u2); return null; }
+        await clearFails(u);
+        return p;
+      },
+    },
+    // C-223 主機救援連結：一次性、15 分鐘、只給管理員
+    rescue: {
+      label: '主機救援連結',
+      device: RESCUE_DEVICE,
+      notice: 'rescue_login',
+      async verify(body, ctx, req) {
+        if (!body.token || typeof body.token !== 'string') return null;
+        const now = Date.now();
+        const row = await db.get('SELECT * FROM rescue_links WHERE token_hash = ?', await sha256(body.token));
+        if (!row || row.used_at || row.expires_at <= now) return null;
+        const admin = adminOf(await peopleMap(ctx));
+        if (!admin || admin.id !== row.participant_id) return null;
+        const r = await db.run('UPDATE rescue_links SET used_at = ?, used_device = ? WHERE id = ? AND used_at IS NULL', now, deviceLabelAs(RESCUE_DEVICE, req.headers.get('user-agent') || ''), row.id);
+        if (!r.changes) return null;
+        return db.get("SELECT * FROM participants WHERE id = ? AND kind = 'human' AND status = 'active'", row.participant_id);
+      },
+    },
   };
   const FAIL_MSG = {
+    password: '帳號或密碼不對。',
+    rescue: '這個救援連結已失效（15 分鐘、只能用一次）。請在主機重新執行 npm run admin-rescue。',
     invite: '這個邀請連結已失效',
     pair: '配對碼不對或已過期，請在已登入的裝置重新產生',
     code: '登入碼無效。請確認是從同一個網站（網址相同）複製的。',
@@ -313,9 +465,11 @@ export function registerLogin(d) {
     if (!prov) throw new ApiError(404, 'NOT_FOUND', '沒有這種登入方式');
     guard(req);
     const body = await readJson(req);
-    const p = await prov.verify(body, ctx);
-    if (!p) { failed(req); throw new ApiError(400, params.method === 'invite' ? 'INVITE_INVALID' : 'LOGIN_FAILED', FAIL_MSG[params.method]); }
-    const token = await issueDevice(p.id, req);
+    const p = await prov.verify(body, ctx, req);
+    if (!p) { failed(req); throw new ApiError(400, params.method === 'invite' ? 'INVITE_INVALID' : params.method === 'rescue' ? 'RESCUE_INVALID' : 'LOGIN_FAILED', FAIL_MSG[params.method]); }
+    const label = prov.device ? deviceLabelAs(prov.device, req.headers.get('user-agent') || '') : undefined;
+    const token = await issueDevice(p.id, req, label);
+    if (prov.notice) await notice(p.id, prov.notice, label).catch(e => console.error('notice failed:', e.message));
     return { token, participant: publicParticipant(p, await peopleMap(ctx)) };
   }, { open: true });
 

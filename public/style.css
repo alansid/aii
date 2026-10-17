@@ -1802,3 +1802,23 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 .note-st { display: inline-flex; width: auto; }
 .note-st button { min-height: 36px; padding: 0 14px; }
 @media (max-width: 640px) { .note-st button { min-height: 44px; } }
+
+/* ===== C-223 帳號密碼登入 ===== */
+.pwd-entry { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 12px; }
+.pwd-entry .link, .pwd-back { min-height: 44px; font-size: .92rem; }
+.pwd-back { justify-self: start; }
+.pwd-wrap { position: relative; display: block; }
+.pwd-wrap input { width: 100%; box-sizing: border-box; padding-right: 64px; }
+.pwd-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); min-width: 52px; min-height: 36px; border: 0; background: none; color: var(--primary); font: inherit; font-size: .85rem; cursor: pointer; border-radius: 6px; }
+.pwd-eye:focus-visible { outline: 2px solid var(--primary); }
+.inv-pwd { border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px; margin: 0; display: grid; gap: 10px; }
+.inv-pwd legend { font-weight: 600; font-size: .92rem; padding: 0 4px; }
+.pwd-status .ok-box { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; border-radius: 8px; padding: 8px 10px; font-size: .9rem; }
+.pwd-saved { margin: 6px 0 0; }
+.sec-note { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 10px; align-items: center; margin: 0 12px 10px; padding: 10px 12px; background: #fff8e1; border: 1px solid #e8cf86; border-radius: 10px; color: #3f3200; font-size: .9rem; line-height: 1.6; }
+.sec-main { display: grid; gap: 2px; min-width: 0; }
+.sec-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 640px) { .sec-note { grid-template-columns: auto 1fr; } .sec-acts { grid-column: 1 / -1; justify-content: flex-start; } .sec-acts .btn { min-height: 44px; } .pwd-eye { min-height: 44px; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sec-note { background: #3a3110; border-color: #7a6420; color: #fdf3c7; } :root:not([data-theme="light"]) .pwd-status .ok-box { background: #0f2e24; border-color: #1f6b52; color: #a7f3d0; } }
+:root[data-theme="dark"] .sec-note { background: #3a3110; border-color: #7a6420; color: #fdf3c7; }
+:root[data-theme="dark"] .pwd-status .ok-box { background: #0f2e24; border-color: #1f6b52; color: #a7f3d0; }

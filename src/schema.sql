@@ -239,3 +239,36 @@ CREATE TABLE IF NOT EXISTS pair_codes (
   expires_at INTEGER NOT NULL,
   used_at INTEGER
 );
+
+-- C-223 帳號密碼登入（只存加鹽慢雜湊）、同帳號輸錯鎖定、主機救援連結、只給本人看的安全通知
+CREATE TABLE IF NOT EXISTS credentials (
+  participant_id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,           -- 小寫；全群組不重複
+  pwd_hash TEXT NOT NULL,                  -- pbkdf2-sha256$次數$鹽$雜湊
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS login_fails (
+  username TEXT PRIMARY KEY,               -- 不存在的帳號也記，鎖不鎖不透露帳號有沒有人用
+  count INTEGER NOT NULL DEFAULT 0,
+  last_at INTEGER NOT NULL,
+  locked_until INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS rescue_links (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,         -- 只能由主機上的 npm run admin-rescue 產生
+  participant_id TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',     -- 主機使用者@主機名稱
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,             -- 15 分鐘
+  used_at INTEGER,
+  used_device TEXT
+);
+CREATE TABLE IF NOT EXISTS account_notices (
+  id TEXT PRIMARY KEY,
+  participant_id TEXT NOT NULL,
+  kind TEXT NOT NULL,                      -- password_login／rescue_login／rescue_link
+  detail TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  read_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_account_notices ON account_notices (participant_id, created_at);
