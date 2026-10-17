@@ -1959,3 +1959,34 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 .kv-field .copy-row .val { overflow: hidden; text-overflow: ellipsis; }
 .kv-field .copy-row .btn { flex: none; }
 @media (max-width: 400px) { .kv-field .copy-row { flex-wrap: wrap; } .kv-field .copy-row #my-token { flex-basis: 100%; } }
+
+/* ===== C-237 排版小修（C-234 盤點） ===== */
+/* ① 看板：1440 寬放得下 6 欄（每欄至少 176，剩下的平均分），放不下時左右都有按鈕 */
+@media (min-width: 900px) { .page-work.is-board .bcol { flex: 1 0 176px; min-width: 176px; max-width: 320px; } }
+.board-more.left { right: auto; left: 18px; }
+/* ② 個人設定：捲動時標題列下緣加陰影，看得出內容是捲到標題列底下（「儲存角色」本來就跟著內容捲） */
+.modal-body.scrolled { box-shadow: inset 0 8px 8px -8px rgba(15, 23, 42, .25); }
+/* ③ 收件匣「給你知道的」：作者名一行不斷字；手機上標籤縮成小點 */
+.fyi-top b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+@media (max-width: 640px) {
+  .fyi-top .tag { font-size: 0; width: 8px; height: 8px; min-width: 8px; padding: 0; border-radius: 50%; border: 0; }
+  .fyi-top .tag.me { background: #f59e0b; } .fyi-top .tag.reply { background: #3b82f6; } .fyi-top .tag.all { background: #8b5cf6; }
+}
+/* ④ 團隊狀態「空閒」也是膠囊（灰底），跟待處理／卡住對齊 */
+.tm-state .st { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px; font-size: 12px; font-weight: 500; }
+.tm-state .st-idle { background: #f1f5f9; color: #475569; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tm-state .st-idle { background: #334155; color: #cbd5e1; } }
+:root[data-theme="dark"] .tm-state .st-idle { background: #334155; color: #cbd5e1; }
+/* ⑤ 手機團隊狀態：每人兩行（名字＋待處理／狀態膠囊＋目前工作一行），一屏至少 4 人 */
+@media (max-width: 640px) {
+  .tm-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who pend" "state state"; gap: 2px 10px; padding: 8px 0; }
+  .tm-who { grid-area: who; }
+  .tm-who > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .tm-who .muted.small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tm-pend { grid-area: pend; white-space: nowrap; align-self: center; }
+  .tm-pend.zero, .tm-conn, .tm-token { display: none; }
+  .tm-state { grid-area: state; grid-column: auto; display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+  .tm-state .st { flex: none; }
+  .tm-state .link { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; -webkit-line-clamp: unset; }
+  .tm-state .muted.small { display: none; }
+}

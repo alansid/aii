@@ -398,6 +398,9 @@
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
   });
 
+  // C-237：彈窗內容捲動時，標題列下緣出現陰影（看得出內容捲到標題列底下）
+  document.addEventListener('scroll', e => { const t = e.target; if (t?.classList?.contains('modal-body')) t.classList.toggle('scrolled', t.scrollTop > 0); }, true);
+
   // ---------- 啟動 ----------
   async function start() {
     state.me = await api('/api/me');
@@ -2283,24 +2286,31 @@
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  // C-195：看板放不下時，右邊顯示「還有 N 欄 →」，點了往右捲；捲到底就收起
+  // C-195：看板放不下時顯示「還有 N 欄」；C-237：左右兩邊都有，點了捲到那一邊的底，捲到底就收起
   function boardMore() {
     const board = $('#page-work .board');
     if (!board || !wide()) return;
-    const btn = document.createElement('button');
-    btn.type = 'button'; btn.className = 'board-more';
+    const mk = side => { const b = document.createElement('button'); b.type = 'button'; b.className = 'board-more' + (side === 'left' ? ' left' : ''); return b; };
+    const rightBtn = mk('right'), leftBtn = mk('left');
     board.parentElement.style.position = 'relative';
-    board.after(btn);
+    board.after(rightBtn, leftBtn);
     const update = () => {
-      const cols = [...board.querySelectorAll('.bcol')], right = board.getBoundingClientRect().right;
-      const hidden = cols.filter(c => c.getBoundingClientRect().left > right - 40).length;
-      btn.hidden = board.scrollLeft + board.clientWidth >= board.scrollWidth - 4;
-      btn.textContent = hidden ? `→ 還有 ${hidden} 欄` : '→';
-      board.classList.toggle('has-more', !btn.hidden);
-      btn.setAttribute('aria-label', '看板往右捲，看其他欄位');
+      const cols = [...board.querySelectorAll('.bcol')], r = board.getBoundingClientRect();
+      const hiddenR = cols.filter(c => c.getBoundingClientRect().right > r.right + 2).length; // 被切到一部分也算
+      const hiddenL = cols.filter(c => c.getBoundingClientRect().left < r.left - 2).length;
+      rightBtn.hidden = board.scrollLeft + board.clientWidth >= board.scrollWidth - 4;
+      leftBtn.hidden = board.scrollLeft <= 4;
+      rightBtn.textContent = hiddenR ? `還有 ${hiddenR} 欄 →` : '→';
+      leftBtn.textContent = hiddenL ? `← 還有 ${hiddenL} 欄` : '←';
+      board.classList.toggle('has-more', !rightBtn.hidden);
+      board.classList.toggle('has-less', !leftBtn.hidden);
+      rightBtn.setAttribute('aria-label', '看板往右捲，看其他欄位');
+      leftBtn.setAttribute('aria-label', '看板往左捲，看其他欄位');
     };
-    btn.onclick = () => board.scrollTo({ left: board.scrollWidth, behavior: 'smooth' }); // 點了捲到底
+    rightBtn.onclick = () => board.scrollTo({ left: board.scrollWidth, behavior: 'smooth' });
+    leftBtn.onclick = () => board.scrollTo({ left: 0, behavior: 'smooth' });
     board.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update, { passive: true });
     requestAnimationFrame(update);
   }
   // C-195：從「我的專案」點進來的那一項，重畫後仍標著並捲到它
@@ -3620,7 +3630,7 @@
         <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small">${esc(roleIn(mb, pv))}${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
         <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
         <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
-        <div class="tm-pend muted small">${mb.pendingCount ? `待處理 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '待處理 0'}</div>
+        <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `待處理 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '待處理 0'}</div>
         <div class="tm-token small ${tokenCls}">${mb.memberType === 'ai' ? `Token ${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' 已過期' : mb.tokenExpiringSoon ? ' 快到期' : ''}` : ''}</div>
       </div>`;
     }).join('');
