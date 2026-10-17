@@ -1330,6 +1330,9 @@ body.drawer-docked #app { padding-right: 400px; }
 .ph-back:focus-visible, .ph-swap:focus-visible, .crumb-link:focus-visible, .m-back:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .ph-card { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; background: var(--sb-card, var(--surface)); border: 1px solid var(--sb-line, var(--border)); }
 .ph-card.is-hub { padding: 10px 12px; }
+button.ph-card.is-hub { width: 100%; box-sizing: border-box; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+button.ph-card.is-hub:hover { border-color: var(--sb-active, var(--primary)); }
+button.ph-card.is-hub:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .ph-name { flex: 1; min-width: 0; display: grid; }
 .ph-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ph-name .small { font-size: 11px; color: var(--sb-muted, var(--muted)); }

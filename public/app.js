@@ -650,7 +650,8 @@
     const opts = [...myProjects(), 'cross'];
     const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你做的 ${counts[k]} 件">${counts[k]}</span>` : '');
     document.querySelectorAll('.proj-switch').forEach((el, i) => {
-      if (v === 'hub') { el.innerHTML = `<div class="ph-card is-hub"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span>${badge('hub')}</div>`; return; }
+      // C-204：第一層時卡片可點，從「成員與權限」「我的 AI」回「我的專案」頁（與麵包屑一致）
+      if (v === 'hub') { el.innerHTML = `<button type="button" class="ph-card is-hub" data-proj="hub" aria-label="我的專案，${myProjects().length} 個專案＋跨專案頻道"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span>${badge('hub')}</button>`; return; }
       const sub = v === 'cross' ? '所有專案都看得到' : `成員 ${projMembers(v)}`;
       el.innerHTML = `${hasHub() ? '<button type="button" class="ph-back" data-proj="hub">‹ 我的專案</button>' : ''}
         <div class="ph-card">${projIcon(v)}<span class="ph-name"><b>${esc(viewLabel(v))}</b><span class="small">${esc(sub)}</span></span>
@@ -1241,6 +1242,8 @@
   // 共用外框：桌面置中、手機從底部滑出。size：''（560）、'wide'（760）、'form'（640）、'narrow'（440）
   // actions：標頭 × 左邊的動作鈕；foot：底部按鈕（只有要做決定的彈窗才給）
   let modalReturnFocus = null;
+  // C-205：點灰底不關彈窗，也不讓焦點跑出彈窗（否則之後按 Esc 收不到）
+  const holdBackdrop = overlay => overlay.addEventListener('mousedown', e => { if (e.target === overlay) e.preventDefault(); });
   function modalFrame({ title, sub = '', size = '', actions = '', foot = '', body = '' }) {
     return `
       <div class="overlay">
@@ -1271,8 +1274,9 @@
     if (!root.firstElementChild) modalReturnFocus = document.activeElement;
     root.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
     const overlay = root.firstElementChild;
+    holdBackdrop(overlay);
     overlay.addEventListener('click', e => {
-      if (e.target === overlay || e.target.closest('[data-close]')) closeModal();
+      if (e.target.closest('[data-close]')) closeModal(); // C-205：點灰底不關，只能按 × 或 Esc
     });
     const modal = overlay.querySelector('.modal');
     (modal.querySelector('.modal-body input:not([type=checkbox]), .modal-body select, .modal-body textarea') || modal.querySelector('.modal-x')).focus();
@@ -1300,9 +1304,10 @@
       document.body.append(host);
       const overlay = host.firstElementChild;
       const done = ok => { host.remove(); if (prev?.isConnected) prev.focus(); resolve(ok); };
+      holdBackdrop(overlay);
       overlay.addEventListener('click', e => {
         if (e.target.closest('[data-ok]')) return done(true);
-        if (e.target === overlay || e.target.closest('[data-close]')) done(false);
+        if (e.target.closest('[data-close]')) done(false);
       });
       overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
       const ex = overlay.querySelector('[data-expect]');
@@ -1466,6 +1471,7 @@
       $('#av-remove').addEventListener('click', () => { st.removed = true; st.mode = 'text'; draw(); });
       const done = v => { host.remove(); if (prev?.isConnected) prev.focus(); resolve(v); };
       const overlay = host.firstElementChild;
+      holdBackdrop(overlay);
       overlay.addEventListener('click', async e => {
         if (e.target.closest('[data-ok]')) {
           const text = $('#av-text').value.trim();
@@ -1473,7 +1479,7 @@
           if (st.mode === 'img') return done({ kind: 'keep' });
           return done({ kind: 'text', text, removeImg: !!cur.imgUrl });
         }
-        if (e.target === overlay || e.target.closest('[data-close]')) done(null);
+        if (e.target.closest('[data-close]')) done(null);
       });
       overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
       draw();
@@ -4396,7 +4402,8 @@
       const input = host.querySelector('#pn-input');
       input.focus(); input.select();
       const done = ok => { const v = input.value.trim(); host.remove(); resolve(ok ? v : null); };
-      host.addEventListener('click', e => { const b = e.target.closest('[data-pn]'); if (b) done(b.dataset.pn === '1'); else if (e.target === host.firstElementChild || e.target.closest('[data-close]')) done(false); });
+      holdBackdrop(host.firstElementChild);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-pn]'); if (b) done(b.dataset.pn === '1'); else if (e.target.closest('[data-close]')) done(false); });
       input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
     });
   }
