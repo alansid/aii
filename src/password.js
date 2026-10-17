@@ -35,5 +35,5 @@ export async function verifyPassword(password, stored) {
 export const USERNAME_RULE = '帳號需為 4～30 字，只能用英文、數字、. _ -';
 export const normUsername = raw => String(raw ?? '').trim().toLowerCase();
 export const validUsername = u => /^[a-z0-9._-]{4,30}$/.test(u);
-export const PASSWORD_MIN = 10;
+export const PASSWORD_MIN = 8; // C-239：昱志決定改 8 碼（原 10）
 export const PASSWORD_MAX = 128;

@@ -50,7 +50,7 @@ const PW2 = 'battery staple 2';
     r = await call(liuDev, '/api/me/password', 'PUT', { username: 'yu chih', newPassword: PW });
     assert.equal(r.status, 400, '帳號不能有空白');
     r = await call(liuDev, '/api/me/password', 'PUT', { username: 'yuchih.admin', newPassword: 'short' });
-    assert.equal(r.status, 400); assert.match(r.body.error.message, /至少 10 碼/);
+    assert.equal(r.status, 400); assert.match(r.body.error.message, /至少 8 碼/);
     r = await call(liuDev, '/api/me/password', 'PUT', { username: 'yuchih.admin', newPassword: PW, newPasswordAgain: PW + 'x' });
     assert.equal(r.status, 400); assert.match(r.body.error.message, /不一樣/);
     r = await call(liuDev, '/api/me/password', 'PUT', { username: 'yuchih.admin' });
@@ -143,7 +143,7 @@ const PW2 = 'battery staple 2';
     let inv = (await call(liuDev, '/api/invites', 'POST', { name: '王小明', projects: ['平台'] })).body;
     let tok = tokenOf(inv.url);
     r = await call(null, '/api/auth/invite', 'POST', { token: tok, name: '王小明', username: 'xiaoming.wang' });
-    assert.equal(r.status, 400, '填了一格就要三格都對'); assert.match(r.body.error.message, /至少 10 碼/);
+    assert.equal(r.status, 400, '填了一格就要三格都對'); assert.match(r.body.error.message, /至少 8 碼/);
     // 13. 帳號全群組不重複（不分大小寫）
     r = await call(null, '/api/auth/invite', 'POST', { token: tok, name: '王小明', username: 'YUCHIH', password: PW, passwordAgain: PW });
     assert.equal(r.status, 409); assert.equal(r.body.error.message, '這個帳號已經有人用了，換一個。');
@@ -164,7 +164,12 @@ const PW2 = 'battery staple 2';
     // 13. 修改時也檢查重複
     r = await call(leeDev, '/api/me/password', 'PUT', { username: 'xiaoming.wang', newPassword: PW, newPasswordAgain: PW });
     assert.equal(r.status, 409);
-    assert.equal((await call(leeDev, '/api/me/password', 'PUT', { username: 'dahua.lee', newPassword: PW, newPasswordAgain: PW })).status, 200, '補設');
+    // C-239：最短 8 碼——7 碼被擋、剛好 8 碼可以存、可以登入
+    r = await call(leeDev, '/api/me/password', 'PUT', { username: 'dahua.lee', newPassword: '1234567', newPasswordAgain: '1234567' });
+    assert.equal(r.status, 400, 'C-239：7 碼被擋'); assert.match(r.body.error.message, /至少 8 碼/);
+    assert.equal((await call(leeDev, '/api/me/password', 'PUT', { username: 'dahua.lee', newPassword: '12345678', newPasswordAgain: '12345678' })).status, 200, 'C-239：8 碼可存（補設）');
+    assert.equal((await login('dahua.lee', '12345678')).status, 200, 'C-239：8 碼可以登入');
+    await call(leeDev, '/api/me/notices/read', 'POST', { ids: (await call(leeDev, '/api/me/notices')).body.items.map(n => n.id) }); // 剛才的登入通知先讀掉
     // 安全通知只給本人
     assert.equal((await call(leeDev, '/api/me/notices')).body.items.length, 0);
     const wangNotes = (await call(wangDev, '/api/me/notices')).body.items;

@@ -252,7 +252,7 @@
         <fieldset class="inv-pwd"><legend>設帳號密碼（選填）</legend>
           <p class="muted small">設了以後換裝置、清掉瀏覽器也能自己登入。</p>
           <label>帳號<input name="username" maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
-          <label>密碼（至少 10 碼）<span class="pwd-wrap"><input name="password" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span></label>
+          <label>密碼（至少 8 碼）<span class="pwd-wrap"><input name="password" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span></label>
           <label>再輸入一次<input name="passwordAgain" type="password" maxlength="128" autocomplete="new-password"></label>
         </fieldset>
         <p id="inv-error" class="error" role="alert"></p>
@@ -297,7 +297,7 @@
   // C-223：帳號密碼的前端檢查（伺服器也會再檢查）
   function credError(username, password, again) {
     if (!/^[a-z0-9._-]{4,30}$/i.test(username)) return '帳號需為 4～30 字，只能用英文、數字、. _ -';
-    if (password.length < 10) return '密碼至少 10 碼';
+    if (password.length < 8) return '密碼至少 8 碼';
     if (password !== again) return '兩次輸入的密碼不一樣';
     return '';
   }
@@ -5108,7 +5108,7 @@
         <form id="pwd-set-form" class="stack" aria-labelledby="pwd-set-h" hidden>
           <label>帳號<input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="field-hint">4～30 字，英文、數字、. _ -；不分大小寫</span></label>
           <label id="pwd-cur-l">目前密碼<span class="pwd-wrap"><input name="current" type="password" maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示目前密碼">顯示</button></span><span class="field-hint">改帳號或密碼都要先填</span></label>
-          <label><span id="pwd-new-t">新密碼</span><span class="pwd-wrap"><input name="newPassword" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示新密碼">顯示</button></span><span class="field-hint" id="pwd-new-hint">至少 10 碼</span></label>
+          <label><span id="pwd-new-t">新密碼</span><span class="pwd-wrap"><input name="newPassword" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示新密碼">顯示</button></span><span class="field-hint" id="pwd-new-hint">至少 8 碼</span></label>
           <label>再輸入一次<input name="again" type="password" maxlength="128" autocomplete="new-password"></label>
           <p class="error" id="pwd-set-err" role="alert"></p>
           <div><button class="btn primary small" type="submit">儲存</button></div>
@@ -5176,7 +5176,7 @@
       form.hidden = false;
       form.username.value = cur.username || form.username.value;
       body.querySelector('#pwd-cur-l').hidden = !cur.set;
-      body.querySelector('#pwd-new-hint').textContent = cur.set ? '至少 10 碼；只改帳號可以留白' : '至少 10 碼';
+      body.querySelector('#pwd-new-hint').textContent = cur.set ? '至少 8 碼；只改帳號可以留白' : '至少 8 碼';
       form.newPassword.required = !cur.set;
       body.querySelector('#pwd-forgot').textContent = isAdmin() ? '忘記密碼要請有主機權限的人用救援指令（npm run admin-rescue）。' : `忘記密碼請管理員（${state.projMeta.adminName || '管理員'}）在「成員與權限」按「重設登入」。`;
       for (const k of ['current', 'newPassword', 'again']) form[k].value = '';
