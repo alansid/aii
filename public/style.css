@@ -2044,3 +2044,9 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
   .bw-bubbles, .bw-foot { display: none; }
   .join > .join-card { align-self: start; width: 100%; box-sizing: border-box; padding: 20px 16px 32px; }
 }
+/* C-202 補（UX 建議）：品牌牆整體垂直置中、小字固定在最下面；沒有錯誤時不留錯誤訊息的空位（元素還在，螢幕閱讀器照常念） */
+@media (min-width: 900px) {
+  .brand-wall { justify-content: center; }
+  .bw-foot { position: absolute; left: 56px; bottom: 40px; margin: 0; }
+}
+.join .join-pane .error:empty { min-height: 0; margin-top: -14px; }
