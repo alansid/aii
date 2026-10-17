@@ -2050,3 +2050,23 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
   .bw-foot { position: absolute; left: 56px; bottom: 40px; margin: 0; }
 }
 .join .join-pane .error:empty { min-height: 0; margin-top: -14px; }
+
+/* ===== C-244 平台 Logo＋側欄左上 ===== */
+.logo { display: block; flex: none; }
+.bw-badge { background: transparent; width: auto; height: auto; border-radius: 12px; box-shadow: 0 0 0 2px rgba(255, 255, 255, .35); }
+.bw-badge .logo { width: 44px; height: 44px; }
+@media (max-width: 899px) { .bw-badge .logo { width: 36px; height: 36px; } }
+.side-brand { all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 4px; border-radius: 10px; min-width: 0; }
+.side-brand:hover { background: color-mix(in srgb, var(--sb-card) 55%, transparent); }
+.side-brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.sb-text { display: grid; min-width: 0; }
+.sb-text b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-presence { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sb-muted); }
+.sb-presence .dot { width: 7px; height: 7px; }
+.ph-back.in-card { display: block; min-height: 0; padding: 0; font-size: 11px; line-height: 1.4; margin-bottom: 1px; }
+.sidebar .side-me { margin-top: auto; display: flex; align-items: center; gap: 8px; }
+.side-me .me-info { flex: 1; min-width: 0; }
+.side-me .me-info b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.me-more { all: unset; box-sizing: border-box; cursor: pointer; flex: none; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 18px; color: var(--sb-muted); }
+.me-more:hover { background: color-mix(in srgb, var(--sb-bg) 60%, transparent); color: var(--sb-text); }
+.me-more:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }

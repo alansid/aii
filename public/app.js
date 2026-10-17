@@ -357,7 +357,7 @@
 
   function drawMe() {
     const meCard = `<button type="button" class="me-avatar-btn" data-change-avatar title="更換頭像" aria-label="更換頭像">${avatar(state.me)}<span class="pen" aria-hidden="true">✎</span></button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · 本人</span></div>`;
-    $('#me-line').innerHTML = meCard;
+    $('#me-line').innerHTML = meCard + '<button type="button" class="av-btn me-more" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu" aria-label="個人選單">⋯</button>'; // C-244
     $('#sheet-me').innerHTML = meCard;
   }
 
@@ -372,7 +372,7 @@
   state.myAiCount = null;
   function drawAvatarMenu() {
     if (!state.me) return;
-    document.querySelectorAll('.av-btn').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
+    document.querySelectorAll('.av-btn:not(.me-more)').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
     $('#av-menu').innerHTML = `<div class="av-head"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()), isAdmin() ? '管理員' : ''].filter(Boolean).join(' · '))}</span></div>
       <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
       ${isAdmin() || myLeadProjects().length ? `<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
@@ -387,7 +387,13 @@
     const m = $('#av-menu');
     m.hidden = !open;
     document.querySelectorAll('.av-btn').forEach(b => b.setAttribute('aria-expanded', String(open && b === from)));
-    if (open) { const r = from.getBoundingClientRect(); m.style.top = `${Math.round(r.bottom + 6)}px`; m.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`; m.querySelector('button')?.focus(); }
+    if (open) {
+      const r = from.getBoundingClientRect(), h = m.offsetHeight, w = m.offsetWidth;
+      m.style.top = `${Math.round(r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6)}px`; // C-244：側欄最下面的「⋯」往上開
+      if (r.left < innerWidth / 2) { m.style.left = `${Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8)))}px`; m.style.right = 'auto'; }
+      else { m.style.left = 'auto'; m.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`; }
+      m.querySelector('button')?.focus();
+    }
   }
   function goTop(page) { closeSheet(false); if (hasHub()) setProjectView('hub', page); else showPage(page); }
   document.addEventListener('click', e => {
@@ -461,6 +467,7 @@
     state.participants = new Map(d.items.map(p => [p.participantId, p]));
     const online = d.items.filter(p => p.isOnline).length;
     document.querySelectorAll('.presence-text').forEach(el => { el.textContent = `${d.items.length} 人在群 · 近期活躍 ${online}`; el.dataset.short = `${online} 人在線`; });
+    document.querySelectorAll('.sb-presence-text').forEach(el => { el.textContent = `${d.items.length} 人 · ${online} 人活躍`; }); // C-244
     drawTokenAlert(d.items);
     syncFilterBar();
     return d.items;
@@ -574,7 +581,6 @@
   function applyGroupName(name) {
     if (!name) return;
     document.querySelectorAll('[data-group-name]').forEach(el => { el.textContent = name; });
-    document.querySelectorAll('[data-group-initial]').forEach(el => { el.textContent = [...name][0] || ''; }); // C-202：品牌牆徽章＝群組名第一個字
     document.title = document.title.replace(BASE_TITLE, name);
     BASE_TITLE = name;
   }
@@ -894,8 +900,8 @@
       // C-204：第一層時卡片可點，從「成員與權限」「我的 AI」回「我的專案」頁（與麵包屑一致）
       if (v === 'hub') { el.innerHTML = `<button type="button" class="ph-card is-hub" data-proj="hub" aria-label="我的專案，${myProjects().length} 個專案＋跨專案頻道"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span>${badge('hub')}</button>`; return; }
       const sub = v === 'cross' ? '所有專案都看得到' : `成員 ${projMembers(v)}`;
-      el.innerHTML = `${hasHub() ? '<button type="button" class="ph-back" data-proj="hub">‹ 我的專案</button>' : ''}
-        <div class="ph-card">${projIcon(v)}<span class="ph-name"><b>${esc(viewLabel(v))}</b><span class="small">${esc(sub)}</span></span>
+      el.innerHTML = `
+        <div class="ph-card">${projIcon(v)}<span class="ph-name">${hasHub() ? '<button type="button" class="ph-back in-card" data-proj="hub">‹ 我的專案</button>' : ''}<b>${esc(viewLabel(v))}</b>${hasHub() ? '' : `<span class="small">${esc(sub)}</span>`}</span>
           ${hasHub() ? `<button type="button" class="ps-btn ph-swap" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}" aria-label="切換專案" title="切換專案">⇅</button>
           <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${badge(k)}</li>`).join('')}</ul>` : ''}</div>`;
     });
@@ -3569,7 +3575,7 @@
   $('#menu-btn').addEventListener('click', openSheet);
   sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
   sheet.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
-  $('#presence-pill').addEventListener('click', openMembers);
+  $('#side-brand').addEventListener('click', () => { if (hasHub()) { closeSheet(false); setProjectView('hub'); } else showPage('messages'); }); // C-244：整列回我的專案
 
   // C-243：工作記憶裡的讀取位置 →「讀到：第 N 則・卡片到 10/17 20:30」
   const curSeq = c => { try { const b = String(c).slice(4).replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(atob(b + '==='.slice((b.length + 3) % 4))).s; } catch { return null; } };

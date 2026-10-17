@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>昱志的血汗勞工</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -13,7 +14,7 @@
   <section id="join" class="join" hidden>
     <!-- C-202：左邊品牌牆（固定示意文字，不顯示任何真實資料或人數）＋右邊登入卡 -->
     <aside class="brand-wall" aria-label="群組介紹">
-      <div class="bw-head"><span class="bw-badge" data-group-initial aria-hidden="true">昱</span><b data-group-name>昱志的血汗勞工</b></div>
+      <div class="bw-head"><span class="bw-badge" aria-hidden="true"><svg class="logo" width="44" height="44" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect width="64" height="64" rx="16" fill="#1d4ed8"/><path d="M12 16h22a6 6 0 0 1 6 6v9a6 6 0 0 1-6 6H22l-7 6v-6h-3a6 6 0 0 1-6-6v-9a6 6 0 0 1 6-6z" fill="#fff"/><path d="M28 27h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-2v7l-8-7H28a6 6 0 0 1-6-6V33a6 6 0 0 1 6-6z" fill="#3b82f6"/><path d="M31 38l5 5 10-10" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span><b data-group-name>昱志的血汗勞工</b></div>
       <p class="bw-slogan">人類出主意，<br>AI 一起把事做完。</p>
       <div class="bw-bubbles" aria-hidden="true">
         <div class="bw-row"><span class="bw-av po">PO</span><span class="bw-bub">這張驗收通過了 ✓</span></div>
@@ -83,7 +84,7 @@
   <!-- 被邀請的人打開 /invite/<連結> -->
   <section id="invite" class="join" hidden>
     <aside class="brand-wall" aria-label="群組介紹">
-      <div class="bw-head"><span class="bw-badge" data-group-initial aria-hidden="true">昱</span><b data-group-name>昱志的血汗勞工</b></div>
+      <div class="bw-head"><span class="bw-badge" aria-hidden="true"><svg class="logo" width="44" height="44" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect width="64" height="64" rx="16" fill="#1d4ed8"/><path d="M12 16h22a6 6 0 0 1 6 6v9a6 6 0 0 1-6 6H22l-7 6v-6h-3a6 6 0 0 1-6-6v-9a6 6 0 0 1 6-6z" fill="#fff"/><path d="M28 27h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-2v7l-8-7H28a6 6 0 0 1-6-6V33a6 6 0 0 1 6-6z" fill="#3b82f6"/><path d="M31 38l5 5 10-10" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span><b data-group-name>昱志的血汗勞工</b></div>
       <p class="bw-slogan">人類出主意，<br>AI 一起把事做完。</p>
       <div class="bw-bubbles" aria-hidden="true">
         <div class="bw-row"><span class="bw-av po">PO</span><span class="bw-bub">這張驗收通過了 ✓</span></div>
@@ -99,13 +100,12 @@
   <section id="app" class="app" hidden>
     <!-- 桌面側欄 -->
     <aside class="sidebar" aria-label="側欄">
-      <div class="side-head">
-        <h1 data-group-name>昱志的血汗勞工</h1>
-        <button id="presence-pill" class="presence" type="button"><span class="dot on"></span><span class="presence-text">…</span></button>
-      </div>
-      <div id="me-line" class="me-card"></div>
+      <!-- C-244：第一列 logo＋群組名，在線人數縮成一行小字；整列點了回我的專案 -->
+      <button type="button" class="side-brand" id="side-brand" aria-label="回我的專案">
+        <svg class="logo" width="32" height="32" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect width="64" height="64" rx="16" fill="#1d4ed8"/><path d="M12 16h22a6 6 0 0 1 6 6v9a6 6 0 0 1-6 6H22l-7 6v-6h-3a6 6 0 0 1-6-6v-9a6 6 0 0 1 6-6z" fill="#fff"/><path d="M28 27h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-2v7l-8-7H28a6 6 0 0 1-6-6V33a6 6 0 0 1 6-6z" fill="#3b82f6"/><path d="M31 38l5 5 10-10" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="sb-text"><b data-group-name>昱志的血汗勞工</b><span class="sb-presence"><span class="dot on" aria-hidden="true"></span><span class="sb-presence-text">…</span></span></span>
+      </button>
       <div class="proj-switch" aria-label="專案"></div>
-      <div class="side-label">主功能</div>
       <nav class="side-nav" aria-label="主要功能">
         <button type="button" data-nav="messages" data-proj-only aria-current="page"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
         <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
@@ -120,6 +120,8 @@
         </div>
         <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
       </nav>
+      <!-- C-244：個人卡片在側欄最下面，「⋯」＝原本的頭像選單 -->
+      <div id="me-line" class="me-card side-me"></div>
     </aside>
 
     <div class="main">
