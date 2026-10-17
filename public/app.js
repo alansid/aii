@@ -587,14 +587,12 @@
     }
     return out.join('');
   }
-  // 「下一則提到我 ↓N」：已載入、提到我、我還沒回的
-  function drawMentionBtn() {
-    const b = $('#mention-btn');
-    if (!b) return;
-    const n = state.messages.filter(m => visible(m) && needReply(m)).length;
-    b.hidden = !n;
-    b.innerHTML = `<span class="np-long">下一則提到我 ↓ ${n}</span><span class="np-short" aria-hidden="true">@${n}</span>`;
-    b.setAttribute('aria-label', `下一則提到我、你還沒回的，共 ${n} 則`);
+  // C-217：往上滑離開最底下（超過約一屏）才出現「回到最新 ↓」；有新訊息時用新訊息膠囊，兩個不同時出現
+  function drawLatestBtn() {
+    const b = $('#latest-btn'), box = $('#messages');
+    if (!b || !box) return;
+    const far = box.scrollHeight - box.scrollTop - box.clientHeight > box.clientHeight;
+    b.hidden = !(far && !state.newCount && !state.ctx);
   }
   // 讓某則訊息出現在畫面上（在收起的流程群組、一行或精簡裡就打開）
   function revealMsg(id) {
@@ -603,16 +601,12 @@
     if (state.groupOf.has(id) || isFlowLine(m) || isSlim(m)) { state.open.add(id); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
     return document.getElementById('msg-' + id);
   }
-  async function nextMention() {
-    const box = $('#messages'), edge = box.getBoundingClientRect().top + 8;
-    const list = state.messages.filter(m => visible(m) && needReply(m));
-    if (!list.length) return;
-    const below = list.find(m => { const el = document.getElementById('msg-' + m.messageId); return el && el.getBoundingClientRect().top > edge + 4; });
-    const target = below || list[0];
-    const el = revealMsg(target.messageId) || document.getElementById('msg-' + target.messageId);
-    if (!el) return jumpTo(target.messageId);
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  // C-216：只捲訊息清單本身，把某則放到清單中間；不用 scrollIntoView（它會連 html/body 一起捲）
+  function scrollMsgTo(el, smooth = true) {
+    const box = $('#messages');
+    if (!el || !box.contains(el)) return;
+    const top = box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top - Math.max(0, (box.clientHeight - el.offsetHeight) / 2);
+    box.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
   }
   function setView(v) {
     store.set(MSG_VIEW_KEY, v);
@@ -940,6 +934,8 @@
 
   // C-164：訊息頁只放最近 12 小時（不足 20 則補到 20），往上可「載入更早」；跳到很舊的訊息時進入「前後文」模式
   const WIN_H = 12, WIN_MIN = 20, WIN_MAX = 300, OLDER_HOLD_MS = 10 * 60_000;
+  const MOBILE_N = 10; // C-217：手機打開訊息頁只放最新 10 則
+  const curOf = seq => 'cur_' + btoa(JSON.stringify({ s: seq })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const hm = iso => { const d = new Date(iso); return `${mmdd(iso)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   Object.assign(state, { hasOlder: false, winFrom: null, winExpanded: false, lastOlderAt: 0, ctx: null, newCount: 0, newMention: 0, firstNewId: null });
   function setMessages(items) {
@@ -947,7 +943,9 @@
     for (const m of items) state.byId.set(m.messageId, m);
   }
   async function loadWindow() {
-    const d = await api(`/api/messages?limit=${WIN_MAX}&span=${WIN_H}&min=${WIN_MIN}`);
+    const mobile = narrowMq.matches;
+    const d = await api(mobile ? `/api/messages?limit=${MOBILE_N}` : `/api/messages?limit=${WIN_MAX}&span=${WIN_H}&min=${WIN_MIN}`);
+    state.mobileWin = mobile;
     state.byId = state.byId || new Map();
     setMessages(d.items);
     state.nextCursor = state.nextCursor && !state.ctx ? state.nextCursor : d.nextCursor;
@@ -962,9 +960,9 @@
         <button type="button" class="link small" id="ctx-latest">回到最新 ↓${c.pending ? `（${c.pending} 則新訊息）` : ''}</button></div>`;
     }
     const first = state.messages[0];
-    const top = state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）</button>`
+    const top = state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">${state.mobileWin ? `↑ 載入更早 ${MOBILE_N} 則` : `↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）`}</button>`
       : state.messages.length ? '<div class="msg-start muted small">這是最早的訊息</div>' : '';
-    const since = !first ? '' : state.winExpanded || !state.winFrom ? `從 ${hm(first.createdAt)} 起`
+    const since = !first ? '' : state.mobileWin ? `從 ${hm(first.createdAt)} 起` : state.winExpanded || !state.winFrom ? `從 ${hm(first.createdAt)} 起`
       : first.createdAt < state.winFrom ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時不足 ${WIN_MIN} 則，往前補）`
       : state.winTruncated ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時還有更早的）`
       : `最近 ${WIN_H} 小時 · 從 ${hm(first.createdAt)}`;
@@ -982,7 +980,7 @@
     if (nl && state.newCount) nl.insertAdjacentHTML('beforebegin', `<div class="new-line" id="new-line"><span>以下 ${state.newCount} 則是新的</span></div>`);
     syncScrollbar();
     if (toBottom) scrollBottom();
-    drawMentionBtn();
+    drawLatestBtn();
   }
 
   // 載入更早：一次往前 12 小時、最多 100 則；那段沒訊息就自動往更早找；保留捲動位置
@@ -990,7 +988,7 @@
     const box = $('#messages'), first = state.messages[0];
     if (!first) return;
     const prevHeight = box.scrollHeight, prevTop = box.scrollTop;
-    const d = await api(`/api/messages?limit=100&span=${WIN_H}&beforeId=${encodeURIComponent(first.messageId)}`);
+    const d = await api(state.mobileWin ? `/api/messages?limit=${MOBILE_N}&before=${encodeURIComponent(curOf(first.sequence))}` : `/api/messages?limit=100&span=${WIN_H}&beforeId=${encodeURIComponent(first.messageId)}`);
     const fresh = d.items.filter(m => !state.messages.some(x => x.messageId === m.messageId));
     setMessages(fresh.concat(state.messages));
     Object.assign(state, { hasOlder: d.hasMore, winExpanded: true, winTruncated: false, lastOlderAt: Date.now() });
@@ -1003,6 +1001,7 @@
     const cutoff = new Date(Date.now() - WIN_H * 3600_000).toISOString();
     let keep = state.messages.filter(m => m.createdAt >= cutoff);
     if (keep.length < WIN_MIN) keep = state.messages.slice(-WIN_MIN);
+    if (state.mobileWin) keep = state.messages.slice(-MOBILE_N); // 手機在最底下時收回最新 10 則
     if (keep.length > WIN_MAX) keep = keep.slice(-WIN_MAX);
     if (keep.length === state.messages.length) return;
     state.messages = keep;
@@ -1019,7 +1018,7 @@
     if (filtering() || state.collapsed.size) { state.collapsed.clear(); Object.assign(state.filter, { scope: 'all', member: '', tag: '' }); state.onlyMine = false; syncFilterBar(); }
     renderMessages(false); drawNewPill();
     const el = document.getElementById('msg-' + id);
-    if (el) { el.classList.add('target'); el.scrollIntoView({ block: 'center' }); }
+    if (el) { el.classList.add('target'); scrollMsgTo(el, false); }
   }
   async function ctxMore(dir) {
     const c = state.ctx, box = $('#messages');
@@ -1046,6 +1045,7 @@
     p.hidden = !state.newCount || !!state.ctx;
     p.innerHTML = `<span class="np-long">有 ${state.newCount} 則新訊息${state.newMention ? `（${state.newMention} 則提到你）` : ''} ↓</span><span class="np-short" aria-hidden="true">↓${state.newCount}</span>`;
     p.setAttribute('aria-label', `有 ${state.newCount} 則新訊息${state.newMention ? `，${state.newMention} 則提到你` : ''}，跳到最新`);
+    drawLatestBtn();
   }
   function clearNew() { if (!state.newCount) return; Object.assign(state, { newCount: 0, newMention: 0, firstNewId: null }); $('#new-line')?.remove(); drawNewPill(); }
 
@@ -1086,7 +1086,7 @@
     else if (!stick) { const nl = $('#new-line'); if (nl) nl.firstElementChild.textContent = `以下 ${state.newCount} 則是新的`; }
     box.insertAdjacentHTML('beforeend', messageHtml(m));
     if (stick) { scrollBottom(); trimWindow(); }
-    drawNewPill(); drawMentionBtn();
+    drawNewPill();
     if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
   }
   // 膠囊貼在輸入框上方：跟著輸入框高度
@@ -1169,7 +1169,14 @@
   });
 
   document.getElementById('new-pill')?.addEventListener('click', () => { scrollBottom(); clearNew(); });
-  document.getElementById('mention-btn')?.addEventListener('click', () => nextMention().catch(err => toast(err.message)));
+  document.getElementById('latest-btn')?.addEventListener('click', () => { const box = $('#messages'); box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }); $('#latest-btn').hidden = true; clearNew(); });
+  let latestRaf = 0;
+  $('#messages').addEventListener('scroll', () => { if (!latestRaf) latestRaf = requestAnimationFrame(() => { latestRaf = 0; drawLatestBtn(); }); }, { passive: true });
+  // C-216：App 畫面整頁固定不捲，只有訊息清單、卡片抽屜等內容區會捲；整頁被捲走就拉回來
+  const pinPage = () => { if (!$('#app').hidden && (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop)) { window.scrollTo(0, 0); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; } };
+  window.addEventListener('scroll', pinPage, { passive: true });
+  window.visualViewport?.addEventListener('resize', () => setTimeout(pinPage, 50));
+  document.addEventListener('focusout', () => setTimeout(pinPage, 100));
   if (window.visualViewport) { // C-215：手機鍵盤高度，給固定在底部的卡片回覆框用
     const kb = () => document.documentElement.style.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - visualViewport.height - visualViewport.offsetTop)) + 'px');
     visualViewport.addEventListener('resize', kb); visualViewport.addEventListener('scroll', kb);
@@ -1191,7 +1198,7 @@
       try { await enterContext(id); } catch { toast('找不到原訊息'); }
       return;
     }
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollMsgTo(el);
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
   }
 
