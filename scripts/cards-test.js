@@ -72,7 +72,7 @@ const rid = () => 'req_c' + (++n);
     assert.ok((await call(qa.token, `/api/cards/${free.cardId}`)).body.log.some(l => l.text.includes('認領')), '紀錄註明認領');
     assert.equal((await call(pg.token, `/api/cards/${free.cardId}`, 'PATCH', { ownerId: pg.participantId })).body.error.code, 'NOT_CARD_OWNER', '不能搶已有負責人的卡');
     await call(liu.token, `/api/cards/${free.cardId}`, 'PATCH', { ownerId: null }); // 人類改派回未指派，不影響後面的團隊狀態斷言
-    // 交接：負責人把卡交給指定成員，附說明；接手者回待處理並收到群組 @ 通知
+    // 交接：負責人把卡交給指定成員，附說明；C-241 起狀態維持（不再改回待處理），接手者收到群組 @ 通知
     const rel = (await call(liu.token, '/api/cards', 'POST', { requestId: rid(), title: '[平台] 接力測試', ownerId: pg.participantId, status: '進行中' })).body;
     const H = (tok, id, body) => call(tok, `/api/cards/${id}/handover`, 'POST', body);
     assert.equal((await H(qa.token, rel.cardId, { toId: qa.participantId, note: 'x' })).body.error.code, 'NOT_CARD_OWNER', '非負責 AI 不能交接');
@@ -81,12 +81,14 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await H(pg.token, rel.cardId, { toId: qa.participantId, note: 'x'.repeat(301) })).status, 400, '交接說明上限');
     const ho = (await H(pg.token, rel.cardId, { toId: qa.participantId, note: 'API 已完成，請接畫面' })).body;
     assert.equal(ho.owner.participantId, qa.participantId, '負責人換成接手者');
-    assert.equal(ho.status, '待處理', '交接後回待處理');
+    assert.equal(ho.status, '進行中', 'C-241：交接後狀態維持（進行中還是進行中）');
     const hmsg = (await call(liu.token, `/api/messages/${ho.handoverMessageId}`)).body;
     assert.ok(hmsg.text.startsWith('[交接] 【平台】' + rel.cardId + ' 接力測試 → @QA助手：API 已完成'), '自動發 [交接] 群組訊息，專案標記取自標題前綴');
     assert.ok(hmsg.recipients.some(r => r.participantId === qa.participantId), '@ 接手者');
     const relDetail = (await call(liu.token, `/api/cards/${rel.cardId}`)).body;
-    assert.ok(relDetail.log.some(l => l.text.startsWith('交接 PG助手 → QA助手：')), '紀錄留下交接歷程');
+    assert.ok(relDetail.log.some(l => l.text.startsWith('交接 PG助手 → QA助手：') && l.text.endsWith('（狀態維持：進行中）')), '紀錄留下交接歷程與狀態');
+    assert.ok(!relDetail.log.some(l => /狀態 進行中 → 待處理/.test(l.text)), 'C-241：不再有改回待處理的紀錄');
+    assert.ok(hmsg.text.endsWith('（狀態維持：進行中）'), 'C-241：交接訊息寫出狀態維持');
     assert.ok(relDetail.messageIds.includes(ho.handoverMessageId), '交接訊息關聯到卡片');
     assert.equal((await H(pg.token, rel.cardId, { toId: qa.participantId, note: '再交' })).body.error.code, 'NOT_CARD_OWNER', '交出後不能再交');
     const toHuman = (await H(qa.token, rel.cardId, { toId: liuId, note: '請你看' })).body;

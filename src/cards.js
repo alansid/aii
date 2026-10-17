@@ -543,14 +543,14 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     const note = text({ handover: body.note }, 'handover', { required: true });
     if (note === undefined) throw invalid('交接說明（note）為必填');
     const at = nowIso(), fromName = people.get(c.owner_id || me.id)?.name || me.name, toName = people.get(to).name;
-    const sets = { owner_id: to, status: '待處理' };
+    // C-241：交接只換負責人、留紀錄，狀態維持（進行中還是進行中）；接手者接單時自己改
+    const sets = { owner_id: to };
     if (c.wait_for_id === to) sets.wait_for_id = null;
-    const logs = [`交接 ${fromName} → ${toName}：${note}`];
-    if (c.status !== '待處理') logs.push(`狀態 ${c.status} → 待處理`);
+    const logs = [`交接 ${fromName} → ${toName}：${note}（狀態維持：${c.status}）`];
     await save(c, sets, logs, me, at);
     invalidatePeople();
     // 專案標記取自卡片的專案欄位（C-146 A）
-    const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${toName}：${note}`;
+    const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${toName}：${note}（狀態維持：${c.status}）`;
     let messageId = null, notifyError = null;
     if (c.type === NOTE) return { ...view(await load(params.id), people), handoverMessageId: null }; // C-218：人類紀錄交接不發群組訊息
     try {
