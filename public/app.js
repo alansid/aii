@@ -3901,9 +3901,9 @@
     } catch (err) { toast('沒有通知成功：' + err.message); }
   }
   // C-229：專案程式庫連結（管理員、該專案 leader）
-  function repoLine(p, canEdit) {
+  function repoLine(p, canEdit, { code = true } = {}) {
     const r = p.repo;
-    return `<div class="pm-repo small"><span>API 代號：<b>${esc(p.id)}</b></span><span class="pm-repo-url">${r ? `程式庫：<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>${r.branch ? `（分支 ${esc(r.branch)}）` : ''}` : '<span class="muted">還沒有程式庫連結</span>'}</span>${canEdit ? `<button type="button" class="link small" data-pm-repo="${esc(p.id)}">程式庫設定</button>` : ''}</div>`;
+    return `<div class="pm-repo small">${code ? `<span>API 代號：<b>${esc(p.id)}</b></span>` : ''}<span class="pm-repo-url">${r ? `程式庫：<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>${r.branch ? `（分支 ${esc(r.branch)}）` : ''}` : '<span class="muted">還沒有程式庫連結</span>'}</span>${canEdit ? `<button type="button" class="link small" data-pm-repo="${esc(p.id)}">程式庫設定</button>` : ''}</div>`;
   }
   function openRepoEditor(pj) {
     const p = state.projectList.find(x => x.id === pj);
@@ -4556,7 +4556,8 @@
   }
   // 小對話框：輸入名稱（改名用）
   // ---------- C-182 成員與權限（第一層，只有管理員）----------
-  const perm = { tab: 'byProject', invites: null, draft: new Map(), events: {}, openLog: null, pq: '', mq: '', selProj: null, selMember: null, picker: false, pickSel: new Set(), pickQ: '', addOpen: false, mobileDetail: false };
+  // C-233：分頁 成員｜專案｜邀請；成員分頁裡再分「依專案／依成員」（memView）
+  const perm = { tab: 'members', memView: 'byProject', moreOpen: null, invites: null, draft: new Map(), events: {}, openLog: null, pq: '', mq: '', selProj: null, selMember: null, picker: false, pickSel: new Set(), pickQ: '', addOpen: false, mobileDetail: false };
   const permDirty = () => perm.draft.size > 0;
   // C-221：新專案一開始的成員＝建立者＋目前的跨專案角色（不寫死 PO、SM）
   const crossNames = () => state.projMeta.crossRoleIds.filter(x => x !== meId()).map(x => state.participants.get(x)?.name).filter(Boolean);
@@ -4633,45 +4634,60 @@
   function permStar(p, pj) { const c = permCur(p), l = new Set(c.leaders || permBase(p).leaders); if (l.has(pj)) l.delete(pj); else l.add(pj); permSet(p, { projects: new Set(c.projects), cross: c.cross, leaders: l }); }
   // 誰能移出：管理員全部（跨專案角色除外）；leader 只能動自己的專案，不能動管理員與自己
   const canRemove = (p, pj) => permCanEdit(pj) && !permCur(p).cross && (isAdmin() || (p.participantId !== state.projMeta.adminId && p.participantId !== meId()));
+  // C-233：共用的小元件
+  const permView = () => (isAdmin() ? perm.memView : 'byProject'); // leader 只有依專案
+  const pmViewSeg = () => (isAdmin() ? `<div class="seg-scope full pm-view" role="group" aria-label="檢視方式">${[['byProject', '依專案'], ['byMember', '依成員']].map(([k, t]) => `<button type="button" data-pm-view="${k}" aria-pressed="${perm.memView === k}">${t}</button>`).join('')}</div>` : '');
+  const pmLock = why => `<span class="pm-lock" role="img" aria-label="${esc(why)}" title="${esc(why)}">🔒</span>`;
+  const pmHead = first => `<thead><tr><th scope="col">${first}</th><th scope="col" class="c-role">角色</th><th scope="col" class="c-lead">leader</th><th scope="col" class="c-act">移出</th></tr></thead>`;
+  const pmGrp = t => `<tr class="pm-grp-tr"><td colspan="4">${t}</td></tr>`;
+  // leader 欄：只有人類；管理員本人「—」；管理員可切 ★／☆，其他人唯讀
+  function pmLeadCell(p, pj) {
+    const c = permCur(p), b = permBase(p), lead = (c.leaders || b.leaders).has(pj), lchg = lead !== b.leaders.has(pj);
+    if (p.memberType !== 'human') return '<span class="muted">—</span>';
+    if (p.participantId === state.projMeta.adminId) return '<span class="muted" title="管理員本來就能管所有專案">—</span>';
+    if (isAdmin() && !c.cross) return `<button type="button" class="pm-star on-${lead}${lchg ? ' chg' : ''}" data-pm-star="${esc(p.participantId)}" data-pj="${esc(pj)}" aria-pressed="${lead}" aria-label="${esc(p.name)} 是${esc(projName(pj))}的 leader" title="${lead ? '取消 leader' : '設為 leader'}">${lead ? '★' : '☆'}</button>`;
+    return lead ? '<span class="pm-star-ro" aria-label="leader">★</span>' : '<span class="muted">—</span>';
+  }
+  function pmActCell(p, pj, crossWhere) {
+    const c = permCur(p);
+    if (p.participantId === state.projMeta.adminId) return pmLock('管理員自動在所有專案');
+    if (c.cross) return pmLock(`跨專案角色自動在所有專案；要移出請先${crossWhere}關掉跨專案角色`);
+    if (canRemove(p, pj)) return `<button type="button" class="pm-x" data-pm-rm="${esc(p.participantId)}" data-pj="${esc(pj)}" aria-label="把 ${esc(p.name)} 移出${esc(projName(pj))}" title="移出">✕</button>`;
+    return p.participantId === meId() ? pmLock('自己不能移出') : '<span class="muted">—</span>';
+  }
+  const pmRoleCell = (p, pj) => (p.memberType === 'human' ? permRoleHtml(p, pj) : `<span class="pm-ai-role">${esc(p.role || '')}</span>`);
   function permByProjectHtml() {
     const all = permProjects();
     if (!all.includes(perm.selProj)) perm.selProj = all[0] || null;
     const pj = perm.selProj, admin = isAdmin(), q = perm.pq.trim().toLowerCase();
     const list = all.filter(x => !q || projName(x).toLowerCase().includes(q));
-    const left = `<section class="pm-col pm-list" aria-label="專案清單"><div class="pm-search"><input id="pm-pq" type="search" placeholder="搜尋專案（${all.length} 個）" aria-label="搜尋專案" value="${esc(perm.pq)}"></div>
-      ${list.map(x => { const n = permPeople().filter(p => inProj(p, x)).length, ch = projChanges(x); return `<button type="button" class="pm-li${x === pj ? ' sel' : ''}" data-pm-proj="${esc(x)}" aria-current="${x === pj}"><b>${esc(projName(x))}</b>${ch ? `<span class="pm-chg-tag">${ch} 變更</span>` : ''}<span class="muted small">${n} 人</span></button>`; }).join('') || '<p class="muted small pm-pad">找不到專案</p>'}</section>`;
+    const left = `<section class="pm-col pm-list" aria-label="專案清單"><div class="pm-search">${pmViewSeg()}<input id="pm-pq" type="search" placeholder="搜尋專案（${all.length} 個）" aria-label="搜尋專案" value="${esc(perm.pq)}"></div>
+      ${list.map(x => { const n = permPeople().filter(p => inProj(p, x)).length, ch = projChanges(x); return `<button type="button" class="pm-li${x === pj ? ' sel' : ''}" data-pm-proj="${esc(x)}" aria-current="${x === pj}"><b>${esc(projName(x))}</b>${ch ? `<span class="pm-chg-tag">${ch} 變更</span>` : ''}<span class="muted small">${n}</span></button>`; }).join('') || '<p class="muted small pm-pad">找不到專案</p>'}</section>`;
     if (!pj) return `<div class="pm-split">${left}</div>`;
     const members = permPeople().filter(p => inProj(p, pj));
-    // C-222：真正的表格，四欄固定寬「成員｜角色｜leader｜移出」，每列同欄對齊；手機每人一張小卡
-    const lockCell = why => `<span class="pm-lock" role="img" aria-label="${esc(why)}" title="${esc(why)}">🔒</span>`;
+    // C-222 表格「成員｜角色｜leader｜移出」；C-233：名字可以點，跳到依成員
     const row = p => {
-      const c = permCur(p), b = permBase(p), id = esc(p.participantId), isNew = !(b.cross || b.projects.has(pj));
-      const lead = (c.leaders || b.leaders).has(pj), lchg = lead !== b.leaders.has(pj), isAdm = p.participantId === state.projMeta.adminId;
+      const c = permCur(p), b = permBase(p), isNew = !(b.cross || b.projects.has(pj)), lchg = (c.leaders || b.leaders).has(pj) !== b.leaders.has(pj), isAdm = p.participantId === state.projMeta.adminId;
       const tags = [isAdm ? '<span class="pill-tag blue">管理員</span>' : c.cross ? '<span class="pm-cross-tag">跨專案</span>' : '', isNew ? '<span class="pill-tag yellow">新加入</span>' : '', !admin && p.participantId === meId() ? '<span class="muted small">· 你</span>' : ''].join('');
-      const roleCell = p.memberType === 'human' ? permRoleHtml(p, pj) : `<span class="pm-ai-role">${esc(p.role || '')}</span>`;
-      const leadCell = p.memberType !== 'human' ? '<span class="muted">—</span>'
-        : isAdm ? '<span class="muted" title="管理員本來就能管所有專案">—</span>'
-        : admin && !c.cross ? `<button type="button" class="pm-star on-${lead}${lchg ? ' chg' : ''}" data-pm-star="${id}" data-pj="${esc(pj)}" aria-pressed="${lead}" aria-label="${esc(p.name)} 是${esc(projName(pj))}的 leader" title="${lead ? '取消 leader' : '設為 leader'}">${lead ? '★' : '☆'}</button>`
-        : lead ? '<span class="pm-star-ro" aria-label="leader">★</span>' : '<span class="muted">—</span>';
-      const actCell = isAdm ? lockCell('管理員自動在所有專案')
-        : c.cross ? lockCell('跨專案角色自動在所有專案；要移出請先到「依成員」關掉跨專案角色')
-        : canRemove(p, pj) ? `<button type="button" class="pm-x" data-pm-rm="${id}" data-pj="${esc(pj)}" aria-label="把 ${esc(p.name)} 移出${esc(projName(pj))}" title="移出">✕</button>`
-        : p.participantId === meId() ? lockCell('自己不能移出') : '<span class="muted">—</span>';
-      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name"><b>${esc(p.name)}</b>${tags}${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role">${roleCell}</td><td class="c-lead">${leadCell}</td><td class="c-act">${actCell}</td></tr>`;
+      const name = admin ? `<button type="button" class="pm-name-link" data-pm-goto-mem="${esc(p.participantId)}" title="看 ${esc(p.name)} 的所有專案">${esc(p.name)}</button>` : `<b>${esc(p.name)}</b>`;
+      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name">${name}${tags}${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role">${pmRoleCell(p, pj)}</td><td class="c-lead">${pmLeadCell(p, pj)}</td><td class="c-act">${pmActCell(p, pj, '到「依成員」')}</td></tr>`;
     };
     const removed = permPeople().filter(p => { const b = permBase(p); return (b.cross || b.projects.has(pj)) && !inProj(p, pj); });
     const rmRow = p => `<tr class="pm-tr chg pm-gone"><td class="c-name"><s>${esc(p.name)}</s><span class="pill-tag red">將移出</span>${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role"><span class="muted">—</span></td><td class="c-lead"><span class="muted">—</span></td><td class="c-act"><button type="button" class="link small" data-pm-restore="${esc(p.participantId)}" data-pj="${esc(pj)}">復原</button></td></tr>`;
-    const humans = members.filter(p => p.memberType === 'human'), ais = members.filter(p => p.memberType === 'ai');
-    const grp = t => `<tr class="pm-grp-tr"><td colspan="4">${t}</td></tr>`;
+    const humans = members.filter(p => p.memberType === 'human');
+    const owner = a => ownerOf(a)?.name || '';
+    const ais = members.filter(p => p.memberType === 'ai').sort((a, b) => owner(a).localeCompare(owner(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant')); // 依主人分組
+    const pr = state.projectList.find(x => x.id === pj);
     const mid = `<section class="pm-col pm-detail" aria-label="${esc(projName(pj))} 的成員">
       ${narrowPerm() ? '<button type="button" class="ph-back pm-back" data-pm-back>‹ 專案清單</button>' : ''}
-      <div class="pm-dhead"><strong>${esc(projName(pj))} · 成員 ${members.length}</strong><span class="grow"></span>${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
-      ${(() => { const pr = state.projectList.find(x => x.id === pj); return pr ? repoLine(pr, permCanEdit(pj)) : ''; })()}
-      <table class="pm-table"><thead><tr><th scope="col">成員</th><th scope="col" class="c-role">在「${esc(projName(pj))}」的角色</th><th scope="col" class="c-lead">leader</th><th scope="col" class="c-act">移出</th></tr></thead>
-      <tbody>${grp('人類')}${humans.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有人類成員</td></tr>'}
-      ${grp('AI · 角色跟著 AI 設定，不分專案')}${ais.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有 AI</td></tr>'}
-      ${removed.length ? grp('這次會移出') + removed.map(rmRow).join('') : ''}</tbody></table>
-      <p class="muted small pm-note">🔒＝管理員或跨專案角色，自動在所有專案，滑過看怎麼移出。✕＝移出（人類名下的 AI 會一起移出）${admin ? '；☆ 點了變 ★＝設為 leader（只有人類）' : ''}。</p></section>`;
+      <div class="pm-dhead"><div class="pm-dtitle"><strong>${esc(projName(pj))}</strong><span class="pm-sub"> · API 代號 ${esc(pj)} · ${members.length} 人</span></div><span class="grow"></span>
+        ${admin ? '<button type="button" class="btn small" data-pm-invite>邀請新的人</button>' : ''}${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
+      ${pr ? repoLine(pr, permCanEdit(pj), { code: false }) : ''}
+      <table class="pm-table">${pmHead('成員')}
+      <tbody>${pmGrp(`人類 · ${humans.length}`)}${humans.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有人類成員</td></tr>'}
+      ${pmGrp(`AI · ${ais.length}（依主人分組；角色跟著 AI 設定）`)}${ais.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有 AI</td></tr>'}
+      ${removed.length ? pmGrp('這次會移出') + removed.map(rmRow).join('') : ''}</tbody></table>
+      <p class="muted small pm-note">🔒＝管理員或跨專案角色，自動在所有專案，滑過看怎麼移出。✕＝移出（人類名下的 AI 會一起移出）${admin ? '；☆ 點了變 ★＝設為 leader（只有人類）；點名字看他的所有專案' : ''}。</p></section>`;
     const cls = narrowPerm() ? (perm.picker ? ' m-pick' : perm.mobileDetail ? ' m-detail' : ' m-list') : perm.picker ? ' with-pick' : '';
     return `<div class="pm-split${cls}">${left}${mid}${perm.picker ? permPickerHtml(pj) : ''}</div>`;
   }
@@ -4711,26 +4727,38 @@
     const all = permPeople(), q = perm.mq.trim().toLowerCase();
     if (!all.some(p => p.participantId === perm.selMember)) perm.selMember = all[0]?.participantId || null;
     const list = all.filter(p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q));
-    const left = `<section class="pm-col pm-list" aria-label="成員清單"><div class="pm-search"><input id="pm-mq" type="search" placeholder="搜尋成員（${all.length} 人）" aria-label="搜尋成員" value="${esc(perm.mq)}"></div>
-      ${list.map(p => `<button type="button" class="pm-li${p.participantId === perm.selMember ? ' sel' : ''}" data-pm-mem="${esc(p.participantId)}" aria-current="${p.participantId === perm.selMember}"><b>${esc(p.name)}</b>${perm.draft.has(p.participantId) ? '<span class="pm-chg-tag">變更</span>' : ''}<span class="muted small">${p.memberType === 'ai' ? `AI · ${esc(ownerOf(p)?.name || '')}的` : '人類'}</span></button>`).join('') || '<p class="muted small pm-pad">找不到成員</p>'}</section>`;
+    const li = p => { const c = permCur(p); return `<button type="button" class="pm-li${p.participantId === perm.selMember ? ' sel' : ''}" data-pm-mem="${esc(p.participantId)}" aria-current="${p.participantId === perm.selMember}"><b>${esc(p.name)}</b>${perm.draft.has(p.participantId) ? '<span class="pm-chg-tag">變更</span>' : ''}<span class="muted small">${c.cross ? '全部' : `${c.projects.size} 專案`}</span></button>`; };
+    const hs = list.filter(p => p.memberType === 'human'), as = list.filter(p => p.memberType === 'ai');
+    const left = `<section class="pm-col pm-list" aria-label="成員清單"><div class="pm-search">${pmViewSeg()}<input id="pm-mq" type="search" placeholder="搜尋成員（${all.length} 人）" aria-label="搜尋成員" value="${esc(perm.mq)}"></div>
+      ${hs.length ? `<div class="pm-sec">人類</div>${hs.map(li).join('')}` : ''}${as.length ? `<div class="pm-sec">AI</div>${as.map(li).join('')}` : ''}${list.length ? '' : '<p class="muted small pm-pad">找不到成員</p>'}</section>`;
     const p = state.participants.get(perm.selMember);
     if (!p) return `<div class="pm-split">${left}</div>`;
     const c = permCur(p), b = permBase(p), id = esc(p.participantId), isAdm = p.participantId === state.projMeta.adminId;
-    const chips = c.cross ? `<span class="pm-chip fixed">跨專案角色：全部專案</span>${p.memberType === 'human' ? PROJECTS.map(x => `<span class="pm-chip">${esc(projName(x))} · ${permRoleHtml(p, x)}</span>`).join('') : ''}`
-      : PROJECTS.filter(x => c.projects.has(x)).map(x => `<span class="pm-chip${b.cross || b.projects.has(x) ? '' : ' chg'}">${esc(projName(x))}${(c.leaders || b.leaders).has(x) ? ' ★' : ''}${p.memberType === 'human' ? ` · ${permRoleHtml(p, x)}` : ''}${canRemove(p, x) ? `<button type="button" class="pm-x" data-pm-rm="${id}" data-pj="${esc(x)}" aria-label="把 ${esc(p.name)} 移出${esc(projName(x))}">✕</button>` : ''}</span>`).join('') || '<span class="muted small">還沒有專案</span>';
+    const projs = c.cross ? PROJECTS : PROJECTS.filter(x => c.projects.has(x));
     const gone = c.cross ? [] : PROJECTS.filter(x => (b.cross || b.projects.has(x)) && !c.projects.has(x));
     const addable = c.cross ? [] : PROJECTS.filter(x => !c.projects.has(x) && permCanEdit(x));
     const addWhy = x => (p.memberType === 'ai' && !(ownerOf(p) && inProj(ownerOf(p), x)) ? `主人不在${projName(x)}` : '');
     const menu = perm.addOpen ? `<div class="pm-addmenu" role="menu">${addable.map(x => { const why = addWhy(x); return `<button type="button" role="menuitem" data-pm-addp="${esc(x)}" ${why ? `disabled title="${esc(why)}"` : ''}>${esc(projName(x))}${why ? `<span class="muted small">🔒 ${esc(why)}</span>` : ''}</button>`; }).join('')}</div>` : '';
-    const right = `<section class="pm-col pm-detail" aria-label="${esc(p.name)} 的專案">
+    // C-233：所屬專案也是「專案｜角色｜leader｜移出」表格；專案名可以點，跳到依專案
+    const row = x => {
+      const isNew = !(b.cross || b.projects.has(x)), lchg = (c.leaders || b.leaders).has(x) !== b.leaders.has(x);
+      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name"><button type="button" class="pm-name-link" data-pm-goto-proj="${esc(x)}" title="看${esc(projName(x))}的成員">${esc(projName(x))}</button>${isNew ? '<span class="pill-tag yellow">新加入</span>' : ''}</td><td class="c-role">${pmRoleCell(p, x)}</td><td class="c-lead">${pmLeadCell(p, x)}</td><td class="c-act">${pmActCell(p, x, '在下面「帳號」')}</td></tr>`;
+    };
+    const goneRow = x => `<tr class="pm-tr chg pm-gone"><td class="c-name"><s>${esc(projName(x))}</s><span class="pill-tag red">將離開</span></td><td class="c-role"><span class="muted">—</span></td><td class="c-lead"><span class="muted">—</span></td><td class="c-act"><button type="button" class="link small" data-pm-restore="${id}" data-pj="${esc(x)}">復原</button></td></tr>`;
+    const addRow = addable.length ? `<tr class="pm-add-tr"><td colspan="4"><span class="pm-addwrap"><button type="button" class="link pm-add-proj" data-pm-addopen aria-expanded="${perm.addOpen}">＋ 加入專案</button>${menu}</span></td></tr>` : '';
+    const crossNow = state.projMeta.crossRoleIds.map(x => state.participants.get(x)?.name).filter(Boolean);
+    const sub = [p.memberType === 'ai' ? 'AI' : '人類', permSub(p), p.lastSeenAt ? `最後上線 ${agoText(p.lastSeenAt)}` : ''].filter(Boolean).join(' · ');
+    const account = isAdmin() ? `<div class="pm-sec">帳號</div>
+        <div class="pm-set"><div class="pm-set-t"><b id="pm-cross-t">跨專案角色</b><span class="pm-sub">開了會自動在所有專案${crossNow.length ? `（現在：${esc(crossNow.join('、'))}）` : ''}；跟其他變更一起儲存</span></div>
+          ${pmSw(c.cross, `data-pm-cross="${id}" aria-describedby="pm-cross-t"`, c.cross !== b.cross, `${p.name} 跨專案角色`, isAdm && c.cross ? 'aria-disabled="true" title="管理員本人不能關掉自己的跨專案角色（避免沒人能管）"' : '')}</div>
+        ${p.memberType === 'human' && p.participantId !== meId() ? `<div class="pm-set"><div class="pm-set-t"><b>重設登入</b><span class="pm-sub">登出他所有裝置、作廢舊登入碼、清掉帳號密碼，產生新邀請連結（立即執行）</span></div><button type="button" class="btn small danger-outline" data-pm-reset="${id}">重設登入…</button></div>` : ''}` : '';
+    const right = `<section class="pm-col pm-detail" aria-label="${esc(p.name)} 的專案與帳號">
       ${narrowPerm() ? '<button type="button" class="ph-back pm-back" data-pm-back>‹ 成員清單</button>' : ''}
-      <div class="pm-dhead"><strong>${esc(p.name)}</strong>${isAdm ? '<span class="pill-tag blue">管理員</span>' : ''}<span class="muted small">${esc([p.memberType === 'ai' ? 'AI' : '人類', permSub(p)].filter(Boolean).join(' · '))}</span></div>
-      <div class="pm-mem-body"><div class="field-label">所屬專案</div>
-        <div class="pm-chips">${chips}${addable.length ? `<span class="pm-addwrap"><button type="button" class="pm-chip add" data-pm-addopen aria-expanded="${perm.addOpen}">＋ 加入專案</button>${menu}</span>` : ''}</div>
-        ${gone.length ? `<p class="small pm-gone-line">這次會離開：${gone.map(x => `<s>${esc(projName(x))}</s> <button type="button" class="link small" data-pm-restore="${id}" data-pj="${esc(x)}">復原</button>`).join('、')}</p>` : ''}
-        ${isAdmin() && p.memberType === 'human' && p.participantId !== meId() ? `<div class="pm-reset-line"><button type="button" class="btn small" data-pm-reset="${id}">重設登入</button><span class="muted small">登出他所有裝置、作廢舊登入碼，產生新邀請連結</span></div>` : ''}
-        ${isAdmin() ? `<div class="pm-cross-line"><span>跨專案角色</span>${pmSw(c.cross, `data-pm-cross="${id}"`, c.cross !== b.cross, `${p.name} 跨專案角色`, isAdm && c.cross ? 'aria-disabled="true" title="管理員本人不能關掉自己的跨專案角色（避免沒人能管）"' : '')}<span class="muted small">打開＝自動在所有專案</span></div>` : ''}
-      </div></section>`;
+      <div class="pm-dhead"><div class="pm-dtitle"><strong>${esc(p.name)}</strong>${isAdm ? '<span class="pill-tag blue">管理員</span>' : c.cross ? '<span class="pm-cross-tag">跨專案</span>' : ''}<span class="pm-sub"> · ${esc(sub)}</span></div></div>
+      <div class="pm-sec">所屬專案</div>
+      <table class="pm-table">${pmHead('專案')}<tbody>
+        ${projs.map(row).join('') || '<tr><td colspan="4" class="muted small">還沒有專案</td></tr>'}${gone.map(goneRow).join('')}${addRow}</tbody></table>
+      ${account}</section>`;
     return `<div class="pm-split${narrowPerm() ? (perm.mobileDetail ? ' m-detail' : ' m-list') : ''}">${left}${right}</div>`;
   }
   // 依成員加入專案時：人類有 AI 就問一次要不要一起加入
@@ -4746,22 +4774,57 @@
     });
     for (const id of pick) permAdd(state.participants.get(id), pj);
   }
+  // C-233：專案分頁＝群組名稱一張卡＋專案表格；改名／程式庫／異動紀錄／封存收進「⋯」
   function permProjectsHtml() {
-    return `<div class="pm-projs"><div class="pm-group-name"><label>群組名稱<input id="pm-group-name" maxlength="30" value="${esc(BASE_TITLE)}" aria-describedby="pm-gn-hint"></label><button type="button" class="btn small primary" data-pp="groupname">儲存</button><span class="muted small" id="pm-gn-hint">顯示在登入頁、左上角、分頁標題與 AI 接入設定。</span></div>
-      ${state.projectList.map(p => {
-      const blocked = !p.archived && p.openCards > 0, open = perm.openLog === p.id;
-      return `<div class="pa-row${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}">
-        <div class="pm-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}<span class="muted small">成員 ${p.memberCount} · 未結案卡 ${p.openCards}</span></div>
-        ${repoLine(p, !p.archived)}
-        <div class="pm-pacts">${p.archived ? '<button type="button" class="btn small" data-pp="unarchive">還原</button>'
-          : `<button type="button" class="btn small" data-pp="rename">改名</button><button type="button" class="btn small danger-outline" data-pp="archive" ${blocked ? `aria-disabled="true" title="還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案"` : ''}>封存</button>`}
-          <button type="button" class="link small" data-pp="log" aria-expanded="${open}">異動紀錄 ${open ? '▴' : '▾'}</button></div>
-        ${open ? `<ul class="pa-log">${(perm.events[p.id] || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul>` : ''}
-      </div>`;
-    }).join('')}
-      ${state.projectList.some(p => !p.archived && p.openCards) ? '<p class="muted small">「封存」不能按：還有未結案卡，請先結案或把卡移到別的專案。</p>' : ''}
-      <div class="pm-new"><input id="pm-new-name" maxlength="20" placeholder="新專案名稱" aria-label="新專案名稱"><button type="button" class="btn small primary" data-pp="create">新增專案</button></div>
-      <p class="muted small" id="pm-new-hint">${esc(newProjText())}，其他成員請到「依專案」加入。</p></div>`;
+    const list = state.projectList, active = list.filter(p => !p.archived);
+    const rows = list.map(p => {
+      const open = perm.openLog === p.id, blocked = !p.archived && p.openCards > 0, why = `還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案`;
+      const repo = p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
+        : p.archived ? '<span class="muted">—</span>' : `<span class="pm-sub">未填 · </span><button type="button" class="link small" data-pm-repo="${esc(p.id)}">設定</button>`;
+      const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
+          <button type="button" role="menuitem" data-pp="rename">改名</button>
+          <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">程式庫設定</button>
+          <button type="button" role="menuitem" data-pp="log">異動紀錄</button>
+          <button type="button" role="menuitem" class="danger" data-pp="archive" ${blocked ? `aria-disabled="true" title="${esc(why)}"` : ''}>封存…${blocked ? `<span class="pm-sub">${esc(why)}</span>` : ''}</button></div>` : '';
+      const last = p.archived ? '<button type="button" class="btn small" data-pp="unarchive">還原</button>'
+        : `<span class="pm-more-wrap"><button type="button" class="pm-more" data-pm-more="${esc(p.id)}" aria-haspopup="menu" aria-expanded="${perm.moreOpen === p.id}" aria-label="${esc(p.name)} 的更多動作">⋯</button>${menu}</span>`;
+      const log = open ? `<tr class="pm-log-tr" data-pj="${esc(p.id)}"><td colspan="6"><div class="pm-log-head"><b>異動紀錄 · ${esc(p.name)}</b><button type="button" class="link small" data-pp="log" aria-expanded="true">收起</button></div><ul class="pa-log">${(perm.events[p.id] || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul></td></tr>` : '';
+      return `<tr class="pm-prow${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}"><td class="c-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}</td><td class="c-code" data-label="API 代號" title="${esc(p.id)}">${esc(p.id)}</td><td class="c-num" data-label="成員">${p.memberCount}</td><td class="c-num2" data-label="未結案卡">${p.openCards}</td><td class="c-repo" data-label="程式庫">${repo}</td><td class="c-more">${last}</td></tr>${log}`;
+    }).join('');
+    return `<div class="pm-projs">
+      <div class="pm-card pm-group-name"><label for="pm-group-name">群組名稱</label><input id="pm-group-name" maxlength="30" value="${esc(BASE_TITLE)}" aria-describedby="pm-gn-hint"><button type="button" class="btn small primary" data-pp="groupname">儲存</button><span class="muted small" id="pm-gn-hint">顯示在登入頁、左上角、分頁標題與 AI 接入設定。</span></div>
+      <div class="pm-card"><div class="pm-card-head"><strong>專案 · ${active.length}</strong><span class="grow"></span><button type="button" class="btn primary small" data-pm-newproj>＋ 新增專案</button></div>
+        <table class="pm-table pm-ptable"><thead><tr><th scope="col">專案</th><th scope="col" class="c-code">API 代號</th><th scope="col" class="c-num">成員</th><th scope="col" class="c-num2">未結案卡</th><th scope="col" class="c-repo">程式庫</th><th scope="col" class="c-more"><span class="sr-only">動作</span></th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`;
+  }
+  // C-233：新增專案彈窗：名稱＋程式庫＋分支（選填）一次填完
+  function openNewProject() {
+    const body = openModal('新增專案', `<form id="np-form" class="stack">
+        <label class="field">專案名稱<input name="name" required maxlength="20" autocomplete="off"></label>
+        <label class="field">程式庫連結（選填）<input name="url" maxlength="300" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/帳號/專案"></label>
+        <label class="field">分支（選填）<input name="branch" maxlength="100" autocomplete="off" spellcheck="false" placeholder="main"></label>
+        <p class="muted small" id="pm-new-hint">${esc(newProjText())}，其他成員請到「成員」分頁加入。</p>
+        <p class="error" id="np-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="np-form">新增專案</button>' });
+    const f = body.querySelector('#np-form');
+    setTimeout(() => f.name.focus(), 30);
+    f.addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = body.querySelector('#np-err'), name = f.name.value.trim(), url = f.url.value.trim(), branch = f.branch.value.trim();
+      err.textContent = '';
+      if (!name) { err.textContent = '請輸入專案名稱'; return f.name.focus(); }
+      if (!url && branch) { err.textContent = '有分支就要填程式庫連結'; return f.url.focus(); }
+      if (url && (!/^https?:\/\//i.test(url) || url.includes('@'))) { err.textContent = url.includes('@') ? '連結裡不要放帳號密碼或 Token，只放網址' : '程式庫連結要用 https:// 開頭'; return f.url.focus(); }
+      try {
+        const r = await api('/api/projects', { method: 'POST', body: { name } });
+        let repoErr = '';
+        if (url) { try { await api(`/api/projects/${encodeURIComponent(r.id)}/repo`, { method: 'PUT', body: { url, branch } }); } catch (e2) { repoErr = e2.message; } }
+        closeModal();
+        await Promise.all([loadProjectList(), loadParticipants()]);
+        drawProjSwitch(); drawPerm();
+        toast(repoErr ? `已新增專案「${name}」，但程式庫沒存：${repoErr}` : crossNames().length ? `已新增專案「${name}」，你和 ${crossNames().join('、')} 已加入` : `已新增專案「${name}」，目前只有你`);
+      } catch (e2) { err.textContent = e2.message; }
+    });
   }
   function drawPermBar() {
     const bar = $('#pm-bar');
@@ -4774,20 +4837,25 @@
   function drawPerm() {
     const box = $('#page-work');
     if (state.page !== 'perm') return;
-    const keep = document.activeElement?.id, top = box.scrollTop;
-    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${isAdmin() ? '' : ' · 你是 leader'}</span></div>
-        ${isAdmin() ? `<button type="button" class="btn primary small pm-invite" data-pm-invite>＋邀請</button><div class="seg-scope" role="tablist" aria-label="分頁">${[['byProject', '依專案'], ['byMember', '依成員'], ['invites', '邀請'], ['projects', '專案設定']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>` : ''}</div>
-      ${isAdmin() ? '' : `<div class="pm-banner">你是 <b>${esc(myLeadProjects().map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(myLeadProjects().map(projName).join('、'))}的成員。其他專案只能看。</div>`}
-      <section class="wpanel pm-panel">${!isAdmin() || perm.tab === 'byProject' ? permByProjectHtml() : perm.tab === 'byMember' ? permByMemberHtml() : perm.tab === 'invites' ? permInvitesHtml() : permProjectsHtml()}</section>
+    const keep = document.activeElement?.id, top = box.scrollTop, admin = isAdmin();
+    if (!admin) perm.tab = 'members'; // C-233：leader 只有成員分頁
+    const nValid = (perm.invites || []).filter(iv => iv.status === '有效').length;
+    const tabs = admin ? `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${[['members', '成員'], ['projects', '專案'], ['invites', `邀請${nValid ? ` · ${nValid}` : ''}`]].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>` : '';
+    const body = perm.tab === 'projects' ? permProjectsHtml() : perm.tab === 'invites' ? permInvitesHtml() : permView() === 'byMember' ? permByMemberHtml() : permByProjectHtml();
+    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${admin ? '' : ' · 你是 leader'}</span></div>${tabs}</div>
+      ${admin ? '' : `<div class="pm-banner">你是 <b>${esc(myLeadProjects().map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(myLeadProjects().map(projName).join('、'))}的成員。其他專案只能看。</div>`}
+      <section class="wpanel pm-panel pm-tab-${perm.tab}">${body}</section>
       <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
     box.scrollTop = top;
     drawPermBar();
     if (['pm-pq', 'pm-mq', 'pm-pickq'].includes(keep)) { const q = $('#' + keep); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+    if (perm.moreOpen) box.querySelector('.pm-more-menu [role="menuitem"]')?.focus();
   }
   async function renderPermPage() {
     $('#page-work').classList.remove('is-board');
     await Promise.all([loadProjectList(), loadParticipants()]).catch(() => {});
     drawPerm();
+    if (isAdmin()) loadInvites(); // C-233：分頁上顯示有效邀請數
   }
   // C-190：只有「加入」時直接儲存（不會退回卡片），toast 可在 10 秒內復原
   async function permQuickAdd(ids, pj) {
@@ -4856,8 +4924,18 @@
   $('#page-work').addEventListener('click', async e => {
     if (state.page !== 'perm') return;
     const t = e.target;
+    // C-233：「⋯」選單開著時，點外面就關
+    if (perm.moreOpen && !t.closest('.pm-more-wrap')) { perm.moreOpen = null; drawPerm(); if (!t.closest('[data-pm-more]')) return; }
     const tab = t.closest('[data-pm-tab]');
-    if (tab) { perm.tab = tab.dataset.pmTab; if (perm.tab === 'invites') perm.invites = null; Object.assign(perm, { picker: false, addOpen: false, mobileDetail: false }); return drawPerm(); } // 切換檢視不丟變更
+    if (tab) { perm.tab = tab.dataset.pmTab; if (state.page === 'perm') loadInvites(); Object.assign(perm, { picker: false, addOpen: false, mobileDetail: false, moreOpen: null }); return drawPerm(); } // 切換檢視不丟變更
+    const vw = t.closest('[data-pm-view]');
+    if (vw) { Object.assign(perm, { memView: vw.dataset.pmView, picker: false, addOpen: false, mobileDetail: false }); return drawPerm(); }
+    const gm = t.closest('[data-pm-goto-mem]'), gp = t.closest('[data-pm-goto-proj]');
+    if (gm) { Object.assign(perm, { tab: 'members', memView: 'byMember', selMember: gm.dataset.pmGotoMem, addOpen: false, picker: false, mobileDetail: true, mq: '' }); return drawPerm(); }
+    if (gp) { Object.assign(perm, { tab: 'members', memView: 'byProject', selProj: gp.dataset.pmGotoProj, addOpen: false, picker: false, mobileDetail: true, pq: '' }); return drawPerm(); }
+    const more = t.closest('[data-pm-more]');
+    if (more) { perm.moreOpen = perm.moreOpen === more.dataset.pmMore ? null : more.dataset.pmMore; return drawPerm(); }
+    if (t.closest('[data-pm-newproj]')) return openNewProject();
     // C-202 邀請與重設登入
     if (t.closest('[data-pm-invite]')) return openInvite();
     if (t.closest('[data-pm-inv-reload]')) return loadInvites();
@@ -4904,13 +4982,14 @@
       return drawPerm();
     }
     const rp = t.closest('[data-pm-repo]'); // C-229
-    if (rp) return openRepoEditor(rp.dataset.pmRepo);
+    if (rp) { if (perm.moreOpen) { perm.moreOpen = null; drawPerm(); } return openRepoEditor(rp.dataset.pmRepo); }
     const act = t.closest('[data-pm-act]')?.dataset.pmAct;
     if (act === 'undo') { perm.draft.clear(); return drawPerm(); }
     if (act === 'save') return permSave();
     const pp = t.closest('[data-pp]');
     if (!pp) return;
     const id = pp.closest('[data-pj]')?.dataset.pj, a = pp.dataset.pp;
+    if (perm.moreOpen) perm.moreOpen = null; // 選單裡選了就收起
     if (a === 'groupname') {
       const name = $('#pm-group-name').value.trim();
       if (!name) return toast('請輸入群組名稱');
@@ -4933,7 +5012,7 @@
         if (!name || name === projName(id)) return;
         await api(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } });
       } else if (a === 'archive') {
-        if (pp.getAttribute('aria-disabled') === 'true') return toast(pp.title);
+        if (pp.getAttribute('aria-disabled') === 'true') { drawPerm(); return toast(pp.title); }
         if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(id))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以還原。` })) return;
         await api(`/api/projects/${encodeURIComponent(id)}/archive`, { method: 'POST' });
       } else if (a === 'unarchive') {
@@ -4943,6 +5022,12 @@
       if (perm.openLog) perm.events[perm.openLog] = (await api(`/api/projects/${encodeURIComponent(perm.openLog)}/events?limit=20`).catch(() => ({ items: [] }))).items;
       drawProjSwitch(); drawPerm();
     } catch (err) { toast(err.message); }
+  });
+  $('#page-work').addEventListener('keydown', e => {
+    if (state.page !== 'perm' || !perm.moreOpen) return;
+    const items = [...document.querySelectorAll('.pm-more-menu [role="menuitem"]')], i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const id = perm.moreOpen; perm.moreOpen = null; drawPerm(); document.querySelector(`[data-pm-more="${CSS.escape(id)}"]`)?.focus(); }
+    else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && items.length) { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
   });
   $('#page-work').addEventListener('input', e => {
     if (state.page !== 'perm') return;
@@ -5175,7 +5260,7 @@
       try {
         const out = await api('/api/invites', { method: 'POST', body: { name: f.get('name').trim(), projects, roles } });
         showInviteLink(out);
-        if (state.page === 'perm' && perm.tab === 'invites') loadInvites();
+        if (state.page === 'perm') loadInvites();
       } catch (err) { body.querySelector('#inv-new-err').textContent = err.message; }
     });
   }
@@ -5212,10 +5297,10 @@
       const k = e.target.closest('[data-inv]')?.dataset.inv;
       if (k === 'copy') toast((await copyText(out.url)) ? '已複製邀請連結' : '複製失敗');
       else if (k === 'regen') {
-        try { showInviteLink(await api(`/api/invites/${encodeURIComponent(iv.id)}/regenerate`, { method: 'POST' }), title); toast('已重新產生，舊連結已失效'); if (perm.tab === 'invites') loadInvites(); } catch (err) { toast(err.message); }
+        try { showInviteLink(await api(`/api/invites/${encodeURIComponent(iv.id)}/regenerate`, { method: 'POST' }), title); toast('已重新產生，舊連結已失效'); if (state.page === 'perm') loadInvites(); } catch (err) { toast(err.message); }
       } else if (k === 'cancel') {
         if (!await confirmDialog({ title: '取消這個邀請？', confirmText: '取消邀請', danger: true, message: `給 ${esc(iv.name)} 的連結會立刻失效。` })) return;
-        try { await api(`/api/invites/${encodeURIComponent(iv.id)}/cancel`, { method: 'POST' }); clearInterval(invTimer); closeModal(); toast('已取消邀請'); if (perm.tab === 'invites') loadInvites(); } catch (err) { toast(err.message); }
+        try { await api(`/api/invites/${encodeURIComponent(iv.id)}/cancel`, { method: 'POST' }); clearInterval(invTimer); closeModal(); toast('已取消邀請'); if (state.page === 'perm') loadInvites(); } catch (err) { toast(err.message); }
       }
     });
   }
@@ -5224,17 +5309,19 @@
     try { perm.invites = (await api('/api/invites')).items; } catch (err) { perm.invites = []; toast(err.message); }
     drawPerm();
   }
+  // C-233：邀請分頁：名字｜專案與角色｜狀態｜動作（按鈕固定在最後一欄）
   function permInvitesHtml() {
     if (!perm.invites) { loadInvites(); return '<p class="muted pm-pad">讀取中…</p>'; }
     const cls = { 有效: 'green', 已使用: 'blue', 已過期: 'grey', 已取消: 'grey' };
-    const when = iv => iv.status === '有效' ? `剩 ${Math.max(1, Math.ceil((Date.parse(iv.expiresAt) - Date.now()) / 60000))} 分鐘`
-      : iv.status === '已使用' ? `${fmtDate(iv.usedAt)} 加入` : `${fmtDate(iv.createdAt)} 產生`;
-    return `<div class="inv-list-head"><span class="muted small">最近 7 天的邀請。連結 15 分鐘有效、只能用一次；過期可以「重發」（同樣內容、新連結）。</span><button type="button" class="btn small" data-pm-inv-reload>重新整理</button></div>
-      <ul class="inv-list">${perm.invites.map(iv => `<li class="inv-row"><div class="inv-main"><b>${esc(iv.name)}</b>${iv.kind === 'reset' ? '<span class="pill-tag">重設登入</span>' : ''}
-          <span class="muted small">${esc([iv.role, iv.projects.length ? iv.projects.map(projName).join('、') : '還沒有專案'].filter(Boolean).join(' · '))}</span></div>
-        <span class="inv-st ${cls[iv.status]}">${iv.status}</span><span class="muted small inv-when">${esc(when(iv))}</span>
-        <span class="inv-acts">${iv.status === '有效' ? `<button type="button" class="btn small" data-pm-inv-regen="${esc(iv.id)}">重新產生</button><button type="button" class="btn small" data-pm-inv-cancel="${esc(iv.id)}">取消</button>`
-          : iv.status === '已使用' ? '' : `<button type="button" class="btn small primary" data-pm-inv-regen="${esc(iv.id)}">重發</button>`}</span></li>`).join('') || '<li class="muted small pm-pad">最近 7 天沒有邀請。按右上「＋邀請」邀請新成員。</li>'}</ul>`;
+    const st = iv => iv.status === '有效' ? `有效 · 剩 ${Math.max(1, Math.ceil((Date.parse(iv.expiresAt) - Date.now()) / 60000))} 分`
+      : iv.status === '已使用' ? `已使用 · ${fmtDate(iv.usedAt).split(' ')[0]}` : iv.status;
+    const projText = iv => iv.projects.map(x => projName(x) + (iv.roles?.[x] ? ` · ${iv.roles[x]}` : '')).join('、') + (!iv.roles && iv.role ? ` · ${iv.role}` : '') || (iv.kind === 'reset' ? '—' : '還沒有專案');
+    const acts = iv => iv.status === '有效' ? `<button type="button" class="btn small" data-pm-inv-regen="${esc(iv.id)}">重新產生</button><button type="button" class="btn small" data-pm-inv-cancel="${esc(iv.id)}">取消</button>`
+      : iv.status === '已使用' ? '' : `<button type="button" class="btn small primary" data-pm-inv-regen="${esc(iv.id)}">重發</button>`;
+    return `<div class="pm-projs"><div class="pm-card"><div class="pm-card-head"><strong>最近 7 天的邀請</strong><span class="muted small">連結 15 分鐘有效、只能用一次；過期可以「重發」（同樣內容、新連結）</span><span class="grow"></span><button type="button" class="link small" data-pm-inv-reload>重新整理</button><button type="button" class="btn primary small" data-pm-invite>＋ 邀請新的人</button></div>
+      ${perm.invites.length ? `<table class="pm-table pm-itable"><thead><tr><th scope="col">名字</th><th scope="col" class="c-proj">專案與角色</th><th scope="col" class="c-st">狀態</th><th scope="col" class="c-iact"><span class="sr-only">動作</span></th></tr></thead><tbody>
+        ${perm.invites.map(iv => `<tr class="pm-irow"><td class="c-name"><b>${esc(iv.name)}</b>${iv.kind === 'reset' ? '<span class="pill-tag yellow">重設登入</span>' : ''}</td><td class="c-proj">${esc(projText(iv))}</td><td class="c-st"><span class="inv-st ${cls[iv.status]}">${esc(st(iv))}</span></td><td class="c-iact">${acts(iv)}</td></tr>`).join('')}</tbody></table>`
+        : '<p class="muted small pm-pad">最近 7 天沒有邀請。按「＋ 邀請新的人」邀請新成員。</p>'}</div></div>`;
   }
   async function resetLogin(p) {
     if (!await confirmDialog({ title: `重設 ${esc(p.name)} 的登入？`, confirmText: '重設登入', danger: true,
