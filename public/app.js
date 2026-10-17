@@ -1332,6 +1332,23 @@
   if (window.visualViewport) { // C-215：手機鍵盤高度，給固定在底部的卡片回覆框用
     const kb = () => document.documentElement.style.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - visualViewport.height - visualViewport.offsetTop)) + 'px');
     visualViewport.addEventListener('resize', kb); visualViewport.addEventListener('scroll', kb);
+    // C-230：觸控裝置上 App 的高度與位置跟著 iPhone 回報的可見區走（--vvh／--vvt），鍵盤開時整個 App 縮到鍵盤上方，輸入框與送出鈕不會被蓋住；電腦不變
+    if (matchMedia('(pointer: coarse)').matches) {
+      const root = document.documentElement;
+      root.classList.add('vv-on');
+      let last = '';
+      const vv = () => {
+        const h = Math.round(visualViewport.height), t = Math.round(visualViewport.offsetTop), key = h + ',' + t;
+        if (key === last) return;
+        const grew = last && h < Number(last.split(',')[0]);
+        last = key;
+        root.style.setProperty('--vvh', h + 'px');
+        root.style.setProperty('--vvt', t + 'px');
+        // 鍵盤剛打開：把正在打字的框捲進它所在的清單可見處
+        if (grew && typingField()) { const el = document.activeElement; if (el.closest('#app')) requestAnimationFrame(() => el.scrollIntoView({ block: 'nearest' })); }
+      };
+      visualViewport.addEventListener('resize', vv); visualViewport.addEventListener('scroll', vv); vv();
+    }
   }
   narrowMq.addEventListener?.('change', () => { if (!store.get(MSG_VIEW_KEY) && state.me) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; syncFilterBar(); } });
   async function jumpTo(id) {
@@ -1915,7 +1932,7 @@
         + inlBtn(key, 'defer', '先擱著（暫緩）');
     }
     return `<div class="inl" data-inl-root="${esc(key)}">
-      <div class="inl-field"><textarea class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${kind === 'card' ? '想說什麼都可以寫在這裡，打 @ 可以指定人（Ctrl+Enter 送出）' : hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
+      <div class="inl-field"><textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${kind === 'card' ? '想說什麼都可以寫在這裡，打 @ 可以指定人（Ctrl+Enter 送出）' : hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
         ${kind === 'card' ? '<ul class="mention-list" role="listbox" aria-label="選擇成員" hidden></ul>' : ''}</div>
       ${kind === 'card' ? cardToHtml(key, c) : ''}
       <div class="inl-actions">${btns}</div>
@@ -2806,7 +2823,7 @@
       <form id="handover-form" class="stack">
         <div class="info-box">${esc(d.cardId)} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態回到「待處理」，並在群組 @ 對方通知。</div>
         <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
-        <label>交接說明（必填）<textarea name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
+        <label>交接說明（必填）<textarea autocomplete="off" autocorrect="on" name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
         <p class="muted small">說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。</p>
         <p class="error" id="handover-error" role="alert"></p>
       </form>`, { size: 'form', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="handover-form">確認交接</button>' });
@@ -2919,18 +2936,18 @@
             ${d.type === '決策' ? '' : `<label>類型<select name="type">${['工作', '阻塞', NOTE].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`}
             ${d.type === '決策' && !d.decision?.result ? `
             <label>決策問題<input name="question" required maxlength="200" value="${esc(d.decision.question)}"></label>
-            <label>建議方案<textarea name="recommendation" rows="2" maxlength="500">${esc(d.decision.recommendation)}</textarea></label>
-            <label>選項<textarea name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」">${esc((d.decision.options || []).join('\n'))}</textarea></label>
+            <label>建議方案<textarea autocomplete="off" autocorrect="on" name="recommendation" rows="2" maxlength="500">${esc(d.decision.recommendation)}</textarea></label>
+            <label>選項<textarea autocomplete="off" autocorrect="on" name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」">${esc((d.decision.options || []).join('\n'))}</textarea></label>
             <label>影響<input name="impact" maxlength="200" value="${esc(d.decision.impact)}"></label>
             <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
             <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
             <label>專案<select name="project">${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
-            <label>${d.type === NOTE ? '內容' : '原因'}<textarea name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
+            <label>${d.type === NOTE ? '內容' : '原因'}<textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
             <label>負責人<select name="ownerId">${peopleOpts(d.project, d.owner?.participantId, '未指派')}</select></label>
-            <label>下一步<textarea name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
+            <label>下一步<textarea autocomplete="off" autocorrect="on" name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
             <label>阻塞<input name="blocker" maxlength="300" value="${esc(d.blocker)}"></label>
             <label>等誰<select name="waitForId">${peopleOpts(d.project, d.waitFor?.participantId, '不用等人')}</select></label>
-            <label>完成條件<textarea name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
+            <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
           </form>` : `
           <dl class="dfields">
@@ -2946,7 +2963,7 @@
           ${msgs || '<p class="muted small">還沒有關聯訊息。</p>'}
           ${d.type === NOTE ? `<div class="group-title">紀錄 · ${(d.notes || []).length}</div>
             <div class="note-list">${(d.notes || []).map(n => `<div class="note-entry"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${esc(shortTime(n.at))}</span><div>${esc(n.text)}</div></div>`).join('') || '<p class="muted small">還沒有紀錄。</p>'}</div>
-            <div class="note-add"><textarea id="note-text" rows="2" maxlength="1000" placeholder="寫一筆紀錄（只存卡上，不發群組）" aria-label="寫一筆紀錄"></textarea><button type="button" class="btn primary" data-act="add-note">記下</button></div>`
+            <div class="note-add"><textarea autocomplete="off" autocorrect="on" id="note-text" rows="2" maxlength="1000" placeholder="寫一筆紀錄（只存卡上，不發群組）" aria-label="寫一筆紀錄"></textarea><button type="button" class="btn primary" data-act="add-note">記下</button></div>`
           : !narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
           <div class="group-title">${d.type === NOTE ? '變更紀錄' : '紀錄'}</div>
           <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>
@@ -3041,8 +3058,8 @@
         <details id="nc-more" ${sg || srcMsg || store.get('aigile-switch-nc-more') === '1' ? 'open' : ''}><summary>更多欄位 ▾（原因、狀態、下一步、完成條件、等誰）</summary><div class="stack nc-more-body">
         <div id="nc-decision" class="stack" hidden>
           <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
-          <label>建議方案<textarea name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
-          <label>選項<textarea name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」"></textarea>
+          <label>建議方案<textarea autocomplete="off" autocorrect="on" name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
+          <label>選項<textarea autocomplete="off" autocorrect="on" name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」"></textarea>
             <span class="field-hint">決策者另外一定能選「不同意」「要求補充」。</span></label>
           <div class="two-col">
             <label>影響<input name="impact" maxlength="200" placeholder="例如：UX、PG"></label>
@@ -3050,10 +3067,10 @@
           </div>
           <label>決定後<input name="afterNext" maxlength="300" placeholder="決定後下一步是什麼"></label>
         </div>
-        <label><span class="nc-reason-l">原因</span><textarea name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
+        <label><span class="nc-reason-l">原因</span><textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
         <label>狀態<select name="status">${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
-        <label>下一步<textarea name="next" rows="2" maxlength="300"></textarea></label>
-        <label>完成條件<textarea name="criteria" rows="2" maxlength="500"></textarea></label>
+        <label>下一步<textarea autocomplete="off" autocorrect="on" name="next" rows="2" maxlength="300"></textarea></label>
+        <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500"></textarea></label>
         <label>等誰<select name="waitForId">${opts('不用等人')}</select></label>
         </div></details>
         <p class="muted small">卡片內容所有成員都看得到，請勿填入內部路徑、程式碼或客戶個資。</p>
@@ -3196,7 +3213,7 @@
     if (dcard) { // 這則在講一張等我決定的決策卡：只送意見，或暫緩；選項與「同意」到決策卡上按
       const id = esc(m.messageId);
       return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(dcard.cardId)} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
-      <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>先擱著（暫緩）</button></div>
       <p class="muted small inl-note">留言會通知提案人；先擱著會移出收件匣，之後可在工作頁恢復。</p>
@@ -3215,7 +3232,7 @@
     };
     return `<div class="auth-row quick" data-q-root="${id}">
       ${qs.map(qBlock).join('')}
-      <textarea class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions">
         <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || (missing && !textOnly) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button>
@@ -3955,7 +3972,7 @@
         <hr>
         <div><div class="group-title flush">AI 設定六題</div><span class="field-hint">皆為必填，每題上限 1000 字。</span></div>
         <label>1. AI 名稱<input name="name" required maxlength="40"></label>
-        ${fields.map(f => `<label class="ta-field"><span class="ta-head"><span>${esc(f.label)}</span><span class="counter" data-count="${f.key}">0/1000</span></span><textarea name="${f.key}" rows="4" required maxlength="1000"></textarea></label>`).join('')}
+        ${fields.map(f => `<label class="ta-field"><span class="ta-head"><span>${esc(f.label)}</span><span class="counter" data-count="${f.key}">0/1000</span></span><textarea autocomplete="off" autocorrect="on" name="${f.key}" rows="4" required maxlength="1000"></textarea></label>`).join('')}
         <p class="error" id="ai-error" role="alert"></p>
       </form>`, {
       size: 'form',
@@ -4272,7 +4289,7 @@
       ${isImg && !problem ? `<img class="up-preview" alt="截圖預覽" src="${previewUrl}">` : ''}
       ${problem ? `<div class="warn-box red">${esc(problem)}</div>` : `
       <div class="warn-box">上傳到平台等同把資料送到行外，所有群組成員都能下載，1 小時後自動刪除。${isImg ? '截圖請先確認沒有客戶資料（尤其行內畫面）。' : ''}</div>
-      <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea id="up-note" rows="3" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></div></label>
+      <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea autocomplete="off" autocorrect="on" id="up-note" rows="3" maxlength="1500" placeholder="例如：@劉昱志的程式開發助手 這是今天的會議紀錄"></textarea></div></label>
       <p class="mention-warn" id="up-warn" role="status" hidden></p>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>
       <p class="error" id="up-error" role="alert"></p>`}`, problem ? {} : {

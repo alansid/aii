@@ -1838,3 +1838,6 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 .gr-ck input { width: 20px; height: 20px; margin-top: 2px; flex: none; }
 .gr-ck small { display: block; font-weight: 400; color: var(--muted); }
 .gr-never { line-height: 1.7; }
+
+/* ===== C-230 觸控裝置：App 跟著可見區（鍵盤開時縮到鍵盤上方） ===== */
+html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); }
