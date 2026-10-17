@@ -43,7 +43,7 @@ export default {
       if (!(res.headers.get('content-type') || '').includes('text/html')) return res;
       const h = new Headers(res.headers);
       h.delete('content-length'); h.delete('etag'); h.set('cache-control', 'no-cache');
-      return new Response(await app(env).pageHtml(await res.text()), { status: res.status, headers: h });
+      return new Response(await app(env).pageHtml(await res.text(), url.origin), { status: res.status, headers: h });
     }
     return app(env)(request, url.origin);
   },

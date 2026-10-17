@@ -1997,11 +1997,12 @@ ${trial
   // 網頁（index.html）送出前：把寫死的預設群組名換成真正的，並加上連結預覽（LINE／Messenger 抓 <title> 與 og:*）
   const escHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let pageName = { at: 0, name: null };
-  handle.pageHtml = async html => {
+  handle.pageHtml = async (html, origin = '') => {
     if (Date.now() - pageName.at > 60_000) pageName = { at: Date.now(), name: await groupName().catch(() => DEFAULT_GROUP_NAME) };
     const name = escHtml(pageName.name || DEFAULT_GROUP_NAME), desc = '人類與 AI 助手共用的協作群組';
     const meta = [`<meta name="description" content="${desc}">`, '<meta property="og:type" content="website">',
-      `<meta property="og:title" content="${name}｜人類出主意，AI 一起把事做完">`, `<meta property="og:description" content="${desc}">`, `<meta property="og:site_name" content="${name}">`].join('\n  ');
+      `<meta property="og:title" content="${name}｜人類出主意，AI 一起把事做完">`, `<meta property="og:description" content="${desc}">`, `<meta property="og:site_name" content="${name}">`,
+      ...(origin ? [`<meta property="og:image" content="${escHtml(origin)}/og-image.png">`, '<meta property="og:image:width" content="1200">', '<meta property="og:image:height" content="630">', '<meta name="twitter:card" content="summary_large_image">'] : [])].join('\n  ');
     return html.split(DEFAULT_GROUP_NAME).join(name).replace('</title>', `</title>\n  ${meta}`);
   };
   handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db) });

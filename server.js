@@ -45,7 +45,7 @@ setInterval(scheduled, 10 * 60_000).unref();
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 
-function serveStatic(res, pathname) {
+function serveStatic(res, pathname, origin) {
   let rel;
   try { rel = pathname === '/' ? '/index.html' : decodeURIComponent(pathname); } catch { rel = '/'; }
   let file = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -55,7 +55,7 @@ function serveStatic(res, pathname) {
     return res.end('Not found');
   }
   if (path.extname(file) === '.html') { // 跟正式環境一樣：換上群組名與連結預覽
-    return handle.pageHtml(fs.readFileSync(file, 'utf8')).then(html => { res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' }); res.end(html); });
+    return handle.pageHtml(fs.readFileSync(file, 'utf8'), origin).then(html => { res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' }); res.end(html); });
   }
   res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
   fs.createReadStream(file).pipe(res);
@@ -64,7 +64,7 @@ function serveStatic(res, pathname) {
 http.createServer(async (req, res) => {
   const base = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
   const url = new URL(req.url, base);
-  if (!url.pathname.startsWith('/api/') && url.pathname !== '/docs/ai-integration.md') return serveStatic(res, url.pathname);
+  if (!url.pathname.startsWith('/api/') && url.pathname !== '/docs/ai-integration.md') return serveStatic(res, url.pathname, url.origin);
 
   const chunks = [];
   for await (const c of req) chunks.push(c);
