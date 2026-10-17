@@ -132,6 +132,12 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal((await put(liu.token, plat.participantId, ['平台', newId])).status, 200, '可把成員加入新專案');
     const nc = (await call(liu.token, '/api/cards', 'POST', { requestId: 'req_np1', title: '新專案的卡', project: newId })).body;
     assert.equal(nc.project, newId, '新專案可以建卡');
+    // C-213：屬於部分專案（兩個以上）的成員用 project=mine 查詢，要回自己各專案的內容（原本少綁參數會出錯）
+    const pm = await call(plat.token, '/api/messages?limit=100&project=mine');
+    assert.equal(pm.status, 200, 'C-213：兩個專案的成員 project=mine 查訊息不出錯');
+    const pc = await call(plat.token, '/api/cards?project=mine');
+    assert.equal(pc.status, 200, 'C-213：project=mine 查卡片不出錯');
+    assert.ok(pc.body.items.some(c => c.cardId === nc.cardId), 'C-213：查得到自己另一個專案的卡');
     // 改名：只改 name，id 不變，卡片仍屬於它
     assert.equal((await call(liu.token, `/api/projects/${newId}`, 'PATCH', { name: '新專案乙' })).status, 200);
     assert.equal((await call(liu.token, '/api/projects')).body.items.find(p => p.id === newId).name, '新專案乙');

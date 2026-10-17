@@ -133,7 +133,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     else throw invalid(`project 需為：${PROJECTS.join('、')}、mine`);
     if (list.length === PROJECTS.length) return null;
     if (!list.length) return { sql: withNull ? `(${col} IS NULL)` : '(1 = 0)', args: [] };
-    return { sql: `(${col} = ?${withNull ? ` OR ${col} IS NULL` : ''})`, args: list };
+    // C-213：多個專案要用 IN，不然只綁得到第一個參數
+    return { sql: `(${col} IN (${list.map(() => '?').join(',')})${withNull ? ` OR ${col} IS NULL` : ''})`, args: list };
   }
   // C-146 A 隔離：沒有屬於全部專案的成員，只看得到自己專案、全部專案（project 為空）與隔離起算前的舊訊息
   let isoSince = null, isoAt = 0;
