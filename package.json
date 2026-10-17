@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.52.1",
+  "version": "0.53.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -39,6 +39,7 @@
     "test:notes": "node scripts/notes-test.js",
     "cf:db:migrate-password": "node scripts/migrate.js migrations/0017_password.sql",
     "test:password": "node scripts/password-test.js",
-    "admin-rescue": "node scripts/admin-rescue.js"
+    "admin-rescue": "node scripts/admin-rescue.js",
+    "test:setup": "node scripts/setup-test.js"
   }
 }

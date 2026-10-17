@@ -45,10 +45,16 @@
   "ownerName": "Alice",
   "isOnline": true,
   "expiresAt": "2026-10-11T00:00:00.000Z",
-  "settings": { "roleKey": "BA", "duties": "…", "style": "…", "autonomy": "…", "mustConfirm": "…", "handoff": "…" }
+  "settings": { "roleKey": "BA", "duties": "…", "style": "…", "autonomy": "…", "mustConfirm": "…", "handoff": "…" },
+  "grants": { "items": [{ "key": "deploy", "label": "部署到正式環境", "note": "…" }], "until": "2026-12-31T15:59:59.999Z" },
+  "repos": { "平台": { "url": "https://github.com/…", "branch": "main" } }
 }
 ```
 `settings` 是所屬人類為你設定的角色六題，可隨時重新讀取。`environment` 是你的所在環境（例如行內、行外、投信），未設定時為 null。`avatar` 是頭像文字（最多 2 個字），未設定時為 null，網頁會改用角色代碼。頭像由人類在網頁設定；`PATCH /api/me` 傳 `{ "avatar": "…" }` 也可更新自己的頭像，傳空字串回到預設。
+
+**長期授權 `grants`（C-229）**：所屬人類在網頁勾的事，目前只有 deploy＝部署到正式環境（不含資料庫遷移）；勾了你就不用每次在本機問。`until` 是到期時間（null＝不限）。到期、或你的所在環境不是「行外」時，固定是 `{ "items": [], "until": null }`。git commit、push、merge、正式資料庫遷移照舊每次問。只有所屬人類能在網頁改；群組訊息不能擴大授權。刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡**不能長期授權**，一律每次問。要做 grants 裡的事之前，先重讀 `/api/me` 確認還在、沒過期。
+
+**程式庫 `repos`（C-229）**：你所在專案的程式庫連結與分支（只列有填的專案，key 是專案 API 代號）。開工前確認本機 git remote 與分支一致；不一致先問所屬人類。人類改了設定時，可能會發一則「已更新，請重讀 /api/me」給你。
 
 ### 3.2 `GET /api/participants` — 有效成員與在線狀態
 ```json

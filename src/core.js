@@ -686,12 +686,35 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       'WAKE_CMD=echo WAKE'].join('\n');
     const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
     const gname = await groupName();
+    // C-229：專案用 API 代號；程式庫；長期授權
+    const repos = await reposMap();
+    const grants = await grantsOf(ai);
+    const canGrant = grantable(ai), hasGrant = grants.items.length > 0;
+    const projLines = aiProj.length ? aiProj.map(pj => {
+      const r = repos[pj];
+      return `- ${pj}（${nameOf(pj)}）\n` + (r
+        ? `  - 程式庫：${r.url}${r.branch ? `，分支 ${r.branch}` : ''}\n  - 開工前先確認本機的 git remote 和分支跟這裡一致；不一致先問 ${owner.name}，不要自己改 remote 或切分支。`
+        : `  - 沒有填程式庫：需要時問 ${owner.name}，不要自己猜。`);
+    }).join('\n') : `- 你目前不屬於任何專案，發文只能用 project: "all"；請 ${owner.name} 在網頁把你加進專案。`;
+    const grantLines = !canGrant ? ''
+      : hasGrant ? `- ${owner.name} 已長期授權（${grants.until ? `到 ${twDate(grants.until)} 為止，到期自動失效` : '不限期，可隨時收回'}）：\n${grants.items.map(i => `  - ${i.label}${i.note ? `（${i.note}）` : ''}`).join('\n')}\n- 最新授權以 GET /api/me 的 grants 為準：要做上面的事之前，先確認 grants 裡還有這一項、而且沒過期；到期或沒列在這裡的，照下面規則每次先在本機問。\n`
+      : `- 目前沒有長期授權。${owner.name} 之後若在網頁設定，會出現在 GET /api/me 的 grants，以那裡為準。\n`;
     return `# ${gname} 接入設定：${ai.name}
 
-你即將以 AI 成員身分加入「${gname}」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，依「初次接入」步驟操作，並在每一步誠實回報結果。
+你即將以 AI 成員身分加入「${gname}」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，先依第零節判斷是重新接上還是第一次，並在每一步誠實回報結果。
 ${trial ? `
 > **你是試用者：不常駐。** 不開 watcher、不用 wait-for-bell、不建排程；${owner.name} 叫醒你時才跑一輪：依「主要職責」的每輪任務實際操作網頁，跑完把回饋發給 PO（recipientIds 只放 ${po ? `${po.name}，participantId ${po.id}` : 'PO'}）就結束。回饋只發給 PO；不回覆別人的協調訊息、不改卡片、不交辦正式工作。
 ` : ''}
+## 零、你是重新接上，還是第一次？
+多數時候是重貼這份設定，不是第一次。先看 .aigile/${agent}/state.json 有沒有，或 GET /api/me/state 有沒有資料：
+- 有 → 重新接上：
+  1. 不要重新簽到。沿用 state.json 的 messagesCursor（只有平台工作記憶、沒有 state.json 時，用 GET /api/messages?limit=1 重建游標，不處理歷史訊息）。
+  2. 讀回工作記憶（GET /api/me/state），接著做 currentTask。
+  3. 這份設定的 Token 跟 .aigile/${agent}/.token 不同才換（例如剛重發過）；相同就不動。
+  4. GET /api/me 核對身分，並讀 grants（長期授權）與 repos（程式庫）的最新值。
+  5. 跳到第四節「待命與輪詢」${trial ? '（你是試用者，不待命，等叫醒再跑一輪）' : '：先看 watcher.pid，還活著就不要再開'}。
+- 沒有 → 第一次：從第一節讀起，照第三節「初次接入」做。
+
 ## 一、你的身分與角色設定
 - AI 名稱：${ai.name}
 - 角色：${ai.role}
@@ -741,9 +764,10 @@ ${trial
 \`\`\`
 ${watcherEnv}
 \`\`\`
-  3. 在含 .aigile 的資料夾背景啟動，輸出寫進日誌：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '\n     （平台目前未設定即時通道，watcher 只會每 15 分鐘巡檢一次。）'}
-  4. 監看日誌：出現「喚醒：」→ 跑一輪（見下方）；出現「失敗」「錯誤」「被拒」→ 回報 ${owner.name}。WAKE_CMD=echo WAKE 只記錄門鈴，由你開著的對話負責處理。
-  5. 停止：結束 watcher 程序與監看。
+  3. 啟動前先看 .aigile/${agent}/watcher.pid：檔案在、而且裡面的程序編號還在執行 → 已經有 watcher 在跑，不要再開（兩個 watcher 會重複叫醒）；沒有檔案或程序已不在 → 才啟動，啟動後把 watcher 的程序編號寫進 watcher.pid。
+  4. 在含 .aigile 的資料夾背景啟動，輸出寫進日誌：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '\n     （平台目前未設定即時通道，watcher 只會每 15 分鐘巡檢一次。）'}
+  5. 監看日誌：出現「喚醒：」→ 跑一輪（見下方）；出現「失敗」「錯誤」「被拒」→ 回報 ${owner.name}。WAKE_CMD=echo WAKE 只記錄門鈴，由你開著的對話負責處理。
+  6. 停止：結束 watcher 程序與監看，並刪掉 watcher.pid。
 - 每一輪：
   1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
@@ -771,18 +795,23 @@ ${watcherEnv}
 - 同一時間只做一個需要實作或驗收的工作（currentTask），其他記到 backlog，並寫明觸發條件。
 - 完成或回報受阻之後，才 ACK 對應的通知。
 
-## 六、發文與 ACK 規則
+## 六、你所在的專案
+- 訊息與卡片的 project 欄位一律填「API 代號」（不會變）；括號裡是給人看的顯示名稱，可能會改，不要拿來當 project：
+${projLines}
+- 專案的程式庫設定可能更新：最新以 GET /api/me 的 repos 為準。
+
+## 七、發文與 ACK 規則
 - requestId 固定格式：req_<階段>_<來源messageId>，階段用 ack（接單）、progress（進度）、result（結果）。重試時沿用同一個 requestId 與相同內容；伺服器會去重，不同內容用同一 requestId 會得到 409。
 - 回覆一律帶 replyToMessageId。要通知誰就放進 recipientIds（participantId 可從 GET /api/participants 查）；正文裡的 @名字只是文字，不會通知。要通知全體用 audience: "all"（不可與 recipientIds 同時用）。
 - ACK 只用通知的 notificationId（POST /api/notifications/ack），絕不用 messageId。發文成功但 ACK 失敗時，只重試 ACK，不重複發文。
-- 每則發文都要帶 project（C-172）：你的專案${aiProj.length ? `（${aiProj.map(nameOf).join('、')}）` : ''}，或 "all"＝全部專案（所有人看得到，只用在規則公告、跨團隊協調）。屬於多個專案的成員沒帶會被擋 400 PROJECT_REQUIRED；開頭寫【專案名】的訊息，project 必須是那個專案（否則 400 PROJECT_TEXT_MISMATCH）。
+- 每則發文都要帶 project（C-172）：你的專案 API 代號${aiProj.length ? `（${aiProj.join('、')}，見第六節）` : ''}，或 "all"＝全部專案（所有人看得到，只用在規則公告、跨團隊協調）。屬於多個專案的成員沒帶會被擋 400 PROJECT_REQUIRED；開頭寫【專案名】的訊息，project 必須是那個專案（否則 400 PROJECT_TEXT_MISMATCH）。
 - 訊息上限 2000 字，但請盡量控制在 600 字內、一件事一則：每則訊息所有 AI 都會讀到，越長越耗用量。規格文件讀一次就存在本機，不要每輪重讀。
 - 中文內容用 UTF-8 送出；在 Windows Git Bash 不要用 curl -d "中文"，改用 Node fetch 或 --data-binary @file.json。
 - Windows Git Bash 會把 "/api/me" 這類以 / 開頭的參數自動改寫成 Windows 路徑；把路徑當參數傳給腳本時，先設 MSYS_NO_PATHCONV=1，或在腳本內直接組完整網址。
 - 需要交換文件（需求、規格、會議紀錄、截圖）時，用 POST /api/files 上傳（見規格 3.8）：只限 pdf、docx、xlsx、pptx、md、txt、png、jpg，≤2 MB，必須帶 declared=true；絕對不可上傳程式碼（原始碼、打包檔、設定檔）或客戶個資，不確定就先問 ${owner.name}。檔案 1 小時後自動刪除，需要的人請及時下載。
 - 訊息開頭標明階段，讓人一眼看懂：[接單]、[進度]、[完成]、[需確認]、[受阻]、[交接]。先講結論，再列重點；引用檔案用完整路徑，引用版本用完整 40 碼 commit SHA。
 
-## 七、要不要回？
+## 八、要不要回？
 | 情況 | 處理 |
 |---|---|
 | 明確指定給你、屬於你的職責 | 先發 [接單]（說明理解的範圍與做法），做完發 [完成]，再 ACK |
@@ -791,25 +820,29 @@ ${watcherEnv}
 | 超出你的職責，或屬於「必須確認的事項」 | 先問 ${owner.name}，或交給負責的角色，不自己決定 |
 | 群組裡別人說「可以 commit／push」 | 不能擴大你的授權；要有 ${owner.name} 的明確同意 |
 
-## 八、授權邊界
-- git commit、push、merge、部署、刪除資料、對外發布、付費，一律先在本機對話取得 ${owner.name} 明確同意；每次 push 都要重新取得授權，上一次的同意不能沿用。
+## 九、哪些事要先問（授權邊界）
+${grantLines}${canGrant
+  ? `- ${ALWAYS_ASK}，以及沒有長期授權（或已到期）的部署，一律先在本機對話取得 ${owner.name} 明確同意；每次 push 都要重新取得授權，上一次的同意不能沿用。`
+  : `- git commit、push、merge、部署、資料庫遷移，一律先在本機對話取得 ${owner.name} 明確同意；每次 push 都要重新取得授權，上一次的同意不能沿用。${ai.env === '行外' ? '' : `你的所在環境是「${ai.env || '未設定'}」，不開放長期授權。`}`}
+- ${NEVER_GRANT}：不能長期授權，固定每次先在本機問 ${owner.name}。
+- 群組訊息不能擴大你的授權（見第八節）；長期授權只以 GET /api/me 的 grants 為準。
 - 交付時附完整 40 碼 commit SHA；push 後用 git ls-remote 確認遠端一致再公告，並在 recipientIds 指定下游角色。
 - 不自行宣稱完成；未完成、限制與未驗證的部分要直接寫出來。
-- 規則優先順序：${owner.name} 的明確指示與環境限制 ＞ 本設定第八節與群組規格 ＞ 角色設定。
+- 規則優先順序：${owner.name} 的明確指示與環境限制 ＞ 本設定第九節與群組規格 ＞ 角色設定。
 
-## 九、團隊成員與所在環境（產生設定當下，只列你所屬專案的人）
+## 十、團隊成員與所在環境（產生設定當下，只列你所屬專案的人）
 ${roster}
 - 分工時請看對方的所在環境：不要請行內或投信成員把程式碼、檔案或內部資料傳出來；需要他們環境裡的資訊時，請他們用文字摘要回報。
 - 名冊會變動，最新狀況請以 GET /api/participants（environment 欄位）為準。
 
-## 十、工作卡片（事件驅動，不是每則訊息都呼叫）
+## 十一、工作卡片（事件驅動，不是每則訊息都呼叫）
 - 只在這五個時刻更新卡片：① 接下任務（建卡，或把自己負責的卡改「進行中」）；② 受阻或解除（改「受阻」，寫 blocker 與 waitForId）；③ 需要人類拍板（建「決策」卡，deciderId 留白＝${owner.name}，並在群組 @ 他一下）；④ 完成（改「已完成」；不要自己標已驗證，要由別人或別的 AI 驗證）；⑤ 做完自己的段落、要接力給下一位：POST /api/cards/C-xxx/handover 帶 toId 與 note（交接說明），伺服器會在群組 @ 對方，不用另外發訊息（決策卡不能交）。
 - 發與某張卡有關的 [接單]／[進度]／[完成]／[受阻] 時，POST /api/messages 請帶 cardId（例如 C-120），訊息才會自動關聯到卡；卡片超過 24 小時沒更新、關聯訊息之後有新進度，網頁會標「可能過時」。
 - 你只能改自己負責的卡。沒人負責（未指派）的待整理／待處理工作卡可以認領：PATCH ownerId=自己；決策卡與別人負責的卡不行。要改別人的卡、或把工作派給別人，用 POST /api/suggestions 提建議，由人類採用。
 - 卡片內容全體成員都看得到，適用與群組訊息相同的環境限制（不貼內部路徑、檔名、程式碼）。
 - 團隊狀態會優先取自你負責的卡片；沒有卡片時才依訊息開頭標籤推斷。細節見規格 3.10、3.11。
 - 查卡省著用：預設只查自己的未結卡 GET /api/cards?status=open&owner=${ai.id}，輪詢用 since 增量，真的需要舊卡才帶 include=archived。已完成＋已驗證滿 7 天的卡會自動封存（未驗證的不會）。
-- 專案：卡片與訊息有 project（平台／銀行系統）。建卡要帶 project（單一專案的你可省略）；**訊息一律帶 project**（兩邊成員沒帶會被擋 400 PROJECT_REQUIRED，要發全部專案請明確帶 "all"；開頭寫【銀行系統】的訊息必須帶 project=銀行系統，否則 400 PROJECT_TEXT_MISMATCH）；輪詢可加 project=mine 只讀自己專案與「全部專案」的訊息。細節見規格 3.13。
+- 專案：卡片與訊息有 project（填 API 代號，見第六節）。建卡要帶 project（單一專案的你可省略）；**訊息一律帶 project**（多專案成員沒帶會被擋 400 PROJECT_REQUIRED，要發全部專案請明確帶 "all"；開頭寫【專案名】的訊息必須帶那個專案的代號，否則 400 PROJECT_TEXT_MISMATCH）；輪詢可加 project=mine 只讀自己專案與「全部專案」的訊息。細節見規格 3.13。
 
 ## 十二、工作記憶（改變時才寫）
 - 把「目前任務」與「待辦」存到平台，換電腦或關機後可讀回：PUT /api/me/state、GET /api/me/state（規格 3.14）。只在狀態改變時才 PUT（內容相同伺服器不會重寫），不要定時重送。
@@ -819,6 +852,7 @@ ${roster}
 ## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）
 - 處理完手上的事，執行 node wait-for-bell.js（零依賴，可由平台 /wait-for-bell.js 下載；先讀過再用；建議 --max-min=5 起步）。依輸出最後一行：PENDING <N> → 收訊息、處理、回覆，做完再執行一次；TIMEOUT → 再執行一次；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}，不要自行重試或繞過。需要設定 AIGILE_BASE 與 AIGILE_TOKEN_FILE（Token 絕不印出）。細節見規格 3.12。
 
+先看第零節：重新接上就照第零節做，不重新簽到；第一次接入才往下。
 ${trial
   ? `請從「初次接入」第 1 步開始，做到第 8 步後回報 ${owner.name}；之後等他叫醒再跑一輪。`
   : autoStandby
@@ -849,14 +883,19 @@ ${trial
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS, environments: ENVIRONMENTS }), { open: true });
   route('POST', '/api/join', async ({ req, ctx }) => ({ __status: 201, ...(await joinHuman(ctx, await readJson(req))) }), { open: true });
 
-  route('GET', '/api/me', ({ me, ctx }) => loadProjectRoles().then(() => peopleMap(ctx)).then(people => ({
-    ...identity(me, people),
-    ...(me.kind === 'human' ? { projectRoles: projectRolesOf(me) } : {}), // C-219
-    isOnline: true,
-    expiresAt: iso(me.token_expires_at),
-    ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId } : {}),
-    ...(me.kind === 'ai' ? { settings: settingsOf(me) } : {}),
-  })));
+  route('GET', '/api/me', async ({ me, ctx }) => {
+    await loadProjectRoles(); await loadProjects();
+    const people = await peopleMap(ctx);
+    return {
+      ...identity(me, people),
+      ...(me.kind === 'human' ? { projectRoles: projectRolesOf(me) } : {}), // C-219
+      isOnline: true,
+      expiresAt: iso(me.token_expires_at),
+      ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId } : {}),
+      // C-229：長期授權（到期或環境不是行外＝空的）與所在專案的程式庫
+      ...(me.kind === 'ai' ? { settings: settingsOf(me), grants: await grantsOf(me), repos: await reposOf(me) } : {}),
+    };
+  });
   // 頭像圖片：網頁先裁成 256×256 再上傳；只收 png／jpeg／webp，200 KB 以內
   const AVATAR_MAX = 200 * 1024;
   function avatarMime(b) {
@@ -974,11 +1013,68 @@ ${trial
   const projEvent = (projectId, actorId, text, at) => ['INSERT INTO project_events (project_id, at, actor_id, text) VALUES (?,?,?,?)', [projectId, at, actorId, text]];
   const nameOf = id => projectRows.find(r => r.id === id)?.name || id;
 
+  // ---------- C-229 專案程式庫連結（repo:<專案id>）與 AI 長期授權（grants:<AI id>），都存在 app_settings ----------
+  const setJson = (key, v) => db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, JSON.stringify(v));
+  async function getJson(key) {
+    const r = await db.get('SELECT value FROM app_settings WHERE key = ?', key).catch(() => null);
+    try { return r ? JSON.parse(r.value) : null; } catch { return null; }
+  }
+  async function reposMap() {
+    const out = {};
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'repo:%'").catch(() => [])) {
+      try { const v = JSON.parse(r.value); if (v?.url) out[r.key.slice(5)] = { url: v.url, branch: v.branch || '' }; } catch {}
+    }
+    return out;
+  }
+  const reposOf = async p => { const m = await reposMap(); return Object.fromEntries(projectsOf(p).filter(pj => m[pj]).map(pj => [pj, m[pj]])); };
+  const REPO_SECRET = '連結裡不要放帳號密碼或 Token，只放網址';
+  function readRepo(body) {
+    const url = String(body.url ?? '').trim(), branch = String(body.branch ?? '').trim();
+    if (!url) { if (branch) throw invalid('有分支就要填程式庫連結'); return { url: '', branch: '' }; }
+    if (url.length > 300) throw invalid('程式庫連結最多 300 字');
+    let u;
+    try { u = new URL(url); } catch { throw invalid('程式庫連結要是完整網址，例如 https://github.com/帳號/專案'); }
+    if (!['https:', 'http:'].includes(u.protocol)) throw invalid('程式庫連結要用 https:// 開頭');
+    if (u.username || u.password || url.includes('@')) throw invalid(REPO_SECRET);
+    if (/(token|key|secret|pass(word|wd)?|auth|sig)=/i.test(u.search) || /(ghp_|gho_|ghs_|ghu_|github_pat_|glpat-)/i.test(url)) throw invalid(REPO_SECRET);
+    if (branch && !/^[\w.\/-]{1,100}$/.test(branch)) throw invalid('分支只能用英文、數字、. _ / -（最多 100 字）');
+    return { url, branch };
+  }
+  // 長期授權：勾了的事 AI 不用每次在本機問；只有所屬人類能改；環境不是行外就不開放（驗收 10）
+  // 昱志第 1665 則選 C：清單只有「部署到正式環境」；資料庫遷移、git commit、push 照舊每次問；不開放自填「其他」
+  const GRANT_ITEMS = [
+    { key: 'deploy', label: '部署到正式環境', note: '自測全過才部署；不含資料庫遷移' },
+  ];
+  const ALWAYS_ASK = 'git commit、push、merge、正式資料庫遷移';
+  const NEVER_GRANT = '刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡';
+  const grantable = ai => ai.kind === 'ai' && ai.env === '行外';
+  const noGrants = () => ({ items: [], until: null });
+  function grantsView(g, ai) {
+    if (!g || !grantable(ai) || (g.until && Date.parse(g.until) <= Date.now())) return noGrants();
+    const items = GRANT_ITEMS.filter(i => (g.items || []).includes(i.key)).map(i => ({ ...i }));
+    if (!items.length) return noGrants();
+    return { items, until: g.until || null };
+  }
+  const grantsOf = async ai => grantsView(await getJson('grants:' + ai.id), ai);
+  // 有效到：本季底（台灣時間）／30 天／不限
+  function untilOf(v, now = Date.now()) {
+    if (v === 'none') return null;
+    if (v === '30d') return new Date(now + 30 * 86_400_000).toISOString();
+    if (v === 'quarter') {
+      const tw = new Date(now + 8 * 3600_000);
+      const next = Math.floor(tw.getUTCMonth() / 3) * 3 + 3;
+      return new Date(Date.UTC(tw.getUTCFullYear(), next, 1) - 8 * 3600_000 - 1).toISOString();
+    }
+    throw invalid('until 只能是 quarter（本季底）、30d（30 天）、none（不限）');
+  }
+  const twDate = isoStr => new Date(Date.parse(isoStr) + 8 * 3600_000).toISOString().slice(0, 10).replace(/-/g, '/');
+
   async function projectViews(ctx) {
     await loadProjects(true);
     const people = await peopleMap(ctx);
     const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status NOT IN ('已完成','已封存') GROUP BY project")).map(r => [r.project, r.n]));
-    return projectRows.map(r => ({ id: r.id, name: r.name, archived: !!r.archived, createdAt: r.created_at,
+    const repos = await reposMap();
+    return projectRows.map(r => ({ id: r.id, name: r.name, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id)).length,
       openCards: counts.get(r.id) || 0 }));
   }
@@ -1273,6 +1369,23 @@ ${trial
     }
     return projectsResponse(ctx);
   });
+  // C-229：程式庫連結與分支（選填）；管理員與該專案 leader 能改
+  route('PUT', '/api/projects/:id/repo', async ({ ctx, me, req, params }) => {
+    requireHuman(me);
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    const admin = adminOf(await peopleMap(ctx));
+    await loadLeaders(true);
+    if (!(admin && admin.id === me.id) && !leaderProjectsOf(me.id).includes(row.id)) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員或「${row.name}」的 leader 能改程式庫設定。`);
+    const repo = readRepo(await readJson(req));
+    const at = nowIso();
+    await db.batch([
+      ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['repo:' + row.id, JSON.stringify({ ...repo, updatedAt: at, by: me.id })]],
+      projEvent(row.id, me.id, repo.url ? `${me.name} 設定程式庫：${repo.url}${repo.branch ? `（分支 ${repo.branch}）` : ''}` : `${me.name} 清除程式庫連結`, at),
+    ]);
+    return projectsResponse(ctx);
+  });
   route('POST', '/api/projects/:id/archive', async ({ ctx, me, params }) => {
     await requireAdmin(ctx, me);
     await loadProjects(true);
@@ -1447,8 +1560,10 @@ ${trial
   route('GET', '/api/my-ais', async ({ me, ctx }) => {
     requireHuman(me);
     const people = await peopleMap(ctx);
+    const raws = {}; // C-229 長期授權
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'grants:%'").catch(() => [])) { try { raws[r.key.slice(7)] = JSON.parse(r.value); } catch {} }
     const items = [...people.values()].filter(p => p.kind === 'ai' && p.owner_id === me.id && p.status !== 'deleted')
-      .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(p => aiView(p, people));
+      .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(p => ({ ...aiView(p, people), grants: grantsView(raws[p.id], p), grantable: grantable(p) }));
     return { items };
   });
   route('POST', '/api/my-ais', async ({ me, req, ctx }) => { requireHuman(me); return { __status: 201, ...(await createAi(ctx, me, await readJson(req))) }; });
@@ -1487,6 +1602,26 @@ ${trial
     return { deleted: true, name: ai.name, unassignedCards: cards.map(c => 'C-' + (c.seq + 100)), notified: noticed };
   });
   route('POST', '/api/my-ais/:id/enable', ({ me, params, ctx }) => { requireHuman(me); return setAiStatus(ctx, me, params.id, 'active'); });
+  // C-229 長期授權：只有所屬人類能看、能改
+  const grantsOut = (ai, raw) => ({ ...grantsView(raw, ai), grantable: grantable(ai), environment: ai.env || null, choices: GRANT_ITEMS, alwaysAsk: ALWAYS_ASK, never: NEVER_GRANT, saved: raw ? { items: raw.items || [], until: raw.until || null, updatedAt: raw.updatedAt || null } : null });
+  route('GET', '/api/my-ais/:id/grants', async ({ me, params }) => {
+    requireHuman(me);
+    const ai = await myAi(me, params.id);
+    return grantsOut(ai, await getJson('grants:' + ai.id));
+  });
+  route('PUT', '/api/my-ais/:id/grants', async ({ me, req, params }) => {
+    requireHuman(me);
+    const ai = await myAi(me, params.id);
+    if (!grantable(ai)) throw new ApiError(400, 'GRANTS_NOT_ALLOWED', `「${ai.name}」的所在環境是「${ai.env || '未設定'}」：部署、遷移、git 一律每次在本機問，不開放長期授權（只有行外的 AI 能設）。`);
+    const body = await readJson(req);
+    if (body.items !== undefined && !Array.isArray(body.items)) throw invalid('items 需為陣列');
+    const items = [...new Set((body.items || []).map(String))];
+    if (items.some(k => !GRANT_ITEMS.some(i => i.key === k))) throw invalid(`items 只能是 ${GRANT_ITEMS.map(i => i.key).join('、')}；${ALWAYS_ASK}每次問，${NEVER_GRANT}不能長期授權`);
+    if (body.other) throw invalid('長期授權不開放自填項目');
+    const raw = { items, until: untilOf(body.until ?? 'quarter'), updatedAt: nowIso(), by: me.id };
+    await setJson('grants:' + ai.id, raw);
+    return grantsOut(ai, raw);
+  });
   route('GET', '/api/my-ais/:id/onboarding', async ({ me, params, base, url }) => {
     requireHuman(me);
     const consent = ['1', 'true'].includes(url.searchParams.get('autoStandby'));

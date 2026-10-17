@@ -1593,7 +1593,7 @@
     modalReturnFocus = null;
   }
   // 確認彈窗：疊在目前彈窗上；回傳 true／false
-  function confirmDialog({ title, message, confirmText = '確認', danger = false, expectText = '' }) {
+  function confirmDialog({ title, message, confirmText = '確認', cancelText = '取消', danger = false, expectText = '' }) {
     return new Promise(resolve => {
       const prev = document.activeElement;
       const host = document.createElement('div');
@@ -1601,7 +1601,7 @@
       host.innerHTML = modalFrame({
         title, size: 'narrow',
         body: `<div class="confirm-msg${danger ? ' danger' : ''}">${message}</div>${expectText ? `<label class="field">請輸入「${esc(expectText)}」確認<input type="text" data-expect autocomplete="off"></label>` : ''}`,
-        foot: `<button class="btn" type="button" data-close>取消</button>
+        foot: `<button class="btn" type="button" data-close>${esc(cancelText)}</button>
                <button class="btn ${danger ? 'danger' : 'primary'}" type="button" data-ok ${expectText ? 'disabled' : ''}>${esc(confirmText)}</button>`,
       });
       document.body.append(host);
@@ -3716,6 +3716,8 @@
           toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'edit') {
           openAiForm(ai);
+        } else if (b.dataset.act === 'grants') {
+          openGrants(ai, draw);
         } else if (b.dataset.act === 'reissue') {
           if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發',
             message: `重發後，<b>${esc(ai.name)}</b> 目前的 Token 會立即失效，需要把新 Token 換給它。` })) return;
@@ -3800,6 +3802,7 @@
             <dt>必須確認的事項</dt><dd>${esc(ai.mustConfirm)}</dd>
             <dt>完成與交接條件</dt><dd>${esc(ai.handoff)}</dd>
           </dl>
+          ${grantsBlock(ai, active)}
           ${active ? `
           <div class="row actions">
             <button class="btn small" type="button" data-act="copy" data-id="${id}">複製完整接入設定</button>
@@ -3811,6 +3814,91 @@
           <p class="muted small">版本 v${ai.version} · 更新時間 ${fmtTime(ai.updatedAt)}</p>
         </div>` : ''}
       </div>`;
+  }
+
+  // ---------- C-229 長期授權（只有行外的 AI；昱志選 C：只有「部署到正式環境」） ----------
+  const twYmd = ms => new Date(ms + 8 * 3600_000).toISOString().slice(0, 10).replace(/-/g, '/');
+  function quarterEnd(now = Date.now()) { const tw = new Date(now + 8 * 3600_000), next = Math.floor(tw.getUTCMonth() / 3) * 3 + 3; return Date.UTC(tw.getUTCFullYear(), next, 1) - 8 * 3600_000 - 1; }
+  function grantsBlock(ai, active) {
+    const g = ai.grants || { items: [] };
+    const body = !ai.grantable
+      ? `<p class="muted small">所在環境是「${esc(ai.environment || '未設定')}」：部署、遷移、git 一律每次在本機問，不開放長期授權。</p>`
+      : g.items.length ? `<p class="small">${g.items.map(i => esc(i.label)).join('、')}<span class="muted">（${g.until ? `到 ${twYmd(Date.parse(g.until))}` : '不限期'}）</span></p>`
+      : '<p class="muted small">沒有。部署、遷移、git 都每次在本機問你。</p>';
+    return `<div class="ai-grants${ai.grantable ? '' : ' off'}"><div class="ai-grants-head"><b>長期授權</b>${active && ai.grantable ? `<button class="btn small" type="button" data-act="grants" data-id="${esc(ai.participantId)}">設定</button>` : ''}</div>${body}</div>`;
+  }
+  async function openGrants(ai, redraw) {
+    let g;
+    try { g = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/grants`); } catch (err) { return toast(err.message); }
+    const cur = g.items.map(i => i.key), q = quarterEnd(), d30 = Date.now() + 30 * 86_400_000;
+    const sel = cur.length && !g.until ? 'none' : 'quarter';
+    const body = openModal(`長期授權 · ${ai.name}`, `<form id="gr-form" class="stack">
+        <p class="muted small">勾了的事，AI 不用每次在本機問你；沒勾的照舊先問。只有你（所屬人類）能改。</p>
+        <fieldset class="gr-items"><legend class="field-label">可以長期授權的事</legend>
+          ${g.choices.map(c => `<label class="gr-ck"><input type="checkbox" name="items" value="${esc(c.key)}" ${cur.includes(c.key) ? 'checked' : ''}><span>${esc(c.label)}${c.note ? `<small>${esc(c.note)}</small>` : ''}</span></label>`).join('')}
+        </fieldset>
+        <label class="field">有效到<select name="until">
+            <option value="quarter" ${sel === 'quarter' ? 'selected' : ''}>本季底（${twYmd(q)}）</option>
+            <option value="30d">30 天（到 ${twYmd(d30)}）</option>
+            <option value="none" ${sel === 'none' ? 'selected' : ''}>不限</option></select>
+          <span class="field-hint">到期自動失效，AI 回到每次都問。${cur.length ? `目前：${g.until ? `到 ${twYmd(Date.parse(g.until))}` : '不限期'}` : ''}</span></label>
+        <div class="warn-box small gr-never">固定每次都問：${esc(g.alwaysAsk)}。<br>不能長期授權：${esc(g.never)}。</div>
+        <p class="error" id="gr-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="gr-form">儲存</button>' });
+    body.querySelector('#gr-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = e.target, items = [...f.querySelectorAll('[name=items]:checked')].map(x => x.value);
+      try {
+        await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/grants`, { method: 'PUT', body: { items, until: f.until.value } });
+        closeModal();
+        toast('已儲存長期授權');
+        await redraw?.();
+        const pj = (ai.projects || []).filter(p => PROJECTS.includes(p));
+        askNotifyAis([ai], '[通知] 你的長期授權已更新，請重新讀 GET /api/me（grants）。', pj.length === 1 ? pj[0] : 'all');
+      } catch (err) { body.querySelector('#gr-err').textContent = err.message; }
+    });
+  }
+  // C-229：改了程式庫或長期授權後，問要不要通知相關 AI（只寫「已更新，請重讀 /api/me」）
+  async function askNotifyAis(ais, text, project) {
+    const list = ais.filter(Boolean);
+    if (!list.length) return;
+    const names = list.map(a => a.name).join('、');
+    if (!await confirmDialog({ title: '要不要通知相關 AI？', confirmText: '通知', cancelText: '不用',
+      message: `已接入的 AI 不會自動知道這次的修改。要發一則訊息給 <b>${esc(names)}</b> 嗎？<br><span class="muted small">內容：${esc(text)}</span>` })) return;
+    try {
+      await api('/api/messages', { method: 'POST', body: { text, recipientIds: list.map(a => a.participantId), project, requestId: newRequestId() } });
+      toast(`已通知 ${names}`);
+    } catch (err) { toast('沒有通知成功：' + err.message); }
+  }
+  // C-229：專案程式庫連結（管理員、該專案 leader）
+  function repoLine(p, canEdit) {
+    const r = p.repo;
+    return `<div class="pm-repo small"><span>API 代號：<b>${esc(p.id)}</b></span><span class="pm-repo-url">${r ? `程式庫：<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>${r.branch ? `（分支 ${esc(r.branch)}）` : ''}` : '<span class="muted">還沒有程式庫連結</span>'}</span>${canEdit ? `<button type="button" class="link small" data-pm-repo="${esc(p.id)}">程式庫設定</button>` : ''}</div>`;
+  }
+  function openRepoEditor(pj) {
+    const p = state.projectList.find(x => x.id === pj);
+    if (!p) return;
+    const r = p.repo || {};
+    const body = openModal(`程式庫設定 · ${p.name}`, `<form id="repo-form" class="stack">
+        <p class="small">專案名稱 <b>${esc(p.name)}</b><br><span class="muted">API 代號：<b>${esc(p.id)}</b>（AI 發訊息、查卡片用這個，不能改）</span></p>
+        <label class="field">程式庫連結（選填）<input name="url" maxlength="300" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/帳號/專案" value="${esc(r.url || '')}"></label>
+        <label class="field">分支（選填）<input name="branch" maxlength="100" autocomplete="off" spellcheck="false" placeholder="main" value="${esc(r.branch || '')}"></label>
+        <ul class="muted small repo-hints"><li>只放連結，不放帳號密碼或 Token；網址含帳密或 token 會被擋下。</li><li>改了之後，這個專案 AI 的接入設定下次複製就會帶上；已接入的 AI 不會自動知道，存檔後可以通知它們。</li><li>只有管理員和這個專案的 leader 能改。</li></ul>
+        <p class="error" id="repo-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="repo-form">儲存</button>' });
+    body.querySelector('#repo-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        await api(`/api/projects/${encodeURIComponent(pj)}/repo`, { method: 'PUT', body: { url: f.url.value.trim(), branch: f.branch.value.trim() } });
+        closeModal();
+        await loadProjectList().catch(() => {});
+        drawPerm();
+        toast('已儲存程式庫設定');
+        const ais = [...state.participants.values()].filter(x => x.memberType === 'ai' && !x.deleted && (x.projects || []).includes(pj));
+        askNotifyAis(ais, `[通知] 專案「${p.name}」（API 代號 ${p.id}）的程式庫設定已更新，請重新讀 GET /api/me（repos）。`, pj);
+      } catch (err) { body.querySelector('#repo-err').textContent = err.message; }
+    });
   }
 
   // 角色範本：常用的排前面，其餘收進「其他角色」群組（只是選單分組，角色定義不變；既有成員的角色照常顯示已選）
@@ -4548,6 +4636,7 @@
     const mid = `<section class="pm-col pm-detail" aria-label="${esc(projName(pj))} 的成員">
       ${narrowPerm() ? '<button type="button" class="ph-back pm-back" data-pm-back>‹ 專案清單</button>' : ''}
       <div class="pm-dhead"><strong>${esc(projName(pj))} · 成員 ${members.length}</strong><span class="grow"></span>${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
+      ${(() => { const pr = state.projectList.find(x => x.id === pj); return pr ? repoLine(pr, permCanEdit(pj)) : ''; })()}
       <table class="pm-table"><thead><tr><th scope="col">成員</th><th scope="col" class="c-role">在「${esc(projName(pj))}」的角色</th><th scope="col" class="c-lead">leader</th><th scope="col" class="c-act">移出</th></tr></thead>
       <tbody>${grp('人類')}${humans.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有人類成員</td></tr>'}
       ${grp('AI · 角色跟著 AI 設定，不分專案')}${ais.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有 AI</td></tr>'}
@@ -4633,6 +4722,7 @@
       const blocked = !p.archived && p.openCards > 0, open = perm.openLog === p.id;
       return `<div class="pa-row${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}">
         <div class="pm-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}<span class="muted small">成員 ${p.memberCount} · 未結案卡 ${p.openCards}</span></div>
+        ${repoLine(p, !p.archived)}
         <div class="pm-pacts">${p.archived ? '<button type="button" class="btn small" data-pp="unarchive">還原</button>'
           : `<button type="button" class="btn small" data-pp="rename">改名</button><button type="button" class="btn small danger-outline" data-pp="archive" ${blocked ? `aria-disabled="true" title="還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案"` : ''}>封存</button>`}
           <button type="button" class="link small" data-pp="log" aria-expanded="${open}">異動紀錄 ${open ? '▴' : '▾'}</button></div>
@@ -4783,6 +4873,8 @@
       permSet(p, { projects: c.cross ? (b.cross ? new Set(PROJECTS) : new Set(b.projects.size ? b.projects : PROJECTS)) : new Set(PROJECTS), cross: !c.cross, leaders: c.leaders });
       return drawPerm();
     }
+    const rp = t.closest('[data-pm-repo]'); // C-229
+    if (rp) return openRepoEditor(rp.dataset.pmRepo);
     const act = t.closest('[data-pm-act]')?.dataset.pmAct;
     if (act === 'undo') { perm.draft.clear(); return drawPerm(); }
     if (act === 'save') return permSave();

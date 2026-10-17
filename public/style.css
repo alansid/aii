@@ -1822,3 +1822,19 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sec-note { background: #3a3110; border-color: #7a6420; color: #fdf3c7; } :root:not([data-theme="light"]) .pwd-status .ok-box { background: #0f2e24; border-color: #1f6b52; color: #a7f3d0; } }
 :root[data-theme="dark"] .sec-note { background: #3a3110; border-color: #7a6420; color: #fdf3c7; }
 :root[data-theme="dark"] .pwd-status .ok-box { background: #0f2e24; border-color: #1f6b52; color: #a7f3d0; }
+
+/* ===== C-229 程式庫連結、長期授權 ===== */
+.pm-repo { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 6px 14px 10px; color: var(--muted); min-width: 0; }
+.pa-row .pm-repo { padding: 4px 0 0; flex-basis: 100%; }
+.pm-repo-url { min-width: 0; overflow-wrap: anywhere; }
+.pm-repo .link { min-height: 36px; }
+.repo-hints { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.ai-grants { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; display: grid; gap: 6px; }
+.ai-grants p { margin: 0; }
+.ai-grants-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ai-grants.off { opacity: .85; }
+.gr-items { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+.gr-ck { display: flex; gap: 10px; align-items: flex-start; min-height: 44px; font-weight: 500; cursor: pointer; }
+.gr-ck input { width: 20px; height: 20px; margin-top: 2px; flex: none; }
+.gr-ck small { display: block; font-weight: 400; color: var(--muted); }
+.gr-never { line-height: 1.7; }

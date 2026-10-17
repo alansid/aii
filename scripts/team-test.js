@@ -206,7 +206,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.equal(member(await team(), ba.participantId).environment, '行內', '團隊狀態帶環境');
     const ob = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding`)).body.text;
     assert.ok(ob.includes('所在環境：行內'), '接入設定寫出自己的環境');
-    assert.ok(ob.includes('九、團隊成員與所在環境') && ob.includes('劉昱志的需求分析助手（你）'), '接入設定有團隊名冊');
+    assert.ok(ob.includes('十、團隊成員與所在環境') && ob.includes('劉昱志的需求分析助手（你）'), '接入設定有團隊名冊');
     assert.ok(!ob.includes('平台通知'), '名冊不含系統身分');
     // C-147：勾選「允許自動啟動待命」才寫已同意；行內／投信不論勾不勾都先問
     const obIn = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding?autoStandby=1`)).body.text;
