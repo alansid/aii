@@ -38,19 +38,24 @@ export async function autoArchive(db, now = Date.now()) {
 // 團隊狀態用：每位負責人手上最急的未完成卡片、以及等決策者的決策卡（只讀未完成的卡片，量很小）
 const WORK_RANK = { 受阻: 0, 待確認: 1, 進行中: 2, 待處理: 3 };
 const WORK_STATE = { 受阻: 'blocked', 待確認: 'waiting', 進行中: 'working', 待處理: 'todo' };
-export async function teamCards(db) {
-  const open = await db.all("SELECT seq, owner_id, status, title, updated_at FROM cards WHERE owner_id IS NOT NULL AND type != '人類紀錄' AND status IN ('待處理','進行中','待確認','受阻') ORDER BY updated_at DESC");
+// 每位負責人「目前工作」＝最優先的那張未結卡＋張數；allow 用來只算看的人看得到的專案（C-235）
+export function workFrom(open, allow = () => true) {
   const byOwner = new Map();
   for (const c of open) {
+    if (!allow(c)) continue;
     const cur = byOwner.get(c.owner_id) || { best: null, count: 0 };
     cur.count++;
     if (!cur.best || WORK_RANK[c.status] < WORK_RANK[cur.best.status]) cur.best = c;
     byOwner.set(c.owner_id, cur);
   }
-  const work = new Map([...byOwner].map(([id, { best, count }]) => [id,
+  return new Map([...byOwner].map(([id, { best, count }]) => [id,
     { state: WORK_STATE[best.status], title: best.title, cardId: cardNo(best.seq), at: best.updated_at, cardCount: count, source: 'card' }]));
+}
+export async function teamCards(db) {
+  const open = await db.all("SELECT seq, owner_id, status, title, updated_at, project FROM cards WHERE owner_id IS NOT NULL AND type != '人類紀錄' AND status IN ('待處理','進行中','待確認','受阻') ORDER BY updated_at DESC");
+  const work = workFrom(open);
   const decisions = await db.all("SELECT seq, title, question, proposer_id, decider_id, created_at, project FROM cards WHERE type = '決策' AND status = '待確認' AND decision_result IS NULL ORDER BY created_at DESC LIMIT 30");
-  return { work, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
+  return { work, open, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
 export function registerCards({ route, createMessage, isolatedFrom, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {

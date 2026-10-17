@@ -5,7 +5,7 @@
 //   get(sql, ...args) → 單列或 null      all(sql, ...args) → 陣列
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
-import { registerCards, teamCards, autoArchive } from './cards.js';
+import { registerCards, teamCards, workFrom, autoArchive } from './cards.js';
 import { registerLogin } from './login.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
@@ -1828,10 +1828,13 @@ ${trial
 
     // 每位成員最新一則帶狀態標籤的訊息
     const stateBy = new Map();
+    const stateMsgs = []; // C-235：留著給只屬部分專案的人重算（依看得到的訊息）
     for (const m of recent) {
-      if (stateBy.has(m.author_id)) continue;
       const st = inferState(m.text);
-      if (st) stateBy.set(m.author_id, { state: st, title: headline(m.text), messageId: m.id, at: m.created_at });
+      if (!st) continue;
+      const s = { state: st, title: headline(m.text), messageId: m.id, at: m.created_at };
+      stateMsgs.push({ authorId: m.author_id, project: m.project || null, created_at: m.created_at, s });
+      if (!stateBy.has(m.author_id)) stateBy.set(m.author_id, s);
     }
 
     // 有負責的未完成卡片 → 工作狀態取自卡片（較準）；沒有卡片的成員仍用訊息標籤推斷
@@ -1899,7 +1902,9 @@ ${trial
         author: identity(people.get(d.proposerId) || { id: d.proposerId, name: '?', kind: 'ai' }, people), replyCount: 0, deciderId: d.deciderId });
     }
     const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
-    teamCache = { at: Date.now(), data };
+    // C-235：只屬部分專案的人看團隊狀態時，目前工作／張數／待處理則數要依他的專案重算，原始資料留在這裡（不回傳）
+    const pendRows = await db.all("SELECT n.recipient_id, n.created_at, m.project, m.created_at AS msg_at FROM notifications n JOIN messages m ON m.id = n.message_id WHERE n.status = 'pending' ORDER BY n.created_at");
+    teamCache = { at: Date.now(), data, priv: { cards: cardWork.open, stateMsgs, pendRows } };
     return data;
   }
 
@@ -1917,6 +1922,24 @@ ${trial
     groupName, humanTtlMs: HUMAN_TOKEN_TTL_MS, failLimit: Number(config.authFailLimit) || 10 });
   registerCards({ route, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
+  // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
+  async function scopeTeamMembers(me, members) {
+    if (!isolatedFrom(me) || !teamCache.priv) return members;
+    const { cards, stateMsgs, pendRows } = teamCache.priv;
+    const mine = projectsOf(me), since = await isolationSince(), joined = me.created_at || '';
+    const seeMsg = (project, at) => (project && mine.includes(project)) || !since || (at >= since ? !project : at >= joined);
+    const work = workFrom(cards, c => mine.includes(c.project));
+    const msgState = new Map();
+    for (const m of stateMsgs) if (!msgState.has(m.authorId) && seeMsg(m.project, m.created_at)) msgState.set(m.authorId, m.s);
+    const pend = new Map();
+    for (const n of pendRows) {
+      if (!seeMsg(n.project, n.msg_at)) continue;
+      const x = pend.get(n.recipient_id) || { count: 0, oldest: n.created_at };
+      x.count++;
+      pend.set(n.recipient_id, x);
+    }
+    return members.map(m => ({ ...m, status: work.get(m.participantId) || msgState.get(m.participantId) || null, pendingCount: pend.get(m.participantId)?.count || 0, oldestPendingAt: pend.get(m.participantId)?.oldest || null }));
+  }
   route('GET', '/api/team-status', async ({ ctx, me, url }) => {
     await loadProjectRoles();
     const d = await teamStatus(ctx);
@@ -1929,7 +1952,7 @@ ${trial
     await loadCrossRoles();
     const sees = id => { const p = people.get(id); return !!p && seesPerson(me, p); }; // C-188
     return { ...d, decisions, unanswered: d.unanswered.filter(u => sees(u.participantId)),
-      members: roleForProject(d.members.filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url) }; // 工作記憶依專案可見；C-219 角色依專案
+      members: roleForProject((await scopeTeamMembers(me, d.members)).filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url) }; // 工作記憶依專案可見；C-219 角色依專案
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);

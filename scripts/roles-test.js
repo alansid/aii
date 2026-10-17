@@ -128,6 +128,25 @@ const call = async (token, p, method = 'GET', body) => {
     assert.deepEqual((await call(solo.token, '/api/me')).body.projects, ['平台'], '自己的照舊');
     assert.ok((await call(liu.token, '/api/team-status')).body.members.find(m => m.participantId === id(kang)).projects.includes('銀行系統'), 'C-220：管理員看得到全部');
 
+    // C-235：只在試用的人看團隊狀態：昱志的目前工作、張數、待處理則數只算試用，看不到平台／銀行系統的卡名
+    const tryId = others.find(x => x !== '銀行系統');
+    await M(liu.token, [{ id: id(solo), projects: [tryId] }]);
+    await call(liu.token, '/api/cards', 'POST', { requestId: 'c235a', project: '平台', title: '成員與權限整頁改版', ownerId: id(liu), status: '進行中' });
+    await call(liu.token, '/api/cards', 'POST', { requestId: 'c235b', project: '銀行系統', title: '銀行的秘密卡', ownerId: id(liu), status: '待處理' });
+    await call(kang.token, '/api/messages', 'POST', { requestId: 'c235m', project: '銀行系統', text: '[進度] 銀行那邊的進度', recipientIds: [id(liu)] });
+    const liuAll = (await call(liu.token, '/api/team-status')).body.members.find(m => m.participantId === id(liu));
+    assert.equal(liuAll.status?.source, 'card', 'C-235：管理員看自己照舊是卡片');
+    assert.ok(liuAll.status.cardCount >= 2 && liuAll.pendingCount >= 1, 'C-235：管理員看全部的張數與待處理 ' + JSON.stringify({ c: liuAll.status.cardCount, p: liuAll.pendingCount, kp: (await people()).get(id(kang)).projects }));
+    const liuTry = (await call(solo.token, '/api/team-status')).body.members.find(m => m.participantId === id(liu));
+    assert.ok(liuTry, '試用的人看得到管理員');
+    assert.ok(!/成員與權限整頁改版|銀行的秘密卡|銀行那邊的進度/.test(JSON.stringify(liuTry)), 'C-235：看不到平台／銀行系統的卡名與訊息');
+    assert.ok(!liuTry.status || liuTry.status.source !== 'card', 'C-235：試用沒有他的卡，就沒有卡片的目前工作與張數');
+    assert.ok(liuTry.pendingCount < liuAll.pendingCount, 'C-235：待處理則數只算看得到的專案');
+    const tryCard = (await call(liu.token, '/api/cards', 'POST', { requestId: 'c235c', project: tryId, title: '試用的卡', ownerId: id(liu), status: '待處理' })).body;
+    const liuTry2 = (await call(solo.token, '/api/team-status')).body.members.find(m => m.participantId === id(liu));
+    assert.equal(liuTry2.status?.cardId, tryCard.cardId, 'C-235：試用的卡照常顯示');
+    assert.equal(liuTry2.status.cardCount, 1, 'C-235：張數只算試用');
+
     // C-221：新專案一開始的成員＝建立者＋「目前的」跨專案角色（關掉之後就不會自動加入）
     const po = (await call(null, '/api/join', 'POST', { name: '產品負責人', role: 'PO' })).body; // 角色 PO 預設是跨專案角色
     await call(liu.token, `/api/participants/${id(po)}/projects`, 'PUT', { projects: ['平台', '銀行系統'] });
