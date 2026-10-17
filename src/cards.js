@@ -190,19 +190,30 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
   }
 
   // 可能過時（C-144）：未結案、updated_at 超過門檻，且關聯訊息在 updated_at 之後 1 分鐘以上又有新動態（[通知] 系統訊息不算）
+  // C-245：原本每次讀卡片列表都把所有未結案卡的關聯訊息整批 JOIN（一天 300 萬列讀取）。
+  // 改成先用 updated_at 索引只挑「夠久沒更新」的未結案卡，再只讀這幾張的關聯訊息；結果在記憶體留一下（門檻 24 小時時為 60 秒）。
+  const STALE_CACHE_MS = Math.min(60_000, STALE_CARD_MS / 60);
+  let staleCache = { at: 0, map: null };
   async function staleHints() {
-    const rows = await db.all(`SELECT c.seq AS seq, c.updated_at AS updated_at, MAX(m.created_at) AS latest,
-      (SELECT m2.id FROM card_msgs cm2 JOIN messages m2 ON m2.id = cm2.message_id WHERE cm2.card_seq = c.seq AND m2.text NOT LIKE '[通知]%' ORDER BY m2.created_at DESC LIMIT 1) AS latest_id FROM cards c
-      JOIN card_msgs cm ON cm.card_seq = c.seq JOIN messages m ON m.id = cm.message_id
-      WHERE c.status NOT IN ${OPEN_STATUSES_SQL} AND m.text NOT LIKE '[通知]%' GROUP BY c.seq`);
+    if (staleCache.map && Date.now() - staleCache.at < STALE_CACHE_MS) return staleCache.map;
     const now = Date.now(), out = new Map();
-    for (const r of rows) {
-      const upd = Date.parse(r.updated_at), lat = Date.parse(r.latest);
-      if (now - upd > STALE_CARD_MS && lat - upd > Math.min(60_000, STALE_CARD_MS)) out.set(r.seq, { lastUpdatedAt: r.updated_at, latestMessageAt: r.latest, latestMessageId: r.latest_id });
+    const old = await db.all(`SELECT seq, updated_at FROM cards WHERE updated_at < ? AND status NOT IN ${OPEN_STATUSES_SQL}`, new Date(now - STALE_CARD_MS).toISOString());
+    if (old.length) {
+      const latest = new Map();
+      for (const r of await db.all(`SELECT cm.card_seq AS seq, m.id AS id, m.created_at AS at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
+        WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%'`, JSON.stringify(old.map(c => c.seq)))) {
+        const cur = latest.get(r.seq);
+        if (!cur || r.at > cur.at) latest.set(r.seq, r);
+      }
+      for (const c of old) {
+        const l = latest.get(c.seq);
+        if (l && Date.parse(l.at) - Date.parse(c.updated_at) > Math.min(60_000, STALE_CARD_MS)) out.set(c.seq, { lastUpdatedAt: c.updated_at, latestMessageAt: l.at, latestMessageId: l.id });
+      }
     }
+    staleCache = { at: now, map: out };
     return out;
   }
-  const withStale = (v, c, stale) => (stale.has(c.seq) ? { ...v, staleHint: stale.get(c.seq) } : v);
+  const withStale = (v, c, stale) => (stale.get(c.seq)?.lastUpdatedAt === c.updated_at ? { ...v, staleHint: stale.get(c.seq) } : v);
 
   route('GET', '/api/cards', async ({ ctx, me, url }) => {
     await maybeArchive();
