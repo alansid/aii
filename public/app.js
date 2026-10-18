@@ -3907,8 +3907,8 @@
       .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
     if (card) return { kind: 'work', cardId: card.cardId, title: card.title };
     const s = mb.status;
-    const sc = s && cardIdOf(s.title), scard = sc && work.cards?.get(sc);
-    if (s && s.state === 'working' && s.source !== 'card' && Date.now() - Date.parse(s.at) < WORK_FRESH_MS && !(scard && closedSt(scard.status))) return { kind: 'work', cardId: sc, title: s.title }; // C-276：掛的卡已結案就不算在做
+    const sc = s && (s.cardId || cardIdOf(s.title)), scard = sc && work.cards?.get(sc);
+    if (s && s.state === 'working' && s.source !== 'card' && Date.now() - Date.parse(s.at) < WORK_FRESH_MS && !(sc && (!scard || closedSt(scard.status)))) return { kind: 'work', cardId: sc, title: s.title }; // C-276：掛的卡已結案或沒載到（例如已封存）就不算在做
     if (mb.standby || mb.isOnline) return { kind: 'idle' };
     return { kind: 'off' };
   }
@@ -3942,11 +3942,32 @@
   const myAisHere = () => [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled' && (p.projects || []).includes(projectView()));
   const aiKind = id => { const mb = state.team?.members.find(m => m.participantId === id); return mb ? aiNowOf(mb).kind : 'off'; };
   const dmUnread = id => (work.notes || []).filter(n => n.dm && n.sender.participantId === id).length;
-  const dmBtn = mb => (dmVisible() && isMyAi(state.participants.get(mb.participantId)) ? `<button type="button" class="an-dm" data-dm-open="${esc(mb.participantId)}" aria-label="${esc(`私訊 ${mb.name}`)}">💬 私訊</button>` : '');
+  // 這個專案可以看到私訊入口（有自己名下、在這專案的 AI）；沒開時入口淡色，點了說明怎麼開（C-270 退回）
+  const dmEntry = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && myAisHere().length > 0;
+  const dmBtn = mb => (dmEntry() && isMyAi(state.participants.get(mb.participantId))
+    ? (dmVisible() ? `<button type="button" class="an-dm" data-dm-open="${esc(mb.participantId)}" aria-label="${esc(`私訊 ${mb.name}`)}">💬 私訊</button>`
+      : `<button type="button" class="an-dm off" data-dm-enable aria-label="私訊還沒開放，看怎麼打開">💬 私訊</button>`) : '');
+  async function dmEnable() {
+    const pv = projectView(), can = isAdmin() || myLeadProjects().includes(pv);
+    if (!can) {
+      const who = leadersOf(pv).map(id => state.participants.get(id)?.name).filter(Boolean);
+      return confirmDialog({ title: '私訊還沒開放', confirmText: '知道了', cancelText: '關閉', message: `「<b>${esc(projName(pv))}</b>」還沒開放私訊自己的 AI。請專案 leader${who.length ? ` <b>${esc(who.join('、'))}</b>` : ''}或群組管理員 <b>${esc(state.projMeta.adminName || '')}</b> 打開。` });
+    }
+    const ok = await confirmDialog({ title: '打開私訊？', confirmText: '打開私訊', message: `打開後，「<b>${esc(projName(pv))}</b>」的成員可以在網頁、手機直接跟自己名下的 AI 講話。內容只有雙方看得到，你也看不到內容和數量。<br><span class="muted small">定案的事仍要寫回卡片。私訊存在平台資料庫，系統維護者技術上仍讀得到。之後可以在「成員與權限 → 專案 → ⋯」關掉。</span>` });
+    if (!ok) return;
+    try {
+      await api(`/api/projects/${encodeURIComponent(pv)}/dm`, { method: 'PUT', body: { on: true } });
+      await loadProjectList();
+      drawAiNow();
+      toast('已開放私訊');
+      document.querySelectorAll('[data-dm-side]').forEach(el => { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); });
+    } catch (err) { toast(err.message); }
+  }
   function drawDmSide() {
-    const ais = dmVisible() ? myAisHere() : [];
+    const entry = dmEntry(), on = entry && dmVisible(), ais = on ? myAisHere() : [];
     document.querySelectorAll('[data-dm-side]').forEach(el => {
-      el.hidden = !ais.length;
+      el.hidden = !entry;
+      if (entry && !on) { el.innerHTML = '<button type="button" class="dm-item dm-off" data-dm-enable><span class="dm-name">🔒 私訊我的 AI · 未開放</span></button>'; return; }
       el.innerHTML = ais.length ? `<div class="dm-head">🔒 私訊我的 AI</div>${ais.map(a => { const u = dmUnread(a.participantId);
         return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name">${esc(a.name)}</span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}` : '';
     });
@@ -4027,6 +4048,8 @@
   document.addEventListener('click', async e => {
     const o = e.target.closest?.('[data-dm-open]');
     if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen); }
+    const en = e.target.closest?.('[data-dm-enable]');
+    if (en) { if (en.closest('#sheet')) closeSheet(false); if (en.closest('#modal-root')) closeModal(); return dmEnable(); }
     if (e.target.closest?.('#dm-send')) return dmSend();
     const w = e.target.closest?.('[data-dm-wb]');
     if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }

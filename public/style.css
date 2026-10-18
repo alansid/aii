@@ -2245,3 +2245,8 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .ap-new { background-color: var(--surface); }
 .ap-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ap-acts .btn { min-height: 40px; }
+
+/* C-270 退回：沒開也看得到入口 */
+.dm-item.dm-off { color: var(--muted); font-size: .85rem; }
+.an-dm.off { opacity: .55; }
+.dm-side.flash { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
