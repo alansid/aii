@@ -2167,3 +2167,23 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
   .an-chip { display: inline-flex; }
   .f-ainow { display: none; }
 }
+
+/* C-262 B 同一張卡的連續訊息收成一組 */
+.cgrp { flex-shrink: 0; border: 1px solid #c7d7fe; border-radius: 14px; background: var(--surface); overflow: hidden; margin: 6px 0; }
+.cg-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px 12px; border: 0; background: #eef4ff; color: #1e3a8a; font: inherit; font-size: .9rem; text-align: left; cursor: pointer; }
+.cg-head b { flex: none; }
+.cg-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cg-meta { margin-left: auto; flex: none; color: var(--muted); font-size: .82rem; }
+.cg-dot { width: 8px; height: 8px; border-radius: 4px; flex: none; background: #94a3b8; }
+.cg-dot.run { background: #2563eb; } .cg-dot.ok { background: #16a34a; } .cg-dot.bad { background: #dc2626; }
+.cg-head:focus-visible, .cg-reply:focus-visible, .cg-more:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.cgrp .gmsg { margin: 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; box-shadow: none; padding: 8px 12px; }
+.cgrp .gmsg.need-me { box-shadow: inset 4px 0 0 #b45309; }
+.gm-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .88rem; }
+.gm-head .avatar { width: 24px; height: 24px; font-size: .65rem; }
+.gm-re { justify-self: start; align-self: flex-start; border: 0; background: none; padding: 2px 0; color: var(--muted); font: inherit; font-size: .82rem; cursor: pointer; }
+.cg-more, .cg-reply { display: block; width: 100%; min-height: 36px; padding: 6px 12px; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--primary); font: inherit; font-size: .85rem; text-align: left; cursor: pointer; }
+:root[data-theme="dark"] .cgrp { border-color: #2c4a7a; }
+:root[data-theme="dark"] .cg-head { background: #172a4a; color: #bfd3ff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cgrp { border-color: #2c4a7a; } :root:not([data-theme="light"]) .cg-head { background: #172a4a; color: #bfd3ff; } }
+@media (max-width: 640px) { .cg-head { font-size: .85rem; } }

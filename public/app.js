@@ -27,6 +27,7 @@
     expanded: new Set(),  // 已展開全文的長訊息
     collapsed: new Set(), // 已收合回覆的訊息
     open: new Set(),      // C-215：從一行／精簡點開的訊息
+    grpOpen: new Set(),   // C-262 B：展開了較早訊息的卡片組
     flowOpen: new Set(),  // C-215：已展開的「N 則流程訊息」（以第一則的 id 記）
     groupOf: new Map(),   // C-215：訊息 id → 所在流程訊息群組的第一則 id（收起時）
     events: null,
@@ -696,11 +697,19 @@
   // 整串清單：連續 3 則以上的一行流程訊息合成一列
   function listHtml(list) {
     state.groupOf = new Map();
+    state.grpHidden = new Map();
     state.lastCard = '';
     const out = [];
     for (let i = 0; i < list.length;) {
+      const cid = effCard(list[i]);
+      if (cid) { // C-262 B
+        let k = i;
+        while (k < list.length && effCard(list[k]) === cid) k++;
+        out.push(cardGroupHtml(cid, list.slice(i, k)));
+        i = k; continue;
+      }
       let j = i;
-      while (j < list.length && isFlowLine(list[j])) j++;
+      while (j < list.length && isFlowLine(list[j]) && !effCard(list[j])) j++;
       const run = list.slice(i, j);
       if (run.length >= 3 && !state.flowOpen.has(run[0].messageId)) {
         for (const m of run) state.groupOf.set(m.messageId, run[0].messageId);
@@ -725,6 +734,7 @@
   function revealMsg(id) {
     const m = state.byId.get(id);
     if (!m) return null;
+    if (state.grpHidden?.has(id)) { state.grpOpen.add(state.grpHidden.get(id)); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
     if (state.groupOf.has(id) || isFlowLine(m) || isSlim(m)) { state.open.add(id); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
     return document.getElementById('msg-' + id);
   }
@@ -791,6 +801,46 @@
     return [...m.recipients].sort((a, b) => (b.ask ? 1 : 0) - (a.ask ? 1 : 0)).map(r => pill(r.ask, r.participantId === meId(), r.name)).join(' ');
   }
   const myAskPill = m => { const a = myAsk(m); return a === undefined || isMine(m) ? '' : `<span class="apill ${a ? 'ask' : 'fyi'} me">${a ? '要你回覆' : '知會你'}</span>`; };
+  // ---------- C-262 B：同一張卡的連續訊息收成一組 ----------
+  // 訊息的卡：自己的（cardId 或內文第一個卡號），沒有就沿用被回覆那則的卡
+  const effCard = m => { let x = m, guard = 0; while (x && guard++ < 4) { const c = msgCardOf(x); if (c) return c; x = x.replyToMessageId ? state.byId.get(x.replyToMessageId) : null; } return ''; };
+  const ST_DOT = { 待處理: 'todo', 進行中: 'run', 受阻: 'bad', 待確認: 'ok', 已完成: 'ok', 已封存: 'todo', 待整理: 'todo' };
+  function cardGroupHtml(cid, msgs) {
+    const c = work.cards.get(cid), key = msgs[0].messageId;
+    const ids = new Set(msgs.map(m => m.messageId));
+    const many = msgs.length > 4 && !state.grpOpen.has(key);
+    const shown = many ? msgs.slice(-3) : msgs;
+    if (many) for (const m of msgs.slice(0, -3)) state.grpHidden.set(m.messageId, key);
+    const title = c ? cardTitle(c) : '';
+    return `<section class="cgrp" aria-label="${esc(`卡片 ${cid}${title ? ' ' + title : ''}，${msgs.length} 則訊息`)}">
+      <button type="button" class="cg-head" data-cap="${cid}"><span class="cg-dot ${c ? ST_DOT[c.status] || 'todo' : 'todo'}" aria-hidden="true"></span><b>${cid}</b><span class="cg-title">${esc(title)}</span><span class="cg-meta">${c ? esc(c.status) + ' · ' : ''}${msgs.length} 則 ›</span></button>
+      ${many ? `<button type="button" class="cg-more" data-grp-open="${esc(key)}">展開較早 ${msgs.length - 3} 則</button>` : ''}
+      ${shown.map(m => groupMsgHtml(m, ids)).join('')}
+      <button type="button" class="cg-reply" data-grp-reply="${esc(msgs[msgs.length - 1].messageId)}">回覆這張卡…</button>
+    </section>`;
+  }
+  // 組內每則精簡：小頭像、名字、標籤、時間、要你回覆；AI 結論＋細節照 C-260；不顯示角色行、卡片列、底部卡號
+  function groupMsgHtml(m, ids) {
+    const a = m.author, tag = tagOf(m.text), parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
+    const ai = aiParts(m);
+    const re = !m.replyToMessageId ? '' : parent && ids.has(parent.messageId)
+      ? `<button type="button" class="gm-re" data-jump="${esc(parent.messageId)}">↩ ${esc(shortOf(parent.author.name))}</button>`
+      : `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>`;
+    const cls = ['msg', 'gmsg', isMine(m) ? 'mine' : '', needReply(m) ? 'need-me' : ''].join(' ');
+    const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
+    const body = m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m);
+    return `<article class="${cls}" id="msg-${esc(m.messageId)}">
+      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author">${esc(shortOf(a.name))}</b>${tag ? leadPill(tag) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time>${ask}${unansweredTag(m)}</div>
+      ${re}
+      ${body}
+      ${authHtml(m)}
+      <div class="msg-foot">
+        <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+        ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && !ai && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
+        ${threadToggle(m)}
+      </div>
+    </article>`;
+  }
   // ---------- C-262 看得出在回哪張卡 ----------
   // 訊息的卡：用 cardId 關聯的卡，沒有就用內文第一個卡號
   const msgCardOf = m => [...(state.msgCards.get(m.messageId) || [])][0] || cardIdOf(m.text);
@@ -1307,7 +1357,7 @@
       state.newCount++;
       if (isToMe(m) || isReplyToMe(m)) state.newMention++;
     }
-    if ((m.replyToMessageId && state.byId.has(m.replyToMessageId)) || (visible(m) && isFlowLine(m))) {
+    if ((m.replyToMessageId && state.byId.has(m.replyToMessageId)) || (visible(m) && (isFlowLine(m) || effCard(m)))) {
       const box = $('#messages'), top = box.scrollTop;
       renderMessages(stick);
       if (stick) trimWindow(); else box.scrollTop = top;
@@ -1348,6 +1398,10 @@
     if (d.open) state.expanded.add(d.dataset.detail); else state.expanded.delete(d.dataset.detail);
   }, true);
   $('#messages').addEventListener('click', e => {
+    const go = e.target.closest?.('[data-grp-open]');
+    if (go) { state.grpOpen.add(go.dataset.grpOpen); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; return; }
+    const gr = e.target.closest?.('[data-grp-reply]');
+    if (gr) { const m = state.byId.get(gr.dataset.grpReply); if (m) { setReply(m); input.focus(); } return; }
     if (e.target.closest('#load-older, #load-older-empty')) return loadOlder().catch(err => toast(err.message));
     if (e.target.closest('#ctx-older')) return ctxMore('older').catch(err => toast(err.message));
     if (e.target.closest('#ctx-newer')) return ctxMore('newer').catch(err => toast(err.message));
