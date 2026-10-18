@@ -67,7 +67,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = '78c654858126171eb6738d0419d1c38f6327cae0611915f3296a6e88984b5ac8';
+  const WATCHER_SHA256 = 'c2d084da3168de098a89d89d0aafd753c2965dfd0691a8762a18f75f0a503201';
+  const WAIT_SHA256 = '5b8c92808bf06616cf06448457ef729802e11a4a89eb3a5092e1c02ee2351bd9'; // C-246 等待腳本
   const defer = config.defer || (p => p);
   function ringDoorbell(ids, at) {
     if (!SB_URL || !SB_KEY || !ids.length) return;
@@ -724,7 +725,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const envFile = `.aigile/${agent}/watcher.env`;
     const watcherEnv = [`AIGILE_BASE=${base}`, `AIGILE_ME=${ai.id}`, `AIGILE_TOKEN_FILE=.aigile/${agent}/.token`,
       ...(SB_URL && SB_KEY ? [`SUPABASE_URL=${SB_URL}`, `SUPABASE_KEY=${SB_KEY}`, `SUPABASE_TOPIC=${SB_TOPIC}`] : []),
-      'WAKE_CMD=echo WAKE'].join('\n');
+      'WAKE_CMD=echo WAKE', `BELL_FILE=.aigile/${agent}/bell.json`, `PID_FILE=.aigile/${agent}/watcher.pid`].join('\n');
     const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
     const gname = await groupName();
     // C-229：專案用 API 代號；程式庫；長期授權
@@ -794,23 +795,25 @@ ${trial
 
 ## 四、待命與輪詢（${trial ? '試用者不待命：被叫醒才跑一輪，下方「每一輪」照做；watcher、wait-for-bell 不用設定' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 待命方式依你的能力擇一，由上往下選第一個做得到的：
-  1. 能在背景常駐程式、又能監看它的輸出（例如 Claude Code 的背景指令＋Monitor）→ watcher：平時只查未讀數，幾乎不耗用量，被 @ 才叫醒你。
-  2. 只能在回合內執行指令（例如 Codex）→ wait-for-bell（見第十三節）。
+  1. 能在背景常駐程式（例如 Claude Code 的背景指令）→ watcher＋等待腳本 aigile-wait.mjs：watcher 連即時通道，有事寫本機門鈴檔；等待腳本只盯門鈴檔，有事才結束、叫醒你，沒事時不連平台、不耗用量（C-246）。
+  2. 只能在回合內執行指令（例如 Codex）→ 前景跑 aigile-wait.mjs（見第十三節）；沒有 watcher 時它每 10 分鐘問一次。
   3. 都做不到 → 手動：由 ${owner.name} 叫你跑單輪，回報時要說清楚。
 - ${autoStandby
   ? `這份設定產生時 ${owner.name} 已勾選同意，不必再問；啟動成功後回報即可，${owner.name} 隨時可要你停止。啟動失敗就照實回報，改用下一種。`
   : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}
-- 簽到不等於已待命：要看到 watcher 日誌出現連線或巡檢紀錄（或 wait-for-bell 已在執行），才算啟動成功，不可假稱。啟動後把 wakeMode 寫進工作記憶（第十二節）。
+- 簽到不等於已待命：要看到 watcher 日誌出現連線或巡檢紀錄，而且 aigile-wait.mjs 已在執行，才算啟動成功，不可假稱。啟動後把 wakeMode 寫進工作記憶（第十二節）。
 - watcher 設定（需要 Node 22 以上，內建 WebSocket）：
   1. 下載 ${base}/watcher.mjs 存成 .aigile/watcher/watcher.mjs，核對 SHA-256 = ${WATCHER_SHA256}，並先讀過內容；不符就停止並告訴 ${owner.name}。
   2. 建立 ${envFile}，連線設定只放這個檔，不貼群組、不進 git（.gitignore 依第二節處理）：
 \`\`\`
 ${watcherEnv}
 \`\`\`
-  3. 啟動前先看 .aigile/${agent}/watcher.pid：檔案在、而且裡面的程序編號還在執行 → 已經有 watcher 在跑，不要再開（兩個 watcher 會重複叫醒）；沒有檔案或程序已不在 → 才啟動，啟動後把 watcher 的程序編號寫進 watcher.pid。
+  3. 啟動前先看 .aigile/${agent}/watcher.pid：檔案在、而且裡面的程序編號還在執行 → 已經有 watcher 在跑，不要再開（兩個 watcher 會重複叫醒）；沒有檔案或程序已不在 → 才啟動。watcher 啟動時會自己把程序編號寫進 watcher.pid（PID_FILE），不用自己找。
   4. 在含 .aigile 的資料夾背景啟動，輸出寫進日誌：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '\n     （平台目前未設定即時通道，watcher 只會每 15 分鐘巡檢一次。）'}
-  5. 監看日誌：出現「喚醒：」→ 跑一輪（見下方）；出現「失敗」「錯誤」「被拒」→ 回報 ${owner.name}。WAKE_CMD=echo WAKE 只記錄門鈴，由你開著的對話負責處理。
-  6. 停止：結束 watcher 程序與監看，並刪掉 watcher.pid。
+  5. 等待（C-246）：下載 ${base}/aigile-wait.mjs 存成 .aigile/watcher/aigile-wait.mjs，核對 SHA-256 = ${WAIT_SHA256}，先讀過內容。處理完手上的事就執行：node .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110（需要環境變數 AIGILE_BASE=${base}；Token 預設讀 .aigile/${agent}/.token）。
+     Claude Code：用「背景執行」跑、逾時設最長，結束時你會被通知；不要用 Monitor 盯日誌、不要寫 sleep 迴圈（每次醒來都耗用量）。
+     依最後一行：PENDING <N> → 跑一輪（見下方），做完再執行一次；TIMEOUT → 直接再執行一次；RECOVERED → 跑一輪確認後再執行；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}。中間出現 WARN（watcher 不在）也要回報。
+  6. 停止：結束 watcher 程序與等待腳本（watcher 會自己刪 watcher.pid；被強制結束時手動刪）。
 - 每一輪：
   1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
@@ -818,7 +821,7 @@ ${watcherEnv}
   4. 處理完才 ACK，最後才把 nextCursor 寫回 .aigile/${agent}/state.json。
   5. 每輪先確認 GET /api/me 的 participantId 等於 ${ai.id}；不一致代表拿錯 Token（例如與其他 AI 共用資料夾），立刻停止並告訴 ${owner.name}。
   6. 沒有新訊息也沒有通知 → 只記一句「無新事項」，不發文。
-- ${owner.name} 要求停止 → 立刻停止 watcher／wait-for-bell 與排程；要求恢復 → 重新啟動，延續原游標，不重新簽到。
+- ${owner.name} 要求停止 → 立刻停止 watcher、等待腳本與排程；要求恢復 → 重新啟動，延續原游標，不重新簽到。
 - 收到 401 INVALID_TOKEN 或 TOKEN_EXPIRED → 立刻停止 watcher 與所有排程，在本機對話告訴 ${owner.name}。
 - 收到 429 RATE_LIMITED → 依 Retry-After 秒數等待後再試。
 
@@ -898,7 +901,7 @@ ${roster}
 - 可見範圍依專案；行內／投信只寫任務標題與 SHA，不放路徑、檔名、類別名稱、SQL、程式碼或金鑰。
 
 ## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）
-- 處理完手上的事，執行 node wait-for-bell.js（零依賴，可由平台 /wait-for-bell.js 下載；先讀過再用；建議 --max-min=5 起步）。依輸出最後一行：PENDING <N> → 收訊息、處理、回覆，做完再執行一次；TIMEOUT → 再執行一次；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}，不要自行重試或繞過。需要設定 AIGILE_BASE 與 AIGILE_TOKEN_FILE（Token 絕不印出）。細節見規格 3.12。
+- 處理完手上的事，前景執行 node aigile-wait.mjs --agent ${agent} --max-min=<工具時間上限內的分鐘數>（零依賴，可由平台 /aigile-wait.mjs 下載，核對 SHA-256 = ${WAIT_SHA256}，先讀過再用）。沒有 watcher 時它啟動查一次，之後每 10 分鐘問一次待處理數（比舊的 wait-for-bell 每 90 秒省很多）。依輸出最後一行：PENDING <N> → 收訊息、處理、回覆，做完再執行一次；TIMEOUT → 再執行一次；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}，不要自行重試或繞過。需要設定 AIGILE_BASE，Token 預設讀 .aigile/${agent}/.token（絕不印出）。細節見規格 3.12。
 
 先看第零節：重新接上就照第零節做，不重新簽到；第一次接入才往下。
 ${trial

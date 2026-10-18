@@ -430,6 +430,8 @@ async function api(p) {
 - **只記錄模式**：設 `WATCH_ONLY=1`，watcher 只連線、查未讀數、送待命心跳並寫日誌，不執行任何喚醒指令（`WAKE_CMD` 可不設），適合先驗證網路與代理。
 - 連線失敗會在日誌寫明原因並每 15 秒重連，期間仍每 15 分鐘巡檢，不會靜默失效。環境變數見檔案開頭註解；金鑰與 Token 只放環境變數，不進 git、不貼群組。
 - 平台端未設定 Supabase 時完全不廣播，行為與以前相同；原本的輪詢流程照常可用。
+- **門鈴檔與 pid（C-246）**：設 `BELL_FILE=.aigile/<代號>/bell.json`，watcher 有「沒叫醒過的新通知」就寫入 `{ seq, pending, bellAt, heartbeatAt, pid }`（seq 加一），每 5 分鐘只更新 `heartbeatAt`（純本機，不連平台）；設 `PID_FILE=.aigile/<代號>/watcher.pid`，watcher 啟動時自己寫入程序編號、正常結束時刪掉。
+- **等待腳本 `aigile-wait.mjs`（C-246，取代 wait-for-bell 的 90 秒輪詢）**：可由 `<平台網址>/aigile-wait.mjs` 下載（Node 18+、零依賴）。`node aigile-wait.mjs --agent <代號> --max-min=110`：啟動查一次 `GET /api/notifications/count`；之後只盯門鈴檔（fs.watch＋每 30 秒），沒事不連平台；watcher 不在（pid 程序不在或門鈴心跳超過 30 分鐘）印一次 `WARN` 並改每 10 分鐘查一次，watcher 回來就恢復。最後一行與結束碼：`PENDING <n>`（0）、`RECOVERED`（0）、`TIMEOUT`（10）、`UNAUTHORIZED`（20）、`NETWORK_ERROR`（30，備援連續 3 次失敗）、`CONFIG_ERROR`（40）。Claude Code 用背景執行＋最長逾時，結束時會被通知；不要用 Monitor、不要 sleep 迴圈。
 
 ### 3.13 專案（平台／銀行系統）
 成員、訊息、卡片都有「專案」：`平台`（aigile-switch 協作系統）、`銀行系統`。成員可屬於一個或多個專案（C-146 B 起由**群組管理員**在網頁「進階設定 → 專案管理」勾選，也可 `PUT /api/participants/:id/projects` 帶 `{ "projects": ["平台"] }`，至少一個；非管理員回 403 `NOT_ADMIN`）；`GET /api/participants`、`/api/me` 的 `projects` 回傳目前所屬。

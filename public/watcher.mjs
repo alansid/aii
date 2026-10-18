@@ -17,9 +17,12 @@
 //   WAKE_CMD           喚醒指令（依你的 AI 而定，例如 claude -p "請收訊息並處理"、codex exec "…"）；只記錄模式可不設
 //   WATCH_ONLY=1       只記錄模式：連線、查未讀數、送待命心跳、寫日誌，但不執行任何喚醒指令
 //   HEARTBEAT_MIN      巡檢／心跳間隔，預設 15 分鐘
+//   BELL_FILE          （C-246）門鈴檔，例如 .aigile/PG/bell.json：有新的待處理通知就寫入筆數與時間，
+//                      每 5 分鐘寫一次本機心跳（不連平台）；aigile-wait.mjs 只盯這個檔，沒事時不連平台
+//   PID_FILE           （C-246）啟動時把自己的程序編號寫進這個檔（例如 .aigile/PG/watcher.pid），結束時刪掉
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 
 const env = process.env;
 const BASE = (env.AIGILE_BASE || '').replace(/\/+$/, '');
@@ -31,6 +34,8 @@ const TOPIC = env.SUPABASE_TOPIC || 'aigile-switch';
 const WAKE_CMD = env.WAKE_CMD || '';
 const WATCH_ONLY = env.WATCH_ONLY === '1';
 const HEARTBEAT_MS = (Number(env.HEARTBEAT_MIN) || 15) * 60_000;
+const BELL_FILE = env.BELL_FILE || '';
+const PID_FILE = env.PID_FILE || '';
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
@@ -39,6 +44,15 @@ if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
 }
 
 let running = false, queued = false;
+// C-246 門鈴檔（寫到暫存檔再改名，讀的一方不會讀到寫一半的內容）
+const bell = { v: 1, seq: 0, pending: 0, bellAt: null, heartbeatAt: null, pid: process.pid };
+function writeBell(patch = {}) {
+  if (!BELL_FILE) return;
+  Object.assign(bell, patch, { heartbeatAt: new Date().toISOString(), pid: process.pid });
+  try { writeFileSync(BELL_FILE + '.tmp', JSON.stringify(bell)); renameSync(BELL_FILE + '.tmp', BELL_FILE); }
+  catch (e) { log('寫門鈴檔失敗：', e.message); }
+}
+function ring(pending) { writeBell({ seq: bell.seq + 1, pending, bellAt: new Date().toISOString() }); }
 const woken = new Set(); // 已經為它喚醒過的通知 ID：只要有「沒喚醒過的新通知」就喚醒，不靠未讀數或時間間隔判斷
 
 // 用自己的 Token 查未讀數（0 token）；同時就是待命心跳
@@ -59,12 +73,13 @@ async function pendingIds() {
 async function check(why) {
   let pending;
   try { pending = await unread(); } catch (e) { return log(`[${why}] 查未讀數失敗：${e.message}`); }
-  if (!pending) { woken.clear(); return log(`[${why}] 沒有待處理，不喚醒`); }
-  if (WATCH_ONLY) return log(`[${why}] 有 ${pending} 則待處理，只記錄模式，不喚醒`);
+  if (!pending) { woken.clear(); writeBell({ pending: 0 }); return log(`[${why}] 沒有待處理，不喚醒`); }
+  if (WATCH_ONLY && !BELL_FILE) return log(`[${why}] 有 ${pending} 則待處理，只記錄模式，不喚醒`);
   let ids;
   try { ids = await pendingIds(); } catch (e) { return log(`[${why}] 查通知清單失敗：${e.message}`); }
   const fresh = ids.filter(id => !woken.has(id));
-  if (!fresh.length) return log(`[${why}] 還有 ${pending} 則待處理，但都已為它們喚醒過，不重複喚醒`);
+  if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理，但都已為它們喚醒過，不重複喚醒`); }
+  if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
   if (running) { queued = true; return log(`[${why}] 有 ${fresh.length} 則新的待處理，但 AI 正在執行，排隊補跑`); }
   fresh.forEach(id => woken.add(id));
   for (const id of woken) if (!ids.includes(id)) woken.delete(id); // 已處理掉的不用再記
@@ -73,6 +88,7 @@ async function check(why) {
 
 function wake(pending, why) {
   running = true;
+  ring(pending);
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
   const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', env: { ...env, AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
   child.on('error', e => log('喚醒指令啟動失敗：', e.message));
@@ -116,7 +132,11 @@ function fail(reason) {
   retry = setTimeout(connect, 15_000);
 }
 
+if (PID_FILE) { try { writeFileSync(PID_FILE, String(process.pid)); log(`程序編號 ${process.pid} 已寫入 ${PID_FILE}`); } catch (e) { log('寫 pid 檔失敗：', e.message); } }
+const bye = () => { ws?.close(); if (PID_FILE) { try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE); } catch {} } process.exit(0); };
 connect();
 setInterval(() => check('保底巡檢'), HEARTBEAT_MS);
+if (BELL_FILE) setInterval(() => writeBell(), 5 * 60_000); // 本機心跳，不連平台
 check('啟動');
-process.on('SIGINT', () => { ws?.close(); process.exit(0); });
+process.on('SIGINT', bye);
+process.on('SIGTERM', bye);
