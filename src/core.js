@@ -377,6 +377,12 @@ export function createApp({ db, docText, config = {}, storage = null }) {
         recipientIds.add(p.id);
       }
     }
+    // C-277：回覆某則訊息＝原作者自動成為收件人（即時門鈴、算要回覆）；自己回自己、@所有人除外
+    let replyAuthor = null;
+    if (replyTo && !audience && replyTo.author_id !== me.id) {
+      const ra = people.get(replyTo.author_id);
+      if (ra && ra.status === 'active' && ra.kind !== 'system') { replyAuthor = ra.id; recipientIds.add(ra.id); }
+    }
     recipientIds.delete(me.id);
     // C-259：要回覆的人。@所有人＝全部知會；沒帶 replyFrom：只有一位收件人＝他要回覆，多位＝不標（照舊）
     // AI 一則最多一位要回覆：多的自動降為知會、回應帶 warnings（不回錯，舊接入設定的 AI 不會突然發不出去）
@@ -392,6 +398,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
         ask = ask.slice(0, 1);
       }
     } else if (recipientIds.size === 1) ask = [...recipientIds];
+    else if (replyAuthor && recipientIds.has(replyAuthor)) ask = [replyAuthor]; // C-277：被回覆的人預設要回覆，其他知會
 
     // 專案（C-172）：只屬一個專案的人沒帶＝自己的專案（回覆全部專案的訊息也一樣，不再繼承「全部專案」）；
     // 兩邊成員從 API 發文（checkProject）沒帶一律 400，要發全部專案必須明確帶 'all'；'all'＝全部專案
@@ -411,6 +418,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       const named = head && projectRows.find(p => p.name === head[1] || p.id === head[1]);
       if (named && project !== named.id) throw new ApiError(400, 'PROJECT_TEXT_MISMATCH', `訊息開頭寫【${named.name}】，project 必須帶 ${named.id}（目前是${project ? '「' + nameOf(project) + '」' : '全部專案'}）。真的要發給全部專案，請把開頭改成【全部專案】。`);
     }
+    if (replyAuthor && project && !projectsOf(people.get(replyAuthor)).includes(project) && !rawIds.includes(replyAuthor) && !(rawAsk || []).includes(replyAuthor)) recipientIds.delete(replyAuthor); // C-277
     if (checkProject && project && !audience) {
       const outside = [...recipientIds].map(rid => people.get(rid)).filter(p => !projectsOf(p).includes(project));
       if (outside.length) throw new ApiError(400, 'PROJECT_MISMATCH', `${outside.map(p => p.name).join('、')} 不屬於「${project}」專案，不能指定；跨專案請改發全部專案（project: "all"）。`);

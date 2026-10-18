@@ -114,7 +114,7 @@ async function stopServer(server) {
     assert.equal(errCode(await call(ai.token, '/api/messages', 'POST', { ...ack, text: '不同內容' })), 'IDEMPOTENCY_CONFLICT');
 
     const pNotif = (await call(percy.token, '/api/notifications')).body;
-    assert.deepEqual(pNotif.items[0].reasons, ['reply'], '被回覆者收到 reply 通知');
+    assert.deepEqual(pNotif.items[0].reasons, ['mention', 'reply'], 'C-277：被回覆者視同被 @（mention＋reply）');
 
     const acked = (await call(ai.token, '/api/notifications/ack', 'POST', { notificationIds: [notif.items[0].notificationId, m1.body.messageId] })).body;
     assert.deepEqual(acked.confirmedIds, [notif.items[0].notificationId], 'messageId 不會被當成通知');

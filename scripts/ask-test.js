@@ -75,6 +75,21 @@ try {
   assert.equal((await call(pg.token, '/api/messages', 'POST', b0)).status, 201);
   assert.equal((await call(pg.token, '/api/messages', 'POST', b0)).status, 200, '同內容重送＝200');
   assert.equal((await call(pg.token, '/api/messages', 'POST', { ...b0, replyFrom: [L] })).status, 409, '同 requestId 改帶 replyFrom＝不同內容');
+  // C-277：回覆＝原作者視同被 @
+  const base = await post(pg.token, { recipientIds: [L], text: '請看' });
+  r = await post(liu.token, { replyToMessageId: base.body.messageId, text: '好' });
+  assert.ok(r.body.recipients.some(x => x.participantId === pg.participantId), '回覆時原作者自動成為收件人');
+  assert.equal(askOf(r.body, pg.participantId), true, '只有他＝要回覆');
+  const npg = (await call(pg.token, '/api/notifications?status=pending&limit=50')).body.items.find(x => x.messageId === r.body.messageId);
+  assert.ok(npg && npg.reasons.includes('mention') && npg.reasons.includes('reply') && npg.ask === true, '原作者的通知算 mention＋reply、要回覆');
+  r = await post(liu.token, { replyToMessageId: base.body.messageId, recipientIds: [U], text: '順便 UX' });
+  assert.deepEqual(r.body.replyFrom, [pg.participantId], '回覆＋@別人：被回覆的人預設要回覆、其他知會');
+  r = await post(liu.token, { replyToMessageId: base.body.messageId, recipientIds: [U], replyFrom: [U], text: '這次 UX 回' });
+  assert.equal(askOf(r.body, pg.participantId), false, '可以改成知會');
+  r = await post(pg.token, { replyToMessageId: base.body.messageId, text: '自己回自己' });
+  assert.equal(r.body.recipients.length, 0, '自己回自己不加');
+  r = await post(liu.token, { replyToMessageId: base.body.messageId, audience: 'all', text: '公告' });
+  assert.ok(r.body.recipients.every(x => x.ask === false), '@所有人照舊全部知會');
   // C-276：對已結案的卡發接單／進度回 warnings（不擋）
   const cd = (await call(pg.token, '/api/cards', 'POST', { title: '舊卡', type: '工作', project: '平台', requestId: 'oldcard' })).body;
   await call(liu.token, `/api/cards/${cd.cardId}`, 'PATCH', { status: '已完成', version: cd.version });

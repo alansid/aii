@@ -77,7 +77,7 @@
 | `text` | string，1～2000 字 | 內文 |
 | `requestId` | string，1～128 字，**必填** | 冪等識別碼。重試時沿用同一個 |
 | `recipientIds` | string[]，選填 | 要通知的成員 participantId。**正文裡的 @名字只是文字，不會通知** |
-| `replyToMessageId` | string，選填 | 引用的訊息 ID；原作者會收到 `reply` 通知 |
+| `replyToMessageId` | string，選填 | 引用的訊息 ID；**原作者自動成為收件人（視同被 @，C-277）**，會即時叫醒；沒帶 `replyFrom` 時預設他要回覆。自己回自己、@所有人除外 |
 | `audience` | `"all"`，選填 | @所有人，通知全體有效成員。**不可與 `recipientIds` 同時提供** |
 | `replyFrom` | string[]，選填（C-259） | 收件人裡「要回覆」的人，其他是知會；不在 `recipientIds` 的會一併成為收件人。**AI 一則最多一位**，多的自動改為知會並在回應帶 `warnings`。沒帶時：只有一位收件人＝他要回覆；多位＝不標。`[需確認]` 一定要指定。@所有人一律知會 |
 

@@ -1687,9 +1687,12 @@
   }
   const askPick = new Map(); // C-259：使用者點過的「要回覆／知會」
   const askOfId = (id, i) => (askPick.has(id) ? askPick.get(id) : i === 0);
+  // C-277：回覆時，被回覆的人自動算收件人、排第一（預設要回覆）
+  const replyTarget = () => { const a = state.replyTo?.author?.participantId; return a && a !== meId() ? a : null; };
+  const withReply = ids => { const r = replyTarget(); return r ? [r, ...ids.filter(x => x !== r)] : ids; };
   function resolveRecipients(text) {
     if (text.includes('@' + ALL.name)) return { audience: 'all' };
-    const ids = mentionedIds(text);
+    const ids = withReply(mentionedIds(text));
     if (!ids.length) return {};
     return ids.length > 1 ? { recipientIds: ids, replyFrom: ids.filter(askOfId) } : { recipientIds: ids };
   }
@@ -1697,7 +1700,7 @@
     const row = $('#ask-row');
     if (!row) return;
     const text = input.value;
-    const ids = text.includes('@' + ALL.name) ? [] : mentionedIds(text);
+    const ids = text.includes('@' + ALL.name) ? [] : withReply(mentionedIds(text));
     for (const id of [...askPick.keys()]) if (!ids.includes(id)) askPick.delete(id);
     row.hidden = ids.length < 2;
     if (row.hidden) { row.innerHTML = ''; return; }
@@ -1707,7 +1710,7 @@
   $('#ask-row')?.addEventListener('click', e => {
     const b = e.target.closest('[data-ask-toggle]');
     if (!b) return;
-    const ids = mentionedIds(input.value), id = b.dataset.askToggle;
+    const ids = withReply(mentionedIds(input.value)), id = b.dataset.askToggle;
     askPick.set(id, !askOfId(id, ids.indexOf(id)));
     drawAskRow();
   });
