@@ -1007,7 +1007,7 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限' };
+  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊' }; // C-270：私訊整頁
   const TOP_PAGES = { myai: '/my-ai', perm: '/members' }; // C-182：第一層頁面（不分專案）
   const isTop = p => p === 'myai' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
@@ -1085,7 +1085,7 @@
   function parseRoute() {
     const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
     const page = x => PAGE_BY_NAME[x] || (PAGE_NAME[x] ? x : null);
-    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.name === seg[1] || x.id === seg[1]); return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
+    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.name === seg[1] || x.id === seg[1]); if (p && page(seg[2]) === 'dm') state.dmAi = seg[3] || null; return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
     if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
     if (seg[0] === 'members') return { view: null, page: 'perm' };
@@ -1095,7 +1095,7 @@
     if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     const v = projectView();
     if (v === 'hub') return '/';
-    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(projName(v))}/${encodeURIComponent(PAGE_NAME[state.page] || '訊息')}`;
+    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(projName(v))}/${encodeURIComponent(PAGE_NAME[state.page] || '訊息')}${state.page === 'dm' && state.dmAi ? '/' + encodeURIComponent(state.dmAi) : ''}`;
   }
   function syncUrl(replace) {
     const u = routePath();
@@ -2471,7 +2471,8 @@
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); showPage(page, { replace, noHistory }); }); // C-182：有未儲存的變更先提醒
     if (work.openId) closeCard();
     const v = projectView();
-    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
+    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(page) && !(v === 'cross' && page === 'work') ? page : page === 'dm' && PROJECTS.includes(v) ? 'dm' : 'messages';
+    if (state.page !== 'dm') clearInterval(dm.timer); // 離開私訊頁就不再看新私訊
     if (state.page !== 'team') work.teamScrollTab = null; // C-157：離開團隊頁就不再保留捲動位置（UX 第 1010 則），回來從頂端開始
     if (state.page !== 'hub' && !TOP_PAGES[state.page]) store.set(PAGE_KEY, state.page);
     if (!noHistory) syncUrl(replace);
@@ -2497,6 +2498,8 @@
       return renderMyAiPage();
     } else if (state.page === 'perm') {
       return renderPermPage();
+    } else if (state.page === 'dm') {
+      return renderDmPage();
     } else if (state.page === 'inbox') {
       return Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(loadConfirmMsgs).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
     } else scrollBottom();
@@ -2657,7 +2660,9 @@
   async function loadNotes() {
     work.notesAt = Date.now();
     const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=50&order=desc'), api('/api/me/notices').catch(() => ({ items: [] }))]);
+    const dmBefore = (work.notes || []).filter(n => n.dm).map(n => n.notificationId).join();
     work.notes = a.items; work.sec = b.items;
+    if (dmVisible() && work.notes.filter(n => n.dm).map(n => n.notificationId).join() !== dmBefore) loadDmSummary(); // C-270：有私訊通知才更新清單
     work.notesMore = a.hasMore ? Math.max(0, (a.total || 0) - a.items.length) : 0; // 只顯示最新 50 則，其餘寫數字
   }
   // C-223：安全通知（新裝置用帳密登入、主機救援）只存在本人帳號，不是群組訊息
@@ -3971,9 +3976,16 @@
     document.querySelectorAll('[data-dm-side]').forEach(el => {
       el.hidden = !entry;
       if (entry && !on) { el.innerHTML = '<button type="button" class="dm-item dm-off" data-dm-enable><span class="dm-name">🔒 私訊我的 AI · 未開放</span></button>'; return; }
-      el.innerHTML = ais.length ? `<div class="dm-head">🔒 私訊我的 AI</div>${ais.map(a => { const u = dmUnread(a.participantId);
-        return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name">${esc(a.name)}</span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}` : '';
+      el.innerHTML = ais.length ? `<div class="dm-head">🔒 私訊</div>${dmSorted(ais).map(a => { const u = dmUnread(a.participantId), cur = state.page === 'dm' && state.dmAi === a.participantId;
+        return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"${cur ? ' aria-current="page"' : ''}><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name">${esc(a.name)}<span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}` : '';
     });
+    document.querySelectorAll('[data-dm-top]').forEach(b => { b.hidden = !entry; const n = ais.reduce((t, a) => t + dmUnread(a.participantId), 0); b.querySelector('.badge').hidden = !n; b.querySelector('.badge').textContent = n; });
+    if (on && !(state.dmSumAt || {})[projectView()]) loadDmSummary();
+  }
+  // 清單的最後一句：每個專案開頁查一次；之後只在有私訊通知或打開對話時更新
+  async function loadDmSummary() {
+    state.dmSumAt = { ...(state.dmSumAt || {}), [projectView()]: Date.now() };
+    try { const d = await api('/api/dm/summary'); state.dmSummary = new Map(d.items.map(x => [x.aiId, x])); drawDmSide(); if (state.page === 'dm' && !state.dmAi) renderDmPage(); } catch {}
   }
   const dm = { aiId: null, after: 0, items: [], canSend: true, reason: '', timer: null, wb: null, waitUntil: 0 };
   // C-272 頭像提案卡：現在 → 新的；只有被產圖的本人能按「套用為頭像」「不要」
@@ -3992,7 +4004,7 @@
     const mine = d.from.participantId === meId();
     const cards = mine ? [] : [...new Set(String(d.text).match(/\bC-\d{3,}\b/g) || [])];
     const wb = dm.wb && dm.wb.id === d.dmId;
-    return `<div class="dm-b ${mine ? 'me' : 'ai'}" id="dm-${esc(d.dmId)}"><div class="dm-text">${renderText(d.text)}</div>
+    return `<div class="dm-b ${mine ? 'me' : 'ai'}" id="dm-${esc(d.dmId)}">${mine ? '' : `<div class="dm-name"><b>${esc(d.from.name)}</b></div>`}<div class="dm-text">${renderText(d.text)}</div>
       ${cards.map(c => `<button type="button" class="dm-wb" data-dm-wb="${esc(d.dmId)}" data-card-id="${c}">↗ 寫回 ${c}</button>`).join(' ')}
       ${wb ? `<div class="dm-wb-box"><label class="small">寫回 ${esc(dm.wb.card)} 的留言（發到群組時標「來自私訊」，可以先改字）<textarea id="dm-wb-text" rows="3" maxlength="1900">${esc(d.text)}</textarea></label>
         <div class="row end"><button type="button" class="btn small" data-dm-wb-cancel>取消</button><button type="button" class="btn small primary" data-dm-wb-go>寫回</button></div></div>` : ''}
@@ -4004,7 +4016,7 @@
     const near = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
     list.innerHTML = dm.items.map(dmBubble).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
     const mb = state.team?.members.find(m => m.participantId === dm.aiId), now = mb ? aiNowOf(mb) : { kind: 'off' };
-    $('#dm-status').textContent = now.kind === 'work' ? `⏳ 它在做${now.cardId ? ' ' + now.cardId : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '有新私訊會叫醒它' : '它目前離線，上線後會看到';
+    $('#dm-status').textContent = now.kind === 'work' ? `在做${now.cardId ? ' ' + now.cardId : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '待命，有新私訊會叫醒它' : '目前離線，上線後會看到';
     const ta = $('#dm-input'), sb = $('#dm-send');
     ta.disabled = sb.disabled = !dm.canSend;
     $('#dm-note').textContent = dm.canSend ? '' : dm.reason;
@@ -4015,24 +4027,46 @@
   async function dmLoad() {
     const d = await api(`/api/dm?aiId=${encodeURIComponent(dm.aiId)}&after=${dm.after}`);
     dm.items.push(...d.items); dm.after = d.nextAfter; dm.canSend = d.canSend; dm.reason = d.reason || '';
+    const last = dm.items[dm.items.length - 1];
+    if (last) { if (!state.dmSummary) state.dmSummary = new Map(); state.dmSummary.set(dm.aiId, { aiId: dm.aiId, fromMe: last.from.participantId === meId(), text: last.proposal ? '🖼 頭像提案' : String(last.text).slice(0, 80), createdAt: last.createdAt }); if (d.items.length) drawDmSide(); }
     const before = (work.notes || []).length;
     work.notes = (work.notes || []).filter(n => !(n.dm && n.sender.participantId === dm.aiId)); // 伺服器已標已讀
     if (work.notes.length !== before) { updateTodoBadge(); drawDmSide(); }
     return d;
   }
-  async function openDm(aiId) {
-    const ai = state.participants.get(aiId);
-    if (!ai) return;
+  // C-270 改版：私訊跟群組訊息同一個位置整頁打開；網址記得是哪段；切走再回來對話還在
+  function openDm(aiId) {
     if (document.querySelector('#modal-root .modal')) closeModal();
-    Object.assign(dm, { aiId, after: 0, items: [], wb: null });
+    state.dmAi = aiId || null;
+    if (state.page === 'dm') { syncUrl(false); return renderDmPage(); }
+    return showPage('dm');
+  }
+  const dmSum = () => state.dmSummary || new Map();
+  const dmSorted = ais => [...ais].sort((a, b) => String(dmSum().get(b.participantId)?.createdAt || '').localeCompare(String(dmSum().get(a.participantId)?.createdAt || '')));
+  const dmPreview = id => { const s = dmSum().get(id); return s ? (s.fromMe ? '你：' : '') + s.text : '還沒有私訊'; };
+  function dmListHtml(ais) {
+    if (!ais.length) return `<div class="dm-empty-page"><p class="muted">${dmEntry() ? '這個專案還沒開放私訊。' : '你在這個專案沒有自己的 AI。'}</p>${dmEntry() ? '<button type="button" class="btn" data-dm-enable>看怎麼打開</button>' : ''}</div>`;
+    return `<div class="dm-listpage"><h2 class="dm-h">🔒 私訊</h2><p class="muted small">只有你和自己的 AI 看得到。</p>${dmSorted(ais).map(a => { const u = dmUnread(a.participantId);
+      return `<button type="button" class="dm-row" data-dm-open="${esc(a.participantId)}">${avatar(a)}<span class="dm-row-main"><b>${esc(a.name)}</b><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}</div>`;
+  }
+  async function renderDmPage() {
+    const box = $('#page-work');
+    box.classList.remove('is-board');
     clearInterval(dm.timer);
-    openModal(ai.name, `<div class="dm-lock">🔒 只有你和這個 AI 看得到，其他人（含管理員畫面）看不到內容也看不到數量。<b>定案的事請寫回卡片</b>，團隊才看得到。</div>
-      <div class="dm-status muted small" id="dm-status" role="status"></div>
+    const ais = dmVisible() ? myAisHere() : [];
+    const ai = state.dmAi && ais.find(a => a.participantId === state.dmAi);
+    drawDmSide();
+    if (!ai) { state.dmAi = null; box.innerHTML = dmListHtml(ais); return; }
+    Object.assign(dm, { aiId: ai.participantId, after: 0, items: [], wb: null });
+    box.innerHTML = `<div class="dm-page">
+      <div class="dm-top"><button type="button" class="icon-btn dm-back" data-dm-back aria-label="回私訊清單">‹</button>${avatar(ai)}<div class="dm-who"><b>${esc(ai.name)}</b><span class="muted small">🔒 只有你和它看得到 · <span id="dm-status" role="status"></span></span></div></div>
+      <div class="dm-lock small"><b>定案的事請寫回卡片</b>，團隊才看得到；其他人（含管理員畫面）看不到私訊的內容和數量。</div>
       <div class="dm-list" id="dm-list" aria-live="polite"></div>
-      <div class="dm-comp"><textarea id="dm-input" rows="2" maxlength="2000" placeholder="${esc(`私訊 ${ai.name}…`)}" aria-label="私訊內容"></textarea><button class="btn primary" type="button" id="dm-send">送出</button></div>
-      <p class="muted small" id="dm-note"></p>`, { size: 'wide', sub: '🔒 私訊' });
+      <div class="dm-comp"><textarea id="dm-input" rows="2" maxlength="2000" placeholder="${esc(`私訊 ${ai.name}…`)}" aria-label="私訊內容"></textarea><button class="btn primary send" type="button" id="dm-send">送出</button></div>
+      <p class="muted small" id="dm-note"></p></div>`;
     try { await dmLoad(); } catch (err) { return toast(err.message); }
-    drawDm(); $('#dm-input')?.focus();
+    drawDm(); const l0 = $('#dm-list'); if (l0) l0.scrollTop = l0.scrollHeight;
+    if (isDesktop()) $('#dm-input')?.focus();
     // 對話開著才每 10 秒看一次新私訊；關掉就停
     dm.timer = setInterval(async () => { if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
   }
@@ -4054,6 +4088,7 @@
     const en = e.target.closest?.('[data-dm-enable]');
     if (en) { if (en.closest('#sheet')) closeSheet(false); if (en.closest('#modal-root')) closeModal(); return dmEnable(); }
     if (e.target.closest?.('#dm-send')) return dmSend();
+    if (e.target.closest?.('[data-dm-back]')) { state.dmAi = null; syncUrl(false); return renderDmPage(); }
     const w = e.target.closest?.('[data-dm-wb]');
     if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }
     if (e.target.closest?.('[data-dm-wb-cancel]')) { dm.wb = null; return drawDm(); }
@@ -4075,7 +4110,7 @@
       try { await postMsg({ text: `[回覆] ${c}（來自私訊）：${t}`, cardId: c, requestId: newRequestId() }); toast(`已寫回 ${c}`); dm.wb = null; drawDm(); } catch (err) { toast(err.message); }
     }
   });
-  document.addEventListener('keydown', e => { if (e.target.id === 'dm-input' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); dmSend(); } });
+  document.addEventListener('keydown', e => { if (e.target.id === 'dm-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); dmSend(); } }); // 跟群組一樣：Enter 送出、Shift+Enter 換行
   // 側欄人數拆開：人類 N 在線 · AI N 在做事、N 待命
   function drawPresence(list) {
     if (!state.team) return;

@@ -2250,3 +2250,31 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .dm-item.dm-off { color: var(--muted); font-size: .85rem; }
 .an-dm.off { opacity: .55; }
 .dm-side.flash { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
+
+/* C-270 改版：私訊整頁 */
+.dm-page { display: flex; flex-direction: column; height: 100%; min-height: 0; max-width: 900px; margin: 0 auto; padding: 0 16px; box-sizing: border-box; }
+#page-work:has(.dm-page) { display: flex; flex-direction: column; }
+.dm-top { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.dm-top .avatar { width: 36px; height: 36px; }
+.dm-who { display: flex; flex-direction: column; min-width: 0; }
+.dm-who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-back { display: none; }
+.dm-page .dm-lock { margin-top: 10px; }
+.dm-page .dm-list { flex: 1; max-height: none; min-height: 200px; padding: 12px 0; }
+.dm-b.ai { max-width: 100%; background: transparent; padding: 4px 2px; border-radius: 0; }
+.dm-b.ai .dm-name { font-size: .85rem; margin-bottom: 2px; }
+.dm-page .dm-comp { padding: 10px 0 calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); }
+.dm-prev { display: block; font-size: .78rem; color: var(--muted); font-weight: 400; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dm-item { min-height: 44px; align-items: center; }
+.dm-item[aria-current="page"] { background: var(--surface); font-weight: 600; }
+.dm-item .dm-name { display: flex; flex-direction: column; flex: 1; }
+.dm-listpage { max-width: 720px; margin: 0 auto; padding: 16px; }
+.dm-h { margin: 4px 0; font-size: 1.2rem; }
+.dm-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 10px 6px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.dm-row .avatar { width: 40px; height: 40px; flex: none; }
+.dm-row-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.dm-empty-page { padding: 40px 16px; text-align: center; }
+@media (max-width: 640px) {
+  .dm-page { padding: 0 12px; }
+  .dm-back { display: inline-flex; }
+}

@@ -67,6 +67,11 @@ try {
   assert.equal(r.body.items.length, 2); assert.equal(r.body.canSend, true);
   assert.ok(!(await call(liu.token, '/api/notifications?status=pending')).body.items.some(x => x.dm), '打開對話後通知已讀');
 
+  // C-270 改版：清單的最後一句（只有本人自己的對話）
+  r = await call(liu.token, '/api/dm/summary');
+  assert.equal(r.body.items.length, 1); assert.equal(r.body.items[0].aiId, pgL.participantId); assert.equal(r.body.items[0].fromMe, false, '最後一句是 AI 說的');
+  assert.equal((await call(chen.token, '/api/dm/summary')).body.items.length, 0, '別人的清單沒有');
+  assert.equal((await call(pgL.token, '/api/dm/summary')).status, 403, 'AI 不用清單');
   // 第三者：讀不到內容、看不到數量
   assert.equal((await call(chen.token, `/api/dm?aiId=${pgL.participantId}`)).status, 403, '別人不能讀');
   assert.equal((await call(chen.token, `/api/messages/${d1}`)).status, 404, '私訊不在群組訊息');

@@ -1510,6 +1510,12 @@ ${trial
     return { human, ai: me };
   }
   const dmView = (d, people) => ({ dmId: d.id, seq: d.seq, from: { participantId: d.from_id, name: people.get(d.from_id)?.name || '?' }, text: d.text, project: d.project || null, createdAt: d.created_at });
+  // C-270 改版：私訊清單的最後一句（每個 AI 只取最後一則；開頁一次、有私訊通知或打開時才再查）
+  route('GET', '/api/dm/summary', async ({ me }) => {
+    requireHuman(me);
+    const rows = await db.all('SELECT ai_id, from_id, text, created_at, seq FROM dms WHERE human_id = ? AND seq IN (SELECT MAX(seq) FROM dms WHERE human_id = ? GROUP BY ai_id)', me.id, me.id);
+    return { items: rows.map(r => ({ aiId: r.ai_id, fromMe: r.from_id === me.id, text: String(r.text).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案 ').slice(0, 80), createdAt: r.created_at, seq: r.seq })) };
+  });
   route('GET', '/api/dm', async ({ ctx, me, url }) => {
     const { human, ai } = await dmPair(ctx, me, url.searchParams.get('aiId'));
     const after = Number(url.searchParams.get('after')) || 0;
