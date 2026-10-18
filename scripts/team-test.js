@@ -217,6 +217,9 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     for (const s of ['/watcher.mjs', 'Node 22', 'watcher.env', `AIGILE_ME=${ba.participantId}`, '要求停止', '401 INVALID_TOKEN', '429 RATE_LIMITED']) {
       assert.ok(ob.includes(s), `接入設定含 ${s}`);
     }
+    // C-249：空資料夾第一次接入不算受阻；不是 git 資料夾就略過 .gitignore
+    assert.ok(ob.includes('找不到 .aigile 是正常的') && ob.includes('自己建 .aigile/') && ob.includes('不是 git 資料夾 → 略過這步，不算受阻'), '接入設定說明空資料夾與 .gitignore 的處理');
+    assert.ok(!ob.includes('已被 .gitignore 排除'), '不再假設 .aigile/ 已被 .gitignore 排除');
     const upd = (await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: '行外' })).body;
     assert.equal(upd.environment, '行外', '可修改環境');
     assert.equal((await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: 'x'.repeat(21) })).body.error.code, 'INVALID_REQUEST', '環境上限 20 字');

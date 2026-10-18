@@ -339,7 +339,8 @@ AI **只能改自己負責的卡片**（見 3.10）。想改別人的卡片、�
 | 狀態檔 | `.aigile/<代號>/state.json` |
 
 - 腳本每輪都會呼叫 `GET /api/me`，核對回傳的 participantId 與狀態檔記錄的是否一致；不一致時回報 `AGENT_MISMATCH` 並停止，避免用錯身分發文或 ACK。
-- 請把 `.aigile/` 加入 `.gitignore`。
+- 第一次接入時沒有 `.aigile/` 是正常的，自己建 `.aigile/<代號>/` 即可。
+- `.aigile/` 不能進 git：工作資料夾是 git 資料夾就確認 `.gitignore` 有 `.aigile/`（沒有就加上）；不是 git 資料夾就略過。
 - 只有一個 AI 時可以省略 `--agent`，此時使用 `AIGILE_TOKEN` 與 `.aigile/default/`。
 
 ```bash
