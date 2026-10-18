@@ -631,11 +631,11 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     return s;
   }
 
-  function readSettings(body, current = null) {
+  function readSettings(body, current = null, extraKeys = []) {
     const role = body.role !== undefined ? String(body.role).trim() : current?.role ?? '';
     if (!role || role.length > 30) throw invalid('角色顯示名稱需為 1～30 字');
     const roleKey = body.roleKey !== undefined ? String(body.roleKey) : current?.roleKey ?? 'custom';
-    if (!ROLES.some(r => r.key === roleKey)) throw invalid('roleKey 不存在');
+    if (!ROLES.some(r => r.key === roleKey) && !extraKeys.includes(roleKey) && roleKey !== current?.roleKey) throw invalid('roleKey 不存在');
     const environment = body.environment !== undefined ? String(body.environment ?? '').trim() : current?.environment ?? '';
     if (environment.length > 20) throw invalid('所在環境上限 20 字');
     const avatar = body.avatar !== undefined ? readAvatar(body.avatar) : current?.avatar ?? '';
@@ -653,13 +653,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   async function createAi(ctx, me, body) {
     const name = validateName(body.name);
     await assertNameFree(name);
-    const s = readSettings(body);
     const ts = nowIso();
     const id = randId('p');
     // 新增 AI 必須選專案（至少一個）；沒帶時，所屬人類只有一個專案才自動帶入
     const mineP = projectsOf(me);
     const aiProjects = body.projects !== undefined ? readProjects(body.projects).join(',') : mineP.length === 1 ? mineP[0] : null;
     if (aiProjects === null) throw invalid(`projects 為必填：這位 AI 屬於哪些專案（至少一個，專案編號：${PROJECTS.join('、')}）`);
+    const s = readSettings(body, null, await projRoleKeys(aiProjects.split(','))); // C-280
     const outside = aiProjects.split(',').filter(x => !mineP.includes(x));
     if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `你不在「${outside.join('、')}」，AI 的專案不能超出所屬人類。`);
     invalidatePeople();
@@ -684,7 +684,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     }
     const name = body.name !== undefined ? validateName(body.name) : ai.name;
     await assertNameFree(name, ai.id);
-    const s = readSettings(body, { role: ai.role, avatar: ai.avatar || '', ...settingsOf(ai) });
+    const s = readSettings(body, { role: ai.role, avatar: ai.avatar || '', ...settingsOf(ai) }, await projRoleKeys(body.projects !== undefined ? readProjects(body.projects) : projectsOf(ai))); // C-280
     invalidatePeople();
     await db.run(`UPDATE participants SET name = ?, role = ?, role_key = ?, duties = ?, style = ?, autonomy = ?, must_confirm = ?,
       handoff = ?, env = ?, avatar = ?, version = version + 1, updated_at = ? WHERE id = ?`,
@@ -924,6 +924,7 @@ ${roster}
 - 私訊不能拿來授權 commit、push、部署、刪除資料；這些照第九節，仍在本機對話問。
 - 專案沒開放私訊時回 403 DM_DISABLED：改在本機對話或群組回覆。
 - ${owner.name} 請你換頭像（C-272）：產生 256×256 的 png／jpg／webp（200 KB 內），POST /api/avatar-proposals?note=一句說明（本文直接放圖片，Content-Type 用圖片類型）；平台會在私訊放一張提案卡，${owner.name} 按「套用」才會換，你不能直接改人類的頭像。要換你自己的頭像也一樣：POST /api/avatar-proposals?for=self&note=一句說明，${owner.name} 套用才換。你的工具不能產圖，就直接說做不到，不要假裝。
+- ${owner.name} 想要新角色（C-280，私訊開頭常是「我想要一個新角色：」）：先問 3～5 題（主要做什麼、產出什麼、哪些事要先問人、做完交給誰、要不要碰程式或資料），再 POST /api/role-proposals 帶 JSON { project（這段私訊的專案）, role（名稱 1～10 字）, key（2～4 個英文字母，不能跟內建角色或本專案已有的重複）, duties, style, autonomy, mustConfirm, handoff, note（選填一句說明）, requestId }；平台在私訊放一張「角色提案卡」，只有該專案 leader／管理員能按「建立角色」，24 小時沒處理作廢。你只能提案，不能自己建立或改角色。
 
 先看第零節：重新接上就照第零節做，不重新簽到；第一次接入才往下。
 ${trial
@@ -1156,8 +1157,11 @@ ${trial
     await loadProjects(true);
     const people = await peopleMap(ctx);
     const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status NOT IN ('已完成','已封存') GROUP BY project")).map(r => [r.project, r.n]));
-    const repos = await reposMap(), dms = await dmMap();
+    const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(); // C-280
+    await loadProjectRoles();
+    const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
     return projectRows.map(r => ({ id: r.id, name: r.name, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229
+      roles: (rdefs[r.id] || []).map(d => ({ ...d, createdByName: people.get(d.createdBy)?.name || null, inUse: inUse(r.id, d) })), // C-280 本專案角色
       dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null }, // C-270
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id)).length,
       openCards: counts.get(r.id) || 0 }));
@@ -1519,7 +1523,8 @@ ${trial
     // C-272：最後一則是頭像提案時，看它還沒處理就寫「🖼 有頭像提案」（只在最後一則是提案時多查那幾張的狀態）
     const propIds = rows.map(r => AP_RE.exec(r.text)?.[1]).filter(Boolean);
     const props = propIds.length ? new Map((await db.all('SELECT id, status, created_at FROM avatar_proposals WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(propIds))).map(p => [p.id, apStatus(p)])) : new Map();
-    const textOf = r => { const pid = AP_RE.exec(r.text)?.[1]; if (!pid) return String(r.text).slice(0, 80); return props.get(pid) === 'pending' ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）'; };
+    const rpIds = rows.map(r => RP_RE.exec(r.text)?.[1]).filter(Boolean), rps = rpIds.length ? await rpGetMany(rpIds) : new Map(); // C-280
+    const textOf = r => { const rid = RP_RE.exec(r.text)?.[1]; if (rid) return rps.get(rid) && rpStatus(rps.get(rid)) === 'pending' ? '🧩 有角色提案' : '🧩 角色提案（已處理）'; const pid = AP_RE.exec(r.text)?.[1]; if (!pid) return String(r.text).slice(0, 80); return props.get(pid) === 'pending' ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）'; };
     return { items: rows.map(r => ({ aiId: r.ai_id, fromMe: r.from_id === me.id, text: textOf(r), proposalPending: props.get(AP_RE.exec(r.text)?.[1]) === 'pending', createdAt: r.created_at, seq: r.seq })) };
   });
   route('GET', '/api/dm', async ({ ctx, me, url }) => {
@@ -1538,6 +1543,11 @@ ${trial
     if (propIds.length) {
       const props = new Map((await db.all('SELECT id, human_id, status, created_at, decided_at FROM avatar_proposals WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(propIds))).map(p => [p.id, p]));
       for (const v of views) { const p = props.get(AP_RE.exec(v.text)?.[1]); if (p) v.proposal = apView(p); }
+    }
+    const rpIds = views.map(v => RP_RE.exec(v.text)?.[1]).filter(Boolean); // C-280 角色提案卡
+    if (rpIds.length) {
+      const rps = await rpGetMany(rpIds), rdefs = await roleDefsMap(), mgr = me.kind === 'human' ? await roleManagerOf(ctx, me) : () => false;
+      for (const v of views) { const p = rps.get(RP_RE.exec(v.text)?.[1]); if (p) v.roleProposal = rpView(p, rdefs, mgr(p.project)); }
     }
     return { items: views, nextAfter: items.length ? items[items.length - 1].seq : after, hasMore, canSend: open, ...(open ? {} : { reason: '這個專案沒有開放私訊，舊的私訊還看得到，但不能再送。' }) };
   });
@@ -1569,6 +1579,156 @@ ${trial
     const project = body.project && open.includes(body.project) ? body.project : open[0];
     const id = await writeDm({ human, ai, from: me.id, text, project, requestId }); // 叫醒 AI（門鈴只含 ID 與時間）
     return { __status: 201, ...dmView(await db.get('SELECT * FROM dms WHERE id = ?', id), people) };
+  });
+
+  // ---------- C-280 跟自己的 AI 討論、生成專案專屬新角色 ----------
+  // 本專案角色存在 app_settings「roles:<專案>」；角色提案存「rprop:<編號>」（24 小時作廢，跟頭像提案一樣只在私訊）
+  const RP_TTL = 24 * 3600_000;
+  const RP_RE = /^\[角色提案 (rp_[A-Za-z0-9_-]+)\]/;
+  const ROLE_NAME_MAX = 10; // 人類的專案角色最多 10 字，名稱跟著
+  async function roleDefsMap() {
+    const out = {};
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'roles:%'").catch(() => [])) {
+      try { const v = JSON.parse(r.value); if (Array.isArray(v)) out[r.key.slice(6)] = v; } catch {}
+    }
+    return out;
+  }
+  const saveRoleDefs = (pj, list) => db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', 'roles:' + pj, JSON.stringify(list));
+  // 建 AI 時可用的本專案角色代碼（只算啟用中的）
+  async function projRoleKeys(pjs) {
+    const m = await roleDefsMap();
+    return pjs.flatMap(pj => (m[pj] || []).filter(d => d.status !== 'disabled').map(d => d.key));
+  }
+  // 誰能建立／管理某專案的角色：群組管理員、該專案 leader
+  async function roleManagerOf(ctx, me) {
+    const admin = adminOf(await peopleMap(ctx));
+    await loadLeaders();
+    const lead = leaderProjectsOf(me.id);
+    return pj => (!!admin && admin.id === me.id) || lead.includes(pj);
+  }
+  const RESERVED_KEYS = new Set([...ROLES.map(r => r.key.toUpperCase()), 'AI', 'ALL']);
+  // 檢查名稱、代碼、五題；strict＝建立／修改時（代碼重複直接擋），提案時只標出衝突
+  function readRoleDef(body, defs, { strict = true, keepKey = null } = {}) {
+    const role = String(body.role ?? body.name ?? '').trim();
+    if (!role || role.length > ROLE_NAME_MAX || /[\n\r]/.test(role)) throw invalid(`角色名稱需為 1～${ROLE_NAME_MAX} 字、不可換行`);
+    const key = keepKey || String(body.key ?? '').trim().toUpperCase();
+    if (!/^[A-Z]{2,4}$/.test(key)) throw invalid('角色代碼需為 2～4 個英文字母');
+    const conflict = !keepKey && (RESERVED_KEYS.has(key) || defs.some(d => d.key === key)) ? `代碼 ${key} 已經有角色在用，請換一個` : (defs.some(d => d.role === role && d.key !== key) ? `名稱「${role}」本專案已經有了` : null);
+    if (strict && conflict) throw new ApiError(409, 'ROLE_CONFLICT', conflict);
+    const out = { key, role };
+    for (const f of SETTING_FIELDS) {
+      const label = f.label.replace(/^\d\.\s*/, '').replace(/（.*$/, '');
+      const v = String(body[f.key] ?? '').trim();
+      if (!v) throw invalid(`「${label}」為必填`);
+      if (v.length > MAX_SETTING) throw invalid(`「${label}」上限 ${MAX_SETTING} 字`);
+      out[f.key] = v;
+    }
+    return { def: out, conflict };
+  }
+  const rpStatus = p => (p.status === 'pending' && Date.now() - p.createdAt > RP_TTL ? 'expired' : p.status);
+  async function rpGet(id) { const r = await db.get('SELECT value FROM app_settings WHERE key = ?', 'rprop:' + id); try { return r ? JSON.parse(r.value) : null; } catch { return null; } }
+  async function rpGetMany(ids) {
+    const rows = await db.all('SELECT key, value FROM app_settings WHERE key IN (SELECT value FROM json_each(?))', JSON.stringify(ids.map(id => 'rprop:' + id)));
+    const out = new Map();
+    for (const r of rows) { try { const v = JSON.parse(r.value); out.set(v.id, v); } catch {} }
+    return out;
+  }
+  const rpSave = p => db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', 'rprop:' + p.id, JSON.stringify(p));
+  const rpView = (p, rdefs, canCreate) => {
+    const st = rpStatus(p), defs = rdefs[p.project] || [];
+    let conflict = null;
+    if (st === 'pending') { try { conflict = readRoleDef(p.draft, defs, { strict: false }).conflict; } catch (e) { conflict = e.message; } }
+    return { proposalId: p.id, project: p.project, projectName: nameOf(p.project), status: st, draft: p.draft, createdKey: p.createdKey || null, conflict, canCreate: !!canCreate && st === 'pending', expiresAt: iso(p.createdAt + RP_TTL), decidedAt: p.decidedAt ? iso(p.decidedAt) : null };
+  };
+  // AI 送角色提案：只給所屬人類、只在私訊；AI 不能自己建立
+  route('POST', '/api/role-proposals', async ({ ctx, me, req }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 能送角色提案；人類請在角色選單選「＋ 跟 AI 討論新角色」。');
+    const body = await readJson(req);
+    const { human, ai } = await dmPair(ctx, me);
+    const open = await dmProjects(human, ai);
+    const pj = String(body.project || '');
+    if (!PROJECTS.includes(pj) || !projectsOf(ai).includes(pj)) throw invalid(`project 需為你所屬的專案（${projectsOf(ai).filter(x => PROJECTS.includes(x)).join('、')}）`);
+    if (!open.includes(pj)) throw new ApiError(403, 'DM_DISABLED', '這個專案沒有開放私訊，角色提案只能放在私訊裡。');
+    const requestId = typeof body.requestId === 'string' ? body.requestId.trim().slice(0, 128) : '';
+    if (requestId) { const dup = await db.get('SELECT id, text FROM dms WHERE from_id = ? AND request_id = ?', me.id, 'rprop_' + requestId); if (dup) { const pid = RP_RE.exec(dup.text)?.[1]; return { proposalId: pid, dmId: dup.id }; } }
+    const rdefs = await roleDefsMap();
+    const { def, conflict } = readRoleDef(body, rdefs[pj] || [], { strict: false });
+    const note = String(body.note || '').trim().slice(0, 200);
+    const id = randId('rp'), now = Date.now();
+    await rpSave({ id, project: pj, humanId: human.id, aiId: ai.id, status: 'pending', createdAt: now, draft: def });
+    const dmId = await writeDm({ human, ai, from: ai.id, text: `[角色提案 ${id}] ${def.role}（${def.key}）${note ? ' ' + note : ''}`, project: pj, requestId: requestId ? 'rprop_' + requestId : 'rprop_' + id });
+    return { __status: 201, proposalId: id, dmId, conflict, expiresAt: iso(now + RP_TTL) };
+  });
+  async function rpOfHuman(me, id) {
+    const p = await rpGet(String(id));
+    if (!p || (p.humanId !== me.id && p.aiId !== me.id)) throw new ApiError(404, 'NOT_FOUND', '找不到這個角色提案');
+    if (p.humanId !== me.id) throw new ApiError(403, 'FORBIDDEN', 'AI 只能提案，不能自己建立角色。');
+    return p;
+  }
+  // 建立角色：只有該專案 leader／管理員；可以帶改過的字
+  route('POST', '/api/role-proposals/:id/create', async ({ ctx, me, req, params }) => {
+    const p = await rpOfHuman(me, params.id);
+    if (rpStatus(p) !== 'pending') throw new ApiError(409, 'PROPOSAL_CLOSED', '這個角色提案已處理或超過 24 小時。');
+    if (!(await roleManagerOf(ctx, me))(p.project)) throw new ApiError(403, 'FORBIDDEN', `只有「${nameOf(p.project)}」的 leader 或群組管理員能建立角色。`);
+    if (!PROJECTS.includes(p.project)) throw new ApiError(409, 'PROJECT_ARCHIVED', '這個專案已封存。');
+    const body = await readJson(req).catch(() => ({}));
+    const rdefs = await roleDefsMap(), defs = rdefs[p.project] || [];
+    const { def } = readRoleDef({ ...p.draft, ...body }, defs);
+    const now = Date.now(), at = nowIso();
+    const next = [...defs, { ...def, status: 'active', createdBy: me.id, createdAt: at, updatedAt: at, fromProposal: p.id }];
+    await saveRoleDefs(p.project, next);
+    Object.assign(p, { status: 'created', decidedAt: now, createdKey: def.key, draft: def });
+    await rpSave(p);
+    await db.batch([projEvent(p.project, me.id, `${me.name} 建立本專案角色「${def.role}」（${def.key}）`, at)]);
+    return { proposal: rpView(p, { ...rdefs, [p.project]: next }, false), ...scopeProjects(await projectsResponse(ctx), me) };
+  });
+  route('POST', '/api/role-proposals/:id/skip', async ({ me, params }) => {
+    const p = await rpOfHuman(me, params.id);
+    if (p.status === 'pending') { Object.assign(p, { status: 'skipped', decidedAt: Date.now() }); await rpSave(p); }
+    return { proposal: rpView(p, await roleDefsMap(), false) };
+  });
+  // 專案設定 ›「角色」：改名稱與五題、停用／啟用；代碼不改
+  async function roleDefOf(ctx, me, pj, key) {
+    if (!PROJECTS.includes(pj)) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    if (!(await roleManagerOf(ctx, me))(pj)) throw new ApiError(403, 'FORBIDDEN', `只有「${nameOf(pj)}」的 leader 或群組管理員能管理本專案角色。`);
+    const defs = (await roleDefsMap())[pj] || [];
+    const i = defs.findIndex(d => d.key === key);
+    if (i < 0) throw new ApiError(404, 'NOT_FOUND', '找不到這個角色');
+    return { defs, i };
+  }
+  route('PUT', '/api/projects/:id/roles/:key', async ({ ctx, me, req, params }) => {
+    const { defs, i } = await roleDefOf(ctx, me, params.id, params.key);
+    const body = await readJson(req), cur = defs[i], at = nowIso();
+    let next = cur, what = '';
+    if (body.status !== undefined) {
+      if (!['active', 'disabled'].includes(body.status)) throw invalid('status 只能是 active 或 disabled');
+      next = { ...cur, status: body.status }; what = body.status === 'disabled' ? '停用' : '啟用';
+    } else {
+      const { def } = readRoleDef({ ...cur, ...body }, defs.filter((_, j) => j !== i), { keepKey: cur.key });
+      next = { ...cur, ...def }; what = '修改';
+      // 改名稱：用這個角色的人類，角色字一起換（AI 的設定是建立時帶入的，不跟著改）
+      if (def.role !== cur.role) {
+        const roles = await loadProjectRoles(true), changed = { ...roles };
+        for (const [pid, m] of Object.entries(roles)) if (m?.[params.id] === cur.role) changed[pid] = { ...m, [params.id]: def.role };
+        await saveProjectRoles(changed);
+      }
+    }
+    next.updatedAt = at;
+    await saveRoleDefs(params.id, defs.map((d, j) => (j === i ? next : d)));
+    await db.batch([projEvent(params.id, me.id, `${me.name} ${what}本專案角色「${next.role}」（${next.key}）`, at)]);
+    invalidatePeople();
+    return scopeProjects(await projectsResponse(ctx), me);
+  });
+  // 刪除：沒人在用才行（停用後在用的照舊）
+  route('DELETE', '/api/projects/:id/roles/:key', async ({ ctx, me, params }) => {
+    const { defs, i } = await roleDefOf(ctx, me, params.id, params.key);
+    const d = defs[i];
+    const used = ((await projectViews(ctx)).find(x => x.id === params.id)?.roles || []).find(x => x.key === d.key)?.inUse || 0;
+    if (used) throw new ApiError(409, 'ROLE_IN_USE', `還有 ${used} 個成員在用「${d.role}」，先停用，等沒人用再刪。`);
+    const at = nowIso();
+    await saveRoleDefs(params.id, defs.filter((_, j) => j !== i));
+    await db.batch([projEvent(params.id, me.id, `${me.name} 刪除本專案角色「${d.role}」（${d.key}）`, at)]);
+    return scopeProjects(await projectsResponse(ctx), me);
   });
 
   // ---------- C-272 AI 產頭像、人類按「套用」才換 ----------

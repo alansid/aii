@@ -936,11 +936,22 @@
     if (q.memberType !== 'human' || !q.projectRoles) return q.role || '';
     return PROJECTS.includes(pj) ? q.projectRoles[pj] || '' : '';
   };
-  function roleSelectHtml(value, attrs, { changed = false, label = '角色' } = {}) {
-    const custom = value && !ROLE_CHOICES.includes(value);
-    return `<select class="role-sel${value ? '' : ' empty'}${changed ? ' chg' : ''}" ${attrs} aria-label="${esc(label)}">
+  function roleSelectHtml(value, attrs, { changed = false, label = '角色', pj = '', ai = true } = {}) {
+    const pr = pj ? projRoleDefs(pj).map(d => d.role).filter(r => !ROLE_CHOICES.includes(r)) : []; // C-280 本專案角色
+    const custom = value && !ROLE_CHOICES.includes(value) && !pr.includes(value);
+    const tail = pj && ai ? (canMakeRole(pj) ? '<option value="__ai">＋ 跟 AI 討論新角色…</option>' : '<option value="__ai_no" disabled>新角色請 leader 建立</option>') : '';
+    return `<select class="role-sel${value ? '' : ' empty'}${changed ? ' chg' : ''}" ${attrs}${pj ? ` data-role-pj="${esc(pj)}"` : ''} aria-label="${esc(label)}">
       <option value="" ${value ? '' : 'selected'}>未設定</option>${ROLE_CHOICES.map(r => `<option ${value === r ? 'selected' : ''}>${r}</option>`).join('')}
-      ${custom ? `<option value="${esc(value)}" selected>${esc(value)}</option>` : ''}<option value="__other">其他（自己打）…</option></select>`;
+      ${pr.length ? `<optgroup label="本專案角色">${pr.map(r => `<option ${value === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}</optgroup>` : ''}
+      ${custom ? `<option value="${esc(value)}" selected>${esc(value)}</option>` : ''}<option value="__other">其他（自己打）…</option>${tail}</select>`;
+  }
+  // C-280：本專案角色（跟著專案清單一起拿，不另外查）；leader／管理員才能跟 AI 討論新角色
+  const projRoleDefs = (pj, all = false) => (state.projectList?.find(p => p.id === pj)?.roles || []).filter(d => all || d.status !== 'disabled');
+  const canMakeRole = pj => isAdmin() || myLeadProjects().includes(pj);
+  function askRoleAi(pj) {
+    const mine = [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled' && (p.projects || []).includes(pj));
+    if (!mine.length) return toast(`你在「${projName(pj)}」沒有自己的 AI；先到「我的 AI」新增一個，再跟它討論新角色。`);
+    return askAvatar(mine, '我想要一個新角色：', pj);
   }
   // 「其他」：跳一格輸入框，最多 10 字；只存在這個人這個專案
   function askOtherRole(cur = '') {
@@ -959,6 +970,7 @@
   }
   // 選了「其他」就問名字；取消時把下拉還原
   async function pickRole(sel, cur) {
+    if (sel.value === '__ai') { sel.value = cur || ''; askRoleAi(sel.dataset.rolePj); return null; } // C-280
     if (sel.value !== '__other') return sel.value;
     const v = await askOtherRole(cur);
     if (v === null) { sel.value = cur || ''; return null; }
@@ -4015,8 +4027,25 @@
   }
   // C-270 退回④：今天只寫時分；同一人連續幾則只在最後一則寫時間
   const dmTime = iso => { const t = new Date(iso), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; return t.toDateString() === new Date().toDateString() ? hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`; };
+  // C-280 角色提案卡：名稱、代碼、五題可以直接改字；只有該專案 leader／管理員能按「建立角色」
+  const RP_FIELDS = [['role', '名稱', 10], ['key', '代碼', 4], ['duties', '主要職責'], ['style', '溝通風格'], ['autonomy', '可自主處理'], ['mustConfirm', '要先問人'], ['handoff', '完成與交接']];
+  const RP_LABEL = { skipped: '已略過', expired: '已過期（24 小時沒處理）' };
+  dm.rpEdit = {};
+  function rpCard(d) {
+    const p = d.roleProposal, ed = dm.rpEdit[p.proposalId] || {}, v = k => ed[k] ?? p.draft[k] ?? '';
+    const edit = p.canCreate, pending = p.status === 'pending', human = state.me?.memberType === 'human';
+    const field = ([k, t, max]) => edit
+      ? `<label class="rp-f"><span>${t}</span>${max ? `<input data-rp-f="${k}" maxlength="${max}" value="${esc(v(k))}"${k === 'key' ? ' autocapitalize="characters"' : ''}>` : `<textarea data-rp-f="${k}" rows="2" maxlength="1000">${esc(v(k))}</textarea>`}</label>`
+      : `<div class="rp-f"><span>${t}</span><b>${esc(v(k))}</b></div>`;
+    const acts = edit ? `<div class="ap-acts"><button type="button" class="btn small primary" data-rp-create="${esc(p.proposalId)}">建立角色</button><button type="button" class="btn small" data-rp-skip="${esc(p.proposalId)}">不要</button><span class="muted small">${esc(fmtTime(p.expiresAt))} 前有效</span></div>`
+      : pending && human ? `<div class="ap-acts"><span class="muted small">只有「${esc(p.projectName)}」的 leader／管理員能按「建立角色」</span><button type="button" class="btn small" data-rp-skip="${esc(p.proposalId)}">不要</button></div>`
+      : p.status === 'created' ? `<span class="muted small">✓ 已建立「${esc(p.draft.role)}」（${esc(p.createdKey || p.draft.key)}），在${esc(p.projectName)}的角色選單</span>` : `<span class="muted small">${RP_LABEL[p.status] || ''}</span>`;
+    return `<div class="rp-card${pending ? '' : ' done'}" data-rp-card="${esc(p.proposalId)}"><div class="rp-head">🧩 角色提案 · 只用在「${esc(p.projectName)}」</div>
+      <div class="rp-body">${RP_FIELDS.map(field).join('')}</div>${pending && p.conflict ? `<p class="rp-conflict" role="alert">⚠ ${esc(p.conflict)}</p>` : ''}${acts}</div>`;
+  }
   function dmBubble(d, next) {
-    const showT = !next || next.from.participantId !== d.from.participantId || !!next.proposal || !!d.proposal;
+    const showT = !next || next.from.participantId !== d.from.participantId || !!next.proposal || !!d.proposal || !!next.roleProposal || !!d.roleProposal;
+    if (d.roleProposal) return `<div class="dm-b ai rp-wrap" id="dm-${esc(d.dmId)}">${rpCard(d)}</div><div class="dm-t">${dmTime(d.createdAt)}</div>`;
     if (d.proposal) return `<div class="dm-b ai" id="dm-${esc(d.dmId)}">${apCard(d)}</div><div class="dm-t">${dmTime(d.createdAt)}</div>`;
     const mine = d.from.participantId === meId();
     const cards = mine ? [] : [...new Set(String(d.text).match(/\bC-\d{3,}\b/g) || [])];
@@ -4031,13 +4060,15 @@
     const list = $('#dm-list');
     if (!list) return false;
     const near = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+    const focus = document.activeElement?.closest?.('[data-rp-f]') ? { id: document.activeElement.closest('[data-rp-card]').dataset.rpCard, f: document.activeElement.dataset.rpF, s: document.activeElement.selectionStart } : null;
     list.innerHTML = dm.items.map((d, i) => dmBubble(d, dm.items[i + 1])).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
     const mb = state.team?.members.find(m => m.participantId === dm.aiId), now = mb ? aiNowOf(mb) : { kind: 'off' };
     $('#dm-status').textContent = now.kind === 'work' ? `在做${now.cardId ? ' ' + now.cardId : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '待命，有新私訊會叫醒它' : '目前離線，上線後會看到';
     const ta = $('#dm-input'), sb = $('#dm-send');
     ta.disabled = sb.disabled = !dm.canSend;
     $('#dm-note').textContent = dm.canSend ? '' : dm.reason;
-    if (near) list.scrollTop = list.scrollHeight;
+    if (near && !focus) list.scrollTop = list.scrollHeight;
+    if (focus) { const el = list.querySelector(`[data-rp-card="${CSS.escape(focus.id)}"] [data-rp-f="${focus.f}"]`); if (el) { el.focus(); try { el.setSelectionRange(focus.s, focus.s); } catch {} } }
     list.querySelectorAll('[data-ap-img]').forEach(el => apImg(el.dataset.apImg).then(u => { if (u) { el.style.backgroundImage = `url("${u}")`; el.classList.add('img-on'); } }));
     return true;
   }
@@ -4047,7 +4078,7 @@
     if (!last) return false;
     if (!state.dmSummary) state.dmSummary = new Map();
     const pend = last.proposal?.status === 'pending';
-    state.dmSummary.set(dm.aiId, { aiId: dm.aiId, fromMe: last.from.participantId === meId(), text: last.proposal ? (pend ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）') : String(last.text).slice(0, 80), proposalPending: pend, createdAt: last.createdAt });
+    state.dmSummary.set(dm.aiId, { aiId: dm.aiId, fromMe: last.from.participantId === meId(), text: last.roleProposal ? (last.roleProposal.status === 'pending' ? '🧩 有角色提案' : '🧩 角色提案（已處理）') : last.proposal ? (pend ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）') : String(last.text).slice(0, 80), proposalPending: pend, createdAt: last.createdAt });
     return true;
   }
   // C-270 退回①：同時只跑一個（開頁、計時器、送出後都會叫），換對話就作廢舊的；依 dmId 去重
@@ -4145,6 +4176,13 @@
     clearInterval(dm.timer); // 只留一個計時器
     dm.timer = setInterval(async () => { if (gen !== dm.gen) return; if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
   }
+  document.addEventListener('input', e => {
+    const f = e.target.closest?.('[data-rp-f]');
+    if (!f) return;
+    const id = f.closest('[data-rp-card]').dataset.rpCard;
+    if (f.dataset.rpF === 'key') { const s = f.selectionStart; f.value = f.value.toUpperCase(); f.setSelectionRange(s, s); }
+    (dm.rpEdit[id] = dm.rpEdit[id] || {})[f.dataset.rpF] = f.value;
+  });
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape' || !dmIsOpen() || !e.target.closest?.('#dm-panel') || document.querySelector('#modal-root .modal, .confirm-root')) return;
     e.preventDefault(); dmPanel(false); document.querySelector('[data-dm-toggle]:not([hidden])')?.focus();
@@ -4175,6 +4213,22 @@
     const w = e.target.closest?.('[data-dm-wb]');
     if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }
     if (e.target.closest?.('[data-dm-wb-cancel]')) { dm.wb = null; return drawDm(); }
+    const rp = e.target.closest?.('[data-rp-create], [data-rp-skip]'); // C-280
+    if (rp) {
+      const create = !!rp.dataset.rpCreate, id = rp.dataset.rpCreate || rp.dataset.rpSkip;
+      const card = rp.closest('[data-rp-card]'), body = {};
+      if (create) card.querySelectorAll('[data-rp-f]').forEach(f => { body[f.dataset.rpF] = f.value.trim(); });
+      rp.disabled = true;
+      try {
+        const r = await api(`/api/role-proposals/${encodeURIComponent(id)}/${create ? 'create' : 'skip'}`, { method: 'POST', body });
+        for (const it of dm.items) if (it.roleProposal?.proposalId === id) it.roleProposal = r.proposal;
+        delete dm.rpEdit[id];
+        if (dmSumFromItems()) drawDmSide();
+        if (create) { await loadProjectList(); toast(`已建立「${r.proposal.draft.role}」，只在${r.proposal.projectName}的角色選單`); } else toast('已略過');
+        drawDm();
+      } catch (err) { rp.disabled = false; toast(err.message); }
+      return;
+    }
     const ap = e.target.closest?.('[data-ap-apply], [data-ap-skip]');
     if (ap) {
       const apply = !!ap.dataset.apApply, id = ap.dataset.apApply || ap.dataset.apSkip;
@@ -4607,11 +4661,17 @@
   // 角色範本：常用的排前面，其餘收進「其他角色」群組（只是選單分組，角色定義不變；既有成員的角色照常顯示已選）
   const COMMON_ROLES = ['PO', 'SM', 'BA', 'UX', 'PG', 'QA', 'TRY', 'custom'];
   function roleOptionsHtml(roles) {
-    const opt = r => `<option value="${r.key}">${esc(r.option)}</option>`;
-    const common = COMMON_ROLES.map(k => roles.find(r => r.key === k)).filter(Boolean);
-    const other = roles.filter(r => !COMMON_ROLES.includes(r.key));
-    return common.map(opt).join('') + (other.length ? `<optgroup label="其他角色">${other.map(opt).join('')}</optgroup>` : '');
+    const opt = r => `<option value="${esc(r.key)}">${esc(r.option)}</option>`;
+    const builtIn = roles.filter(r => !r.project);
+    const common = COMMON_ROLES.map(k => builtIn.find(r => r.key === k)).filter(Boolean);
+    const other = builtIn.filter(r => !COMMON_ROLES.includes(r.key));
+    // C-280：本專案角色分組；最後「＋ 跟 AI 討論新角色…」（leader／管理員）
+    const pjs = [...new Set(roles.filter(r => r.project).map(r => r.project))];
+    const mine = pjs.map(pj => `<optgroup label="本專案角色（${esc(projName(pj))}）">${roles.filter(r => r.project === pj).map(opt).join('')}</optgroup>`).join('');
+    const tail = myProjects().some(canMakeRole) ? '<option value="__ai">＋ 跟 AI 討論新角色…</option>' : '<option value="__ai_no" disabled>新角色請 leader 建立</option>';
+    return common.map(opt).join('') + (other.length ? `<optgroup label="其他角色">${other.map(opt).join('')}</optgroup>` : '') + mine + tail;
   }
+  const roleAiPj = () => { const pv = projectView(); return canMakeRole(pv) && myProjects().includes(pv) ? pv : myProjects().find(canMakeRole); };
   // C-182：AI 屬於哪些專案（新增、編輯都能勾）；只列自己在的專案，不在的灰掉寫原因；跨專案角色固定在所有專案
   function aiProjField(ai) {
     const cross = ai && state.projMeta.crossRoleIds.includes(ai.participantId);
@@ -4624,8 +4684,11 @@
       <span class="field-hint">${cross ? '這個 AI 是跨專案角色，固定在所有專案（由管理員在「成員與權限」設定）。' : '改了專案，這個 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
   }
   async function openAiForm(ai) {
-    const { items: roles, fields, environments = [] } = await loadRoles();
+    const { items: baseRoles, fields, environments = [] } = await loadRoles();
     const editing = !!ai;
+    // C-280：加上自己所在專案的本專案角色（AI 已在用、但停用的也列出，免得選單空掉）
+    const pjRole = (d, pj) => ({ ...d, option: `${d.key}：${d.role}${d.status === 'disabled' ? '（已停用）' : ''}`, suffix: `${d.role}助手`, project: pj, projects: [pj] });
+    const roles = [...baseRoles, ...myProjects().flatMap(pj => projRoleDefs(pj, true).filter(d => d.status !== 'disabled' || (editing && ai.roleKey === d.key)).map(d => pjRole(d, pj)))];
     const envKeys = environments.map(e => e.key);
     const cur = editing ? (ai.environment || '') : '';
     const envOpts = [...envKeys, ...(cur && !envKeys.includes(cur) ? [cur] : []), ''];
@@ -4741,7 +4804,10 @@
       form.mustConfirm.value = note ? (text ? text + '\n' + note : note) : text;
       counts();
     };
-    form.roleKey.addEventListener('change', () => {
+    let prevKey = form.roleKey.value;
+    form.roleKey.addEventListener('change', e => {
+      if (form.roleKey.value === '__ai') { form.roleKey.value = prevKey; e.stopImmediatePropagation(); const pj = roleAiPj(); if (pj) askRoleAi(pj); return; } // C-280
+      prevKey = form.roleKey.value;
       const r = roleHint(form.roleKey.value);
       const autoName = `${state.me.name}的${r.suffix}`;
       // 名稱若還是自動產生的就一起換；使用者改過就保留
@@ -5315,7 +5381,7 @@
     if (p.memberType !== 'human') return `<span class="pm-role-tag">${esc(p.role || '')}</span><span class="muted small">${state.projMeta.crossRoleIds.includes(p.participantId) ? '跨專案角色' : '固定'}</span>`;
     const v = permCur(p).roles?.get(pj) || '';
     if (!permCanEdit(pj)) return `<span class="pm-role-tag${v ? '' : ' empty'}">${esc(v || '未設定')}</span>`;
-    return roleSelectHtml(v, `data-pm-role="${esc(p.participantId)}" data-pj="${esc(pj)}"`, { changed: roleChanged(p, pj), label: `${p.name} 在${projName(pj)}的角色` });
+    return roleSelectHtml(v, `data-pm-role="${esc(p.participantId)}" data-pj="${esc(pj)}"`, { changed: roleChanged(p, pj), label: `${p.name} 在${projName(pj)}的角色`, pj, ai: false });
   }
   function permStar(p, pj) { const c = permCur(p), l = new Set(c.leaders || permBase(p).leaders); if (l.has(pj)) l.delete(pj); else l.add(pj); permSet(p, { projects: new Set(c.projects), cross: c.cross, leaders: l }); }
   // 誰能移出：管理員全部（跨專案角色除外）；leader 只能動自己的專案，不能動管理員與自己
@@ -5525,10 +5591,10 @@
     const box = $('#page-work');
     if (state.page !== 'perm') return;
     const keep = document.activeElement?.id, top = box.scrollTop, admin = isAdmin();
-    if (!admin) perm.tab = 'members'; // C-233：leader 只有成員分頁
+    if (!admin && perm.tab !== 'roles') perm.tab = 'members'; // C-233：leader 只有成員分頁；C-280 加角色
     const nValid = (perm.invites || []).filter(iv => iv.status === '有效').length;
-    const tabs = admin ? `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${[['members', '成員'], ['projects', '專案'], ['invites', `邀請${nValid ? ` · ${nValid}` : ''}`]].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>` : '';
-    const body = perm.tab === 'projects' ? permProjectsHtml() : perm.tab === 'invites' ? permInvitesHtml() : permView() === 'byMember' ? permByMemberHtml() : permByProjectHtml();
+    const tabs = `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${(admin ? [['members', '成員'], ['projects', '專案'], ['roles', '角色'], ['invites', `邀請${nValid ? ` · ${nValid}` : ''}`]] : [['members', '成員'], ['roles', '角色']]).map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>`;
+    const body = perm.tab === 'roles' ? permRolesHtml() : perm.tab === 'projects' ? permProjectsHtml() : perm.tab === 'invites' ? permInvitesHtml() : permView() === 'byMember' ? permByMemberHtml() : permByProjectHtml();
     box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${admin ? '' : ' · 你是 leader'}</span></div>${tabs}</div>
       ${admin ? '' : `<div class="pm-banner">你是 <b>${esc(myLeadProjects().map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(myLeadProjects().map(projName).join('、'))}的成員。其他專案只能看。</div>`}
       <section class="wpanel pm-panel pm-tab-${perm.tab}">${body}</section>
@@ -5538,6 +5604,53 @@
     if (['pm-pq', 'pm-mq', 'pm-pickq'].includes(keep)) { const q = $('#' + keep); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
     if (perm.moreOpen) box.querySelector('.pm-more-menu [role="menuitem"]')?.focus();
   }
+  // C-280：本專案角色（只列自己能管理的專案）：改字、停用／啟用、沒人用才能刪
+  function permRolesHtml() {
+    const pjs = PROJECTS.filter(canMakeRole);
+    if (!pjs.length) return '<p class="muted">你不是任何專案的 leader，不能管理本專案角色。</p>';
+    return `<p class="muted small pr-note">本專案角色只出現在該專案的角色選單（建 AI、設人類角色都能選）。內建角色（PO、PG、UX…）所有專案共用，不在這裡改。</p>` + pjs.map(pj => {
+      const defs = projRoleDefs(pj, true);
+      const row = d => `<div class="pr-row${d.status === 'disabled' ? ' off' : ''}"><span class="pr-key" aria-hidden="true">${esc(d.key)}</span><div class="pr-main"><b>${esc(d.role)}</b> <span class="tag pr-tag">本專案</span>${d.status === 'disabled' ? ' <span class="tag pr-off">已停用</span>' : ''}<div class="muted small">${d.inUse} 個成員在用 · ${esc(mmdd(d.createdAt))} ${esc(d.createdByName || '')} 建立</div></div>
+        <div class="pr-acts"><button type="button" class="link small" data-pr-edit="${esc(d.key)}" data-pj="${esc(pj)}">編輯</button><button type="button" class="link small" data-pr-toggle="${esc(d.key)}" data-pj="${esc(pj)}">${d.status === 'disabled' ? '啟用' : '停用'}</button>${d.inUse ? '' : `<button type="button" class="link small danger-text" data-pr-del="${esc(d.key)}" data-pj="${esc(pj)}">刪除</button>`}</div></div>`;
+      return `<section class="pr-proj" aria-label="${esc(projName(pj))} 的本專案角色"><div class="pr-head"><b>${esc(projName(pj))} · 角色</b><button type="button" class="btn small" data-pr-new="${esc(pj)}">＋ 跟 AI 討論新角色</button></div>
+        ${defs.map(row).join('') || '<p class="muted small pr-empty">還沒有本專案角色。按「＋ 跟 AI 討論新角色」，在私訊跟自己的 AI 討論，它會送角色提案卡，你按「建立角色」才生效。</p>'}</section>`;
+    }).join('');
+  }
+  function editProjRole(pj, key) {
+    const d = projRoleDefs(pj, true).find(x => x.key === key);
+    if (!d) return;
+    const body = openModal(`編輯角色 · ${d.role}（${d.key}）`, `<form id="pr-form" class="stack"><label>名稱<input name="role" maxlength="10" required value="${esc(d.role)}"></label>
+      ${RP_FIELDS.slice(2).map(([k, t]) => `<label>${t}<textarea name="${k}" rows="3" maxlength="1000" required>${esc(d[k] || '')}</textarea></label>`).join('')}
+      <p class="muted small">代碼 ${esc(d.key)} 不能改。改名稱時，用這個角色的人類角色字會一起換；AI 的設定是建立時帶入的，不會跟著改。</p><p class="error small" id="pr-err" role="alert"></p></form>`,
+      { size: 'form', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="pr-form">儲存</button>' });
+    body.querySelector('#pr-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      try { await api(`/api/projects/${encodeURIComponent(pj)}/roles/${encodeURIComponent(key)}`, { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); closeModal(); await loadProjectList(); drawPerm(); toast('已儲存角色'); }
+      catch (err) { body.querySelector('#pr-err').textContent = err.message; }
+    });
+  }
+  document.addEventListener('click', async e => {
+    const b = state.page === 'perm' && e.target.closest?.('[data-pr-new], [data-pr-edit], [data-pr-toggle], [data-pr-del]');
+    if (!b) return;
+    const pj = b.dataset.pj || b.dataset.prNew;
+    if (b.dataset.prNew) return askRoleAi(pj);
+    if (b.dataset.prEdit) return editProjRole(pj, b.dataset.prEdit);
+    const key = b.dataset.prToggle || b.dataset.prDel, d = projRoleDefs(pj, true).find(x => x.key === key);
+    if (!d) return;
+    try {
+      if (b.dataset.prToggle) {
+        const off = d.status !== 'disabled';
+        if (off && !await confirmDialog({ title: `停用「${d.role}」？`, confirmText: '停用', message: '停用後選單不再出現；已經在用的人照舊。之後可以再啟用。' })) return;
+        await api(`/api/projects/${encodeURIComponent(pj)}/roles/${encodeURIComponent(key)}`, { method: 'PUT', body: { status: off ? 'disabled' : 'active' } });
+        toast(off ? '已停用' : '已啟用');
+      } else {
+        if (!await confirmDialog({ title: `刪除「${d.role}」？`, confirmText: '刪除', message: '沒有人在用這個角色。刪除後選單不再出現，不能復原（要再用就重新跟 AI 討論）。' })) return;
+        await api(`/api/projects/${encodeURIComponent(pj)}/roles/${encodeURIComponent(key)}`, { method: 'DELETE' });
+        toast('已刪除');
+      }
+      await loadProjectList(); drawPerm();
+    } catch (err) { toast(err.message); }
+  });
   async function renderPermPage() {
     $('#page-work').classList.remove('is-board');
     await Promise.all([loadProjectList(), loadParticipants()]).catch(() => {});
@@ -5758,17 +5871,18 @@
   }
   // C-272：「請我的 AI 幫我做」「請它幫自己做」→ 打開私訊、預填開頭；私訊沒開走開啟說明
   const myAisForAvatar = () => [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled');
-  function askAvatar(ais, prefill) {
+  function askAvatar(ais, prefill, onlyPj = '') {
     closeModal();
     const pv = projectView();
-    const cands = ais.map(a => ({ a, pj: [pv, ...(a.projects || [])].find(p => PROJECTS.includes(p) && (a.projects || []).includes(p) && dmOn(p)) })).filter(x => x.pj);
+    const cands = ais.map(a => ({ a, pj: (onlyPj ? [onlyPj] : [pv, ...(a.projects || [])]).find(p => PROJECTS.includes(p) && (a.projects || []).includes(p) && dmOn(p)) })).filter(x => x.pj);
     if (!cands.length) {
+      if (onlyPj && onlyPj !== pv) return toast(`「${projName(onlyPj)}」還沒開放私訊自己的 AI；請 leader 或管理員在「成員與權限 → 專案 → ⋯」打開。`);
       if (PROJECTS.includes(pv) && dmEntry()) return dmEnable();
       return toast(`${ais.length === 1 ? ais[0].name + ' ' : '你的 AI '}所在的專案還沒開放私訊；請管理員或 leader 在「成員與權限 → 專案 → ⋯」打開。`);
     }
     const go = ({ a, pj }) => { state.dmPrefill = prefill; state.dmAi = a.participantId; return pj !== pv ? Promise.resolve(setProjectView(pj)).then(() => openDm(a.participantId)) : openDm(a.participantId); };
     if (cands.length === 1) return go(cands[0]);
-    const body = openModal('請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: '會打開跟它的私訊，幫你先打好開頭' });
+    const body = openModal(onlyPj ? '跟哪個 AI 討論新角色？' : '請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: onlyPj ? `在「${projName(onlyPj)}」的私訊跟它討論，它會送角色提案卡` : '會打開跟它的私訊，幫你先打好開頭' });
     body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });
   }
   function openSettings(opts = {}) {
@@ -5789,7 +5903,7 @@
       </div>
       ${state.me.memberType === 'human' && myProjects().length ? `<div class="field my-roles" id="my-roles"><span class="field-label">我的角色</span>
         <p class="muted small">每個專案各一個，只能改自己的；跨專案角色在成員與權限。</p>
-        ${myProjects().map(pj => `<div class="my-role-row"><b class="my-role-name" title="${esc(projName(pj))}">${esc(projName(pj))}</b>${roleSelectHtml(state.me.projectRoles?.[pj] || '', `data-myrole="${esc(pj)}"`, { label: `我在${projName(pj)}的角色` })}</div>`).join('')}
+        ${myProjects().map(pj => `<div class="my-role-row"><b class="my-role-name" title="${esc(projName(pj))}">${esc(projName(pj))}</b>${roleSelectHtml(state.me.projectRoles?.[pj] || '', `data-myrole="${esc(pj)}"`, { pj, label: `我在${projName(pj)}的角色` })}</div>`).join('')}
         <div class="my-role-foot"><button type="button" class="btn primary small" id="my-roles-save">儲存角色</button></div></div>` : ''}
       <div class="field pwd-set" id="pwd-set"><span class="field-label" id="pwd-set-h">帳號密碼</span>
         <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">讀取中…</span></div>
@@ -5817,7 +5931,7 @@
       const pj = sel.dataset.myrole, prev = sel.dataset.v ?? (state.me.projectRoles?.[pj] || '');
       const v = await pickRole(sel, prev);
       if (v === null) return;
-      if (!ROLE_CHOICES.includes(v) && v && ![...sel.options].some(o => o.value === v)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(v)}">${esc(v)}</option>`);
+      if (!ROLE_CHOICES.includes(v) && v && ![...sel.options].some(o => o.value === v || o.textContent === v)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(v)}">${esc(v)}</option>`);
       sel.value = v; sel.dataset.v = v; sel.classList.toggle('empty', !v);
     }));
     body.querySelector('#my-roles-save')?.addEventListener('click', async () => {
@@ -5947,7 +6061,7 @@
     const body = openModal('＋邀請', `<form id="inv-new" class="stack">
         <label class="field">名字<input name="name" required maxlength="40" autocomplete="off" placeholder="例如：王小明"></label>
         <fieldset class="field inv-projs"><legend class="field-label">專案與角色</legend>
-          ${PROJECTS.map(pj => `<div class="inv-proj-row"><label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label>${roleSelectHtml('', `data-inv-role="${esc(pj)}" disabled`, { label: `在${projName(pj)}的角色` })}</div>`).join('')}
+          ${PROJECTS.map(pj => `<div class="inv-proj-row"><label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label>${roleSelectHtml('', `data-inv-role="${esc(pj)}" disabled`, { pj, ai: false, label: `在${projName(pj)}的角色` })}</div>`).join('')}
           <span class="muted small">每個專案各自一個角色；不勾＝還沒有專案，之後再指派</span></fieldset>
         <p class="error" id="inv-new-err" role="alert"></p>
       </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="inv-new">產生邀請連結</button>' });

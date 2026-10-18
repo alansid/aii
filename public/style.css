@@ -2331,3 +2331,34 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .dm-top-btn .badge { position: absolute; top: -5px; right: -5px; margin: 0; }
 .dm-top-btn .badge[hidden] { display: none; }
 @media (max-width: 374px) { .dm-top-btn .dm-btn-t { display: none; } .dm-top-btn { padding: 0 10px; } } /* 真的太窄才只留圖示 */
+
+/* C-280 角色提案卡、成員與權限「角色」分頁 */
+.rp-wrap { max-width: 100%; width: 100%; }
+.rp-card { border: 1px solid #a5f3fc; border-radius: 12px; background: var(--surface); overflow: hidden; display: flex; flex-direction: column; }
+.rp-card.done { opacity: .75; }
+.rp-head { padding: 8px 12px; background: #ecfeff; color: #155e75; font-size: .85rem; font-weight: 600; }
+.rp-body { display: grid; gap: 6px; padding: 10px 12px; }
+.rp-f { display: grid; grid-template-columns: 76px 1fr; gap: 8px; align-items: start; font-size: .85rem; }
+.rp-f > span { color: var(--muted); padding-top: 6px; }
+.rp-f > b { font-weight: 500; padding-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rp-f input, .rp-f textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: .85rem; }
+.rp-conflict { margin: 0 12px 8px; color: var(--danger); font-size: .82rem; }
+.rp-card .ap-acts { padding: 0 12px 12px; }
+.rp-card > .muted.small { padding: 0 12px 12px; }
+:root[data-theme="dark"] .rp-head { background: #123b44; color: #a5f3fc; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rp-head { background: #123b44; color: #a5f3fc; } }
+.pr-note { margin: 0 0 12px; }
+.pr-proj { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 14px; overflow: hidden; }
+.pr-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.pr-head b { flex: 1; }
+.pr-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.pr-head + .pr-row { border-top: 0; }
+.pr-row.off { opacity: .7; }
+.pr-key { width: 40px; height: 40px; flex: none; border-radius: 10px; background: #0e7490; color: #fff; font-size: .72rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.pr-main { flex: 1; min-width: 0; }
+.pr-tag { background: #ecfeff; color: #0e7490; }
+.pr-off { background: var(--surface-2); color: var(--muted); }
+.pr-acts { display: flex; gap: 12px; flex-wrap: wrap; }
+.pr-acts .link { min-height: 40px; }
+.pr-empty { padding: 12px 14px; margin: 0; }
+@media (max-width: 640px) { .pr-row { flex-wrap: wrap; } .pr-acts { width: 100%; padding-left: 52px; } .rp-f { grid-template-columns: 1fr; gap: 2px; } .rp-f > span { padding-top: 0; } }
