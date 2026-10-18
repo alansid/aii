@@ -3008,11 +3008,74 @@
   }
   const canHandover = d => d.type !== '決策' && !closedSt(d.status) && d.owner && (state.me.memberType === 'human' || d.owner.participantId === meId());
   // 交接歷程：從紀錄裡「交接 A → B：說明」整理成 PO → UX → PG
+  // ---------- C-261 卡片動作看得懂 ----------
+  // 最近一次交接是誰交來的（紀錄新的在前）
+  const prevHandName = d => { for (const l of d.log || []) { const m = /^交接 (.+?) → (.+?)：/.exec(l.text); if (m) return m[1]; } return ''; };
+  // 短名：名字很長的 AI 用代號（RVVW），其他照原名
+  const shortOf = name => { const p = [...state.participants.values()].find(x => x.name === name); return p && p.memberType === 'ai' && name.length >= 10 && p.shortCode ? p.shortCode : name; };
+  const actBtn = (act, label, desc, pri = false) => `<button type="button" class="act-btn${pri ? ' pri' : ''}" data-act="${act}"><b>${label}</b><span>${esc(desc)}</span></button>`;
+  // 「現在要你做的」：依情況只露 1～2 顆大按鈕；不是你的卡不顯示
+  function nowActsHtml(d) {
+    const prev = prevHandName(d);
+    let acts = '';
+    if (verifyingMe(d)) acts = actBtn('ver-ok', '驗收通過', '確認做好了，這張卡結案', true) + actBtn('ver-no', '退回…', `有問題，寫原因退回給 ${prev ? shortOf(prev) : '上一棒'}`);
+    else if (ownsOpen(d)) acts = actBtn('done', '標為已完成', '你自己做完了', true) + (canHandover(d) ? actBtn('handover', '交接…', '換人負責') : '');
+    return acts ? `<section class="now-acts" aria-label="現在要你做的"><b class="now-title">現在要你做的</b>${acts}</section>` : '';
+  }
+  const ownsOpen = d => d.type !== '決策' && isMeRef(d.owner) && !closedSt(d.status) && d.status !== '待確認';
+  // 「⋯ 其他動作」：每項一句說明；人類畫面不再有「標為已驗證」（人類按驗收通過就同時完成＋驗證）
+  function moreActsHtml(d, mine) {
+    const items = [];
+    const own = !verifyingMe(d) && ownsOpen(d);
+    if (!own && !verifyingMe(d) && !closedSt(d.status) && d.type !== '決策') items.push(actBtn('done', '標為已完成', '你自己做完了'));
+    if (!own && canHandover(d)) items.push(actBtn('handover', '交接…', '換人負責（例如交給 PG 做、交給 UX 驗）'));
+    if (d.status === '已完成' && !d.verified && !mine && state.me?.memberType === 'human') items.push(actBtn('verify', '驗收通過', '確認做好了，這張卡結案'));
+    if (d.status === '已完成') items.push(actBtn('reopen', '重新打開', '還沒好，改回待處理再做'));
+    if (!work.editing) items.push(actBtn('edit', '編輯', '改標題、原因、完成條件'));
+    items.push(`<label class="act-btn act-sel"><b>改狀態</b><span>直接改成其他狀態</span><select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>`);
+    items.push(actBtn('copy-id', '複製卡號', '貼到訊息裡'));
+    if (state.page === 'messages') items.push(actBtn('open-work', '在工作頁開啟', '在看板上看這張卡'));
+    return `<details class="more-acts"><summary>⋯ 其他動作</summary><div class="more-list">${items.join('')}</div></details>`;
+  }
+  // 「今天 14:46」「昨天 09:10」「10/16 14:46」
+  function dayTime(iso) {
+    const t = new Date(iso), now = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    return t.toDateString() === now.toDateString() ? '今天 ' + hm : t.toDateString() === y.toDateString() ? '昨天 ' + hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`;
+  }
+  // 「發生了什麼」：同人同秒的多筆合成一句；交接寫成「A 把這張交給 B 驗收／做」，備註收合、版號抽出放小字
+  function happenedHtml(d) {
+    const groups = [];
+    for (const l of d.log || []) {
+      const k = (l.by?.participantId || l.by?.name || '') + '|' + String(l.at).slice(0, 19);
+      const g = groups[groups.length - 1];
+      if (g && g.k === k && !/^建立卡片/.test(l.text) && !g.items.some(t => /^建立卡片/.test(t))) g.items.push(l.text); else groups.push({ k, by: l.by, at: l.at, items: [l.text] }); // 建卡永遠單獨一句
+    }
+    const line = g => {
+      const ho = g.items.map(t => /^交接 (.+?) → (.+?)：([\s\S]*)$/.exec(t)).find(Boolean);
+      let icon = '•', cls = '', body, note = '', ver = '';
+      if (g.items.some(t => /人類完成即驗收|驗收通過/.test(t))) { icon = '✓'; cls = 'ok'; body = '驗收通過，這張卡結案了'; }
+      else if (ho) {
+        icon = '⇢'; cls = 'ho';
+        note = ho[3].replace(/（狀態[^（）]*）\s*$/, '').trim();
+        ver = (note.match(/v\d+\.\d+\.\d+/) || [''])[0];
+        body = `把這張交給 <b>${esc(shortOf(ho[2]))}</b> ${/等 .+ 驗收/.test(ho[3]) ? '驗收' : '做'}`;
+      }
+      else if (g.items.some(t => /^建立卡片/.test(t))) { icon = '＋'; body = '建了這張卡'; }
+      else if (g.items.some(t => /^退回/.test(t))) { icon = '↩'; cls = 'bad'; body = esc(g.items.find(t => /^退回/.test(t))); }
+      else if (g.items.some(t => /^標為已完成/.test(t))) { icon = '✓'; body = '標為已完成'; }
+      else body = g.items.map(t => esc(t.replace(/^狀態 (.+?) → (.+)$/, '把狀態從「$1」改成「$2」').replace(/^.+? 認領了這張卡片$/, '認領了這張卡'))).join('，');
+      const who = g.by ? shortOf(g.by.name || '') : '系統';
+      return `<li class="lg ${cls}"><span class="lg-ic" aria-hidden="true">${icon}</span><div class="lg-main"><span><b>${esc(who)}</b> ${body}</span><span class="muted small">${dayTime(g.at)}${ver ? ' · ' + esc(ver) : ''}</span>${note ? `<details class="lg-note"><summary>看交接說明</summary><p>${esc(note)}</p></details>` : ''}</div></li>`;
+    };
+    const all = work.logAll, list = all ? groups : groups.slice(0, 5);
+    return `<div class="group-title">發生了什麼</div><ol class="happened">${list.map(line).join('')}</ol>${groups.length > 5 ? `<button type="button" class="link small" data-act="log-all">${all ? '只看最近 5 句' : `看全部 ${groups.length} 筆`}</button>` : ''}`;
+  }
   function handoverChain(d) {
     const hs = [...(d.log || [])].reverse().map(l => /^交接 (.+?) → (.+?)：/.exec(l.text)).filter(Boolean);
     if (!hs.length) return '';
     const names = [hs[0][1], ...hs.map(m => m[2])];
-    return `<div class="handover-chain"><span class="muted small">交接歷程</span> ${names.map(n => `<b>${esc(n)}</b>`).join(' → ')}</div>`;
+    return `<div class="handover-chain"><span class="muted small">交接歷程</span> ${names.map(n => `<b>${esc(shortOf(n))}</b>`).join(' → ')}</div>`;
   }
   function openHandover() {
     const d = work.detail;
@@ -3108,11 +3171,10 @@
           ${d.mergedFrom?.length ? `<div class="merged-line">整理自 ${d.mergedFrom.map(x => `<button type="button" class="merged-into" data-card="${esc(x)}">🔒${esc(x)}</button>`).join('、')}</div>` : ''}
           <div class="drawer-status">
             ${d.type === NOTE ? `<span class="dst" id="note-st-l">狀態</span><div class="seg-scope note-st" role="group" aria-labelledby="note-st-l">${[['進行中', '收集中'], ['已完成', '已整理']].map(([v, t]) => `<button type="button" data-act="note-st" data-st="${v}" aria-pressed="${(d.status === '已完成') === (v === '已完成')}">${t}</button>`).join('')}</div>` : `
-            <label class="dst">狀態<select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
-            ${verifyingMe(d) ? '<button class="btn small primary" type="button" data-act="ver-ok">驗收通過</button><button class="btn small" type="button" data-act="ver-no">退回…</button>' : !closedSt(d.status) ? '<button class="btn small" type="button" data-act="done">標為已完成</button>' : ''}`}
-            ${canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
-            ${d.status === '已完成' && !d.verified && d.type !== NOTE ? `<button class="btn small primary" type="button" data-act="verify" ${mine ? 'disabled title="完成者不能自己驗證"' : ''}>標為已驗證</button>` : ''}
+            <span class="cst-pill" data-st="${esc(d.status)}">${esc(verifyingMe(d) ? '等你驗收' : d.status)}</span><span class="muted small">負責：${esc(d.owner?.name || '未指派')}${prevHandName(d) ? ` · ${esc(shortOf(prevHandName(d)))} 交來` : ''}</span>`}
+            ${d.type === NOTE && canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
           </div>
+          ${d.type === NOTE ? '' : nowActsHtml(d) + moreActsHtml(d, mine)}
           ${d.status === '已封存' ? (() => {
             const sys = (d.log || []).find(l => /^系統自動封存/.test(l.text));
             const why = sys ? `${mmdd(sys.at)} 系統自動封存（${mmdd(d.verified?.at || d.done?.at || sys.at)} 驗證完成，滿 ${ARCHIVE_DAYS} 天）。` : `${mmdd(d.updatedAt)} 已封存。`;
@@ -3156,17 +3218,17 @@
             <dt>阻塞與等誰</dt><dd class="${waitText(d) ? '' : 'muted'}">${esc(waitText(d) || '沒有阻塞')}</dd>
             <dt>完成條件</dt><dd class="${d.criteria ? '' : 'muted'}">${esc(d.criteria || '未填寫')}</dd>
           </dl>
-          <div><button class="btn small" type="button" data-act="edit">編輯</button></div>`}
+          ${d.type === NOTE ? '<div><button class="btn small" type="button" data-act="edit">編輯</button></div>' : ''}`}
           <div class="group-title">相關訊息 · ${(d.messageIds || []).length}</div>
           ${msgs || '<p class="muted small">還沒有關聯訊息。</p>'}
           ${d.type === NOTE ? `<div class="group-title">紀錄 · ${(d.notes || []).length}</div>
             <div class="note-list">${(d.notes || []).map(n => `<div class="note-entry"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${esc(shortTime(n.at))}</span><div>${esc(n.text)}</div></div>`).join('') || '<p class="muted small">還沒有紀錄。</p>'}</div>
             <div class="note-add"><textarea autocomplete="off" autocorrect="on" id="note-text" rows="2" maxlength="1000" placeholder="寫一筆紀錄（只存卡上，不發群組）" aria-label="寫一筆紀錄"></textarea><button type="button" class="btn primary" data-act="add-note">記下</button></div>`
           : !narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
-          <div class="group-title">${d.type === NOTE ? '變更紀錄' : '紀錄'}</div>
-          <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>
+          ${d.type === NOTE ? `<div class="group-title">變更紀錄</div>
+          <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>` : happenedHtml(d)}
         </div>
-        ${state.page === 'messages' ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
+        ${state.page === 'messages' && d.type === NOTE ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
         ${narrowMq.matches && d.type !== NOTE && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="drawer-compose" aria-label="想法與回覆">${inlineHtml('k:' + d.cardId, 'card', d)}</div>` : ''}
       </aside>`;
     const humanOnlySel = isNote => host.querySelectorAll('#card-edit select[name="ownerId"], #card-edit select[name="waitForId"]').forEach(sel => { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai && !o.selected; } });
@@ -3215,6 +3277,7 @@
     if (a.dataset.act === 'open-work') { work.returnFocus = null; closeCard(); showPage('work'); return openCard(id); }
     if (a.dataset.act === 'copy-id') return copyText(id).then(ok => toast(ok ? `已複製 ${id}` : '複製失敗'));
     if (a.dataset.act === 'handover') return openHandover();
+    if (a.dataset.act === 'log-all') { work.logAll = !work.logAll; return renderDrawer(false); }
     if (a.dataset.act === 'add-note') {
       const ta = $('#note-text'), t = ta?.value.trim();
       if (!t) return ta?.focus();
