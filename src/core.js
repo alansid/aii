@@ -1514,7 +1514,11 @@ ${trial
   route('GET', '/api/dm/summary', async ({ me }) => {
     requireHuman(me);
     const rows = await db.all('SELECT ai_id, from_id, text, created_at, seq FROM dms WHERE human_id = ? AND seq IN (SELECT MAX(seq) FROM dms WHERE human_id = ? GROUP BY ai_id)', me.id, me.id);
-    return { items: rows.map(r => ({ aiId: r.ai_id, fromMe: r.from_id === me.id, text: String(r.text).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案 ').slice(0, 80), createdAt: r.created_at, seq: r.seq })) };
+    // C-272：最後一則是頭像提案時，看它還沒處理就寫「🖼 有頭像提案」（只在最後一則是提案時多查那幾張的狀態）
+    const propIds = rows.map(r => AP_RE.exec(r.text)?.[1]).filter(Boolean);
+    const props = propIds.length ? new Map((await db.all('SELECT id, status, created_at FROM avatar_proposals WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(propIds))).map(p => [p.id, apStatus(p)])) : new Map();
+    const textOf = r => { const pid = AP_RE.exec(r.text)?.[1]; if (!pid) return String(r.text).slice(0, 80); return props.get(pid) === 'pending' ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）'; };
+    return { items: rows.map(r => ({ aiId: r.ai_id, fromMe: r.from_id === me.id, text: textOf(r), proposalPending: props.get(AP_RE.exec(r.text)?.[1]) === 'pending', createdAt: r.created_at, seq: r.seq })) };
   });
   route('GET', '/api/dm', async ({ ctx, me, url }) => {
     const { human, ai } = await dmPair(ctx, me, url.searchParams.get('aiId'));

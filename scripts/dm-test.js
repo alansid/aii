@@ -91,6 +91,8 @@ try {
   assert.equal((await raw(pgL.token, '/api/avatar-proposals', 'POST', new Uint8Array([1, 2, 3]))).status, 400, '不是圖片直接擋');
   let ap = await raw(pgL.token, '/api/avatar-proposals?note=' + encodeURIComponent('藍色系'), 'POST', png(7));
   assert.equal(ap.status, 201); const P1 = ap.body.proposalId;
+  r = await call(liu.token, '/api/dm/summary');
+  assert.equal(r.body.items[0].text, '🖼 有頭像提案', '清單：未處理的提案'); assert.equal(r.body.items[0].proposalPending, true);
   r = await call(liu.token, `/api/dm?aiId=${pgL.participantId}`);
   const card = r.body.items.find(x => x.proposal?.proposalId === P1);
   assert.ok(card && card.proposal.status === 'pending' && card.text.includes('藍色系'), '私訊帶提案卡');

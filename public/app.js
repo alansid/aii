@@ -4024,11 +4024,19 @@
     list.querySelectorAll('[data-ap-img]').forEach(el => apImg(el.dataset.apImg).then(u => { if (u) { el.style.backgroundImage = `url("${u}")`; el.classList.add('img-on'); } }));
     return true;
   }
+  // 清單的最後一句跟著目前對話更新（不另外查）；未處理的頭像提案寫「🖼 有頭像提案」（C-272）
+  function dmSumFromItems() {
+    const last = dm.items[dm.items.length - 1];
+    if (!last) return false;
+    if (!state.dmSummary) state.dmSummary = new Map();
+    const pend = last.proposal?.status === 'pending';
+    state.dmSummary.set(dm.aiId, { aiId: dm.aiId, fromMe: last.from.participantId === meId(), text: last.proposal ? (pend ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）') : String(last.text).slice(0, 80), proposalPending: pend, createdAt: last.createdAt });
+    return true;
+  }
   async function dmLoad() {
     const d = await api(`/api/dm?aiId=${encodeURIComponent(dm.aiId)}&after=${dm.after}`);
     dm.items.push(...d.items); dm.after = d.nextAfter; dm.canSend = d.canSend; dm.reason = d.reason || '';
-    const last = dm.items[dm.items.length - 1];
-    if (last) { if (!state.dmSummary) state.dmSummary = new Map(); state.dmSummary.set(dm.aiId, { aiId: dm.aiId, fromMe: last.from.participantId === meId(), text: last.proposal ? '🖼 頭像提案' : String(last.text).slice(0, 80), createdAt: last.createdAt }); if (d.items.length) drawDmSide(); }
+    if (dmSumFromItems() && d.items.length) drawDmSide();
     const before = (work.notes || []).length;
     work.notes = (work.notes || []).filter(n => !(n.dm && n.sender.participantId === dm.aiId)); // 伺服器已標已讀
     if (work.notes.length !== before) { updateTodoBadge(); drawDmSide(); }
@@ -4067,6 +4075,7 @@
     try { await dmLoad(); } catch (err) { return toast(err.message); }
     drawDm(); const l0 = $('#dm-list'); if (l0) l0.scrollTop = l0.scrollHeight;
     if (isDesktop()) $('#dm-input')?.focus();
+    if (state.dmPrefill) { const ta = $('#dm-input'); if (ta && dm.canSend) { ta.value = state.dmPrefill; ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } state.dmPrefill = null; } // C-272：從個人設定來的預填
     // 對話開著才每 10 秒看一次新私訊；關掉就停
     dm.timer = setInterval(async () => { if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
   }
@@ -4099,6 +4108,7 @@
       try {
         const r = await api(`/api/avatar-proposals/${encodeURIComponent(id)}/${apply ? 'apply' : 'skip'}`, { method: 'POST' });
         for (const it of dm.items) if (it.proposal?.proposalId === id) it.proposal = r.proposal;
+        if (dmSumFromItems()) drawDmSide();
         if (apply) { await afterAvatar(r.me); toast('已換成新頭像；個人設定可以換回上一張'); } else toast('已略過，圖已刪掉');
         drawDm();
       } catch (err) { ap.disabled = false; toast(err.message); }
@@ -5657,6 +5667,22 @@
       input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
     });
   }
+  // C-272：個人設定「請我的 AI 幫我做」→ 選一個自己的 AI → 打開私訊、預填「幫我做一個頭像：」；私訊沒開走開啟說明
+  document.addEventListener('click', e => {
+    if (!e.target.closest?.('#av-ask-ai')) return;
+    closeModal();
+    const pv = projectView();
+    const mine = [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled');
+    const cands = mine.map(a => ({ a, pj: [pv, ...(a.projects || [])].find(p => PROJECTS.includes(p) && (a.projects || []).includes(p) && dmOn(p)) })).filter(x => x.pj);
+    if (!cands.length) {
+      if (PROJECTS.includes(pv) && dmEntry()) return dmEnable();
+      return toast('你的 AI 所在的專案都還沒開放私訊；請管理員或 leader 在「成員與權限 → 專案 → ⋯」打開。');
+    }
+    const go = ({ a, pj }) => { state.dmPrefill = '幫我做一個頭像：'; state.dmAi = a.participantId; return pj !== pv ? setProjectView(pj, 'dm') : openDm(a.participantId); };
+    if (cands.length === 1) return go(cands[0]);
+    const body = openModal('請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: '會打開跟它的私訊，幫你先打好開頭' });
+    body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });
+  });
   // C-272：換回上一張
   document.addEventListener('click', async e => {
     if (!e.target.closest?.('#av-revert')) return;
@@ -5675,6 +5701,7 @@
         <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
         <button class="btn small" type="button" data-change-avatar>更換</button>
         <button class="link small" type="button" id="av-revert" hidden>換回上一張</button>
+        ${state.me.memberType === 'human' && [...state.participants.values()].some(isMyAi) ? '<button class="link small" type="button" id="av-ask-ai">請我的 AI 幫我做</button>' : ''}
       </div>
       <div class="field"><span class="field-label">所屬專案</span>
         <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員與權限」調整，這裡只能看。</p>
