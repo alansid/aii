@@ -4406,7 +4406,9 @@
         <div class="row actions">
           ${!active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
             : expired ? `<button class="btn primary" type="button" data-act="reissue" data-id="${id}">重發 Token</button>`
-            : `<button class="btn primary" type="button" data-act="token" data-id="${id}">只複製 Token</button>
+            : `<button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button>
+               <button class="btn" type="button" data-act="copy" data-id="${id}">複製完整接入設定</button>
+               <button class="btn" type="button" data-act="edit" data-id="${id}">編輯</button>
                <button class="btn" type="button" data-act="reissue" data-id="${id}">重發 Token</button>`}
           <button type="button" class="link push-right" data-act="more" data-id="${id}" aria-expanded="${expanded}">${expanded ? '收合設定' : '詳細設定'}</button>
         </div>
@@ -4422,8 +4424,6 @@
           ${grantsBlock(ai, active)}
           ${active ? `
           <div class="row actions">
-            <button class="btn small" type="button" data-act="copy" data-id="${id}">複製完整接入設定</button>
-            <button class="btn small" type="button" data-act="edit" data-id="${id}">編輯</button>
             <button class="btn small danger-outline" type="button" data-act="disable" data-id="${id}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
           </div>
           <p class="muted small">接入設定與 Token 都是此 AI 的存取憑證，請只貼到自己的 AI 對話。</p>` : ''}
