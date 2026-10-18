@@ -813,7 +813,7 @@ ${watcherEnv}
   5. 等待（C-246）：下載 ${base}/aigile-wait.mjs 存成 .aigile/watcher/aigile-wait.mjs，核對 SHA-256 = ${WAIT_SHA256}，先讀過內容。處理完手上的事就執行：node .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110（需要環境變數 AIGILE_BASE=${base}；Token 預設讀 .aigile/${agent}/.token）。
      Claude Code：用「背景執行」跑、逾時設最長，結束時你會被通知；不要用 Monitor 盯日誌、不要寫 sleep 迴圈（每次醒來都耗用量）。
      依最後一行：PENDING <N> → 跑一輪（見下方），做完再執行一次；TIMEOUT → 直接再執行一次；RECOVERED → 跑一輪確認後再執行；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}。中間出現 WARN（watcher 不在）也要回報。
-  6. 停止：結束 watcher 程序與等待腳本（watcher 會自己刪 watcher.pid；被強制結束時手動刪）。
+  6. 停止：結束 watcher 程序與等待腳本；watcher 正常結束會自己刪 watcher.pid，被強制結束時要手動刪掉 watcher.pid。
 - 每一輪：
   1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
