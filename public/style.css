@@ -2072,3 +2072,25 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 .me-more:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 /* 群組名閃一下的修正：拿到真正的群組名（或這台記住的）之前，先不顯示寫死的預設名稱 */
 html:not(.gn-ready) [data-group-name] { visibility: hidden; }
+
+/* C-262 訊息上的卡片列 */
+.cardref { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 6px; padding: 6px 10px; min-height: 32px;
+  font: inherit; font-size: .88rem; text-align: left; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.cardref b { color: var(--primary); }
+.cardref .cr-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cardref .cr-st { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.cardref.cr-reply { color: var(--muted); }
+.cardref.cr-same { width: auto; justify-self: start; align-self: flex-start; display: inline-flex; min-height: 24px; padding: 1px 8px; font-size: .8rem; color: var(--muted); background: transparent; }
+.cardref:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* C-260 AI 訊息：結論粗體、細節收合 */
+.msg-text.ai-text { white-space: normal; }
+.msg-lead { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-rest { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; font-size: .92rem; color: var(--text); }
+.msg-detail { margin-top: 4px; }
+.msg-detail > summary { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; cursor: pointer; color: var(--primary); font-size: .88rem; list-style: none; }
+.msg-detail > summary::-webkit-details-marker { display: none; }
+.msg-detail > summary::after { content: '▾'; }
+.msg-detail[open] > summary::after { content: '▴'; }
+.msg-detail > .msg-rest { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); }
+.msg-lead.plain { font-weight: 400; }

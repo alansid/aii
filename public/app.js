@@ -694,6 +694,7 @@
   // 整串清單：連續 3 則以上的一行流程訊息合成一列
   function listHtml(list) {
     state.groupOf = new Map();
+    state.lastCard = '';
     const out = [];
     for (let i = 0; i < list.length;) {
       let j = i;
@@ -740,8 +741,13 @@
   }
 
   function messageHtml(m) {
+    const prevCard = state.lastCard;
+    state.lastCard = ''; // 一行／精簡沒有卡片列，下一則同卡要完整顯示
     if (isFlowLine(m)) return flowLineHtml(m);
     if (isSlim(m)) return slimHtml(m);
+    const ai = aiParts(m);
+    if (ai && !ai.head && !ai.rest && tagOf(m.text) === '交接') return flowLineHtml(m); // C-260：只有格式字的系統交接通知縮成一行
+    state.lastCard = msgCardOf(m);
     const toMe = isToMe(m);
     const replyMe = isReplyToMe(m);
     const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
@@ -761,19 +767,53 @@
         </div>
         ${statusTags(m, toMe, replyMe)}
         ${recipients ? `<div class="recipients"><span class="muted">給</span> ${recipients}</div>` : ''}
+        ${cardRefHtml(m, prevCard)}
         ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
-        ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : textHtml(m)}
+        ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, ai) : textHtml(m)}
         ${authHtml(m)}
         <div class="msg-foot">
           <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
           ${m.file ? '' : `<button class="reply-btn newcard" type="button" data-newcard="${esc(m.messageId)}">＋建卡</button>`}
           ${linkedCapsules(m)}
-          ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
+          ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && !ai && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
           ${threadToggle(m)}
         </div>
       </article>`;
   }
 
+  // ---------- C-262 看得出在回哪張卡 ----------
+  // 訊息的卡：用 cardId 關聯的卡，沒有就用內文第一個卡號
+  const msgCardOf = m => [...(state.msgCards.get(m.messageId) || [])][0] || cardIdOf(m.text);
+  function cardRefHtml(m, prevCard) {
+    const own = msgCardOf(m);
+    const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
+    const id = own || (parent && msgCardOf(parent));
+    if (!id) return '';
+    const c = work.cards.get(id); // 卡名從已載入的卡片清單拿，不多查伺服器；沒載到只顯示卡號
+    const title = c ? `<span class="cr-title">${esc(c.title)}</span>` : '';
+    if (!own) return `<button type="button" class="cardref cr-reply" data-cap="${id}" aria-label="${esc(`回覆 ${id} ${c?.title || ''}，打開卡片`)}"><span aria-hidden="true">↳</span> 回覆 <b>${id}</b>${title}</button>`;
+    if (own === prevCard) return `<button type="button" class="cardref cr-same" data-cap="${id}" aria-label="${esc(`同一張卡 ${id}，打開卡片`)}">${id}</button>`; // 連續同一張卡只第一則完整
+    return `<button type="button" class="cardref" data-cap="${id}" aria-label="${esc(`${id} ${c?.title || ''} ${c?.status || ''}，打開卡片`)}"><span aria-hidden="true">🗂</span><b>${id}</b>${title}${c ? `<span class="cr-st">${esc(c.status)} ›</span>` : ''}</button>`;
+  }
+  // ---------- C-260 AI 訊息：白話結論在前、細節收合 ----------
+  // 去掉開頭的 [標籤]、【專案名】、交接的「C-xxx 卡名 → @誰：」；第一段（第一個空行前）當結論，沒有空行就前兩行
+  function aiParts(m) {
+    if (m.file || authorKind(m) !== 'ai') return null;
+    const tag = tagOf(m.text);
+    let t = String(m.text).replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').replace(/^\s*【[^】\n]{1,20}】\s*/, '');
+    t = t.replace(/^C-\d{3,}[^\n]{0,120}?→\s*@[^：:\n]{1,40}[：:]\s*/, '');
+    let head, rest;
+    const gap = t.search(/\n[ \t]*\n/);
+    if (gap >= 0) { head = t.slice(0, gap); rest = t.slice(gap).replace(/^\s+/, ''); }
+    else { const ls = t.split('\n'); head = ls.slice(0, 2).join('\n'); rest = ls.slice(2).join('\n'); }
+    return { tag, head: head.trim(), rest: rest.trim(), keep: /需確認|受阻/.test(tag) }; // 需確認的選項、受阻的原因不收
+  }
+  function aiTextHtml(m, p) {
+    const lead = (p.tag ? leadPill(p.tag) : '') + renderText(p.head);
+    if (!p.rest) return `<div class="msg-text ai-text"><div class="msg-lead plain">${lead}</div></div>`; // 只有一段：不必加粗
+    if (p.keep || state.open.has(m.messageId)) return `<div class="msg-text ai-text"><div class="msg-lead">${lead}</div><div class="msg-rest">${renderText(p.rest)}</div></div>`;
+    return `<div class="msg-text ai-text"><div class="msg-lead">${lead}</div><details class="msg-detail" data-detail="${esc(m.messageId)}"${state.expanded.has(m.messageId) ? ' open' : ''}><summary>細節</summary><div class="msg-rest">${renderText(p.rest)}</div></details></div>`;
+  }
   // 長訊息預設折疊（超過 6 行或 400 字）
   const isLong = t => t.split('\n').length > 6 || t.length > 400;
   function textHtml(m) {
@@ -1286,6 +1326,12 @@
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
     e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
   });
+  // C-260：記住哪些「細節」打開了，重畫後維持
+  $('#messages').addEventListener('toggle', e => {
+    const d = e.target.closest?.('details[data-detail]');
+    if (!d) return;
+    if (d.open) state.expanded.add(d.dataset.detail); else state.expanded.delete(d.dataset.detail);
+  }, true);
   $('#messages').addEventListener('click', e => {
     if (e.target.closest('#load-older, #load-older-empty')) return loadOlder().catch(err => toast(err.message));
     if (e.target.closest('#ctx-older')) return ctxMore('older').catch(err => toast(err.message));
