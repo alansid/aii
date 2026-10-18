@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.59.0",
+  "version": "0.60.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -42,6 +42,8 @@
     "admin-rescue": "node scripts/admin-rescue.js",
     "test:setup": "node scripts/setup-test.js",
     "test:isolate": "node scripts/isolate-test.js",
-    "test:audit": "node scripts/audit-test.js"
+    "test:audit": "node scripts/audit-test.js",
+    "cf:db:migrate-reply-from": "node scripts/migrate.js migrations/0018_reply_from.sql",
+    "test:ask": "node scripts/ask-test.js"
   }
 }

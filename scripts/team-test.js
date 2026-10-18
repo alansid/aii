@@ -221,6 +221,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(ob.includes('找不到 .aigile 是正常的') && ob.includes('自己建 .aigile/') && ob.includes('不是 git 資料夾 → 略過這步，不算受阻'), '接入設定說明空資料夾與 .gitignore 的處理');
     assert.ok(!ob.includes('已被 .gitignore 排除'), '不再假設 .aigile/ 已被 .gitignore 排除');
     assert.ok(ob.includes('第一段只寫一句給人看的白話結論') && ob.includes('空一行之後才寫細節'), 'C-260：接入設定要求結論在前');
+    assert.ok(ob.includes('用 replyFrom 標出「要回覆」的人，一則最多一位') && ob.includes('[需確認] 一定要用 replyFrom'), 'C-259：接入設定說明 replyFrom');
     // C-251：本機跳不出選項的 AI 改用 [需確認]＋選項：或決策卡；授權仍在本機問
     assert.ok(ob.includes('跳不出選項') && ob.includes('規格 3.9.1') && ob.includes('仍在本機對話用文字問'), '接入設定說明跳不出選項時怎麼問人');
     const upd = (await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: '行外' })).body;

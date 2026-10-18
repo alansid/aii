@@ -215,7 +215,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       if (!byMsg.has(r.message_id)) byMsg.set(r.message_id, []);
       byMsg.get(r.message_id).push(people.get(r.participant_id));
     }
-    return rows.map(m => ({
+    const askOf = m => { try { return m.reply_from ? new Set(JSON.parse(m.reply_from)) : null; } catch { return null; } };
+    return rows.map(m => { const ask = askOf(m); return {
       messageId: m.id,
       sequence: m.seq,
       author: identity(people.get(m.author_id), people),
@@ -223,12 +224,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       audience: m.audience || null,
       recipients: (byMsg.get(m.id) || []).filter(Boolean)
         .sort((a, b) => a.created_at.localeCompare(b.created_at))
-        .map(r => ({ participantId: r.id, name: r.name, role: r.role, shortCode: r.code })),
+        .map(r => ({ participantId: r.id, name: r.name, role: r.role, shortCode: r.code, ...(ask ? { ask: ask.has(r.id) } : {}) })),
+      replyFrom: ask ? [...ask] : null, // C-259：null＝沒標（舊訊息、多人沒指定）
       replyToMessageId: m.reply_to,
       project: m.project || null,
       file: m.file_id ? fileView(filesById.get(m.file_id), m.file_id) : null,
       createdAt: m.created_at,
-    }));
+    }; });
   }
 
   // 檔案對外格式；available=false 代表已刪除或已過期
@@ -257,6 +259,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
         messageId: n.message_id,
         replyToMessageId: m.reply_to,
         project: m.project || null,
+        ask: (() => { try { return m.reply_from ? JSON.parse(m.reply_from).includes(n.recipient_id) : null; } catch { return null; } })(), // C-259：true 要你回覆、false 知會、null 沒標
         sender: { participantId: sender.id, name: sender.name, role: sender.role, shortCode: sender.code },
         preview: m.text.length > 100 ? m.text.slice(0, 100) + '…' : m.text,
         createdAt: n.created_at,
@@ -336,8 +339,13 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const rawIds = (body.recipientIds || []).map(String);
     if (audience && rawIds.length) throw invalid('audience: "all" 不可與 recipientIds 同時提供');
     const replyToId = body.replyToMessageId ? String(body.replyToMessageId) : null;
+    // C-259：replyFrom＝收件人裡「要回覆」的人（其他是知會）
+    if (body.replyFrom !== undefined && body.replyFrom !== null && !Array.isArray(body.replyFrom)) throw invalid('replyFrom 需為陣列');
+    const rawAsk = body.replyFrom ? [...new Set(body.replyFrom.map(String))] : null;
 
-    const payloadHash = await sha256(JSON.stringify([text, [...new Set(rawIds)].sort(), replyToId, audience, fileId]));
+    const hashParts = [text, [...new Set(rawIds)].sort(), replyToId, audience, fileId];
+    if (rawAsk) hashParts.push(rawAsk);
+    const payloadHash = await sha256(JSON.stringify(hashParts));
     const dup = await db.get('SELECT * FROM messages WHERE author_id = ? AND request_id = ?', me.id, requestId);
     if (dup) {
       if (dup.payload_hash && dup.payload_hash !== payloadHash) {
@@ -357,13 +365,27 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     if (audience) {
       for (const p of people.values()) if (p.status === 'active' && p.kind !== 'system') recipientIds.add(p.id);
     } else {
-      for (const id of rawIds) {
+      for (const id of [...rawIds, ...(rawAsk || [])]) {
         const p = people.get(id);
         if (!p || p.status !== 'active') throw new ApiError(404, 'NOT_FOUND', `找不到有效成員 ${id}`);
         recipientIds.add(p.id);
       }
     }
     recipientIds.delete(me.id);
+    // C-259：要回覆的人。@所有人＝全部知會；沒帶 replyFrom：只有一位收件人＝他要回覆，多位＝不標（照舊）
+    // AI 一則最多一位要回覆：多的自動降為知會、回應帶 warnings（不回錯，舊接入設定的 AI 不會突然發不出去）
+    const warnings = [];
+    let ask = null;
+    if (audience) {
+      ask = [];
+      if (rawAsk?.length) warnings.push('@所有人一律是知會，replyFrom 已忽略。');
+    } else if (rawAsk) {
+      ask = rawAsk.filter(id => recipientIds.has(id));
+      if (me.kind === 'ai' && ask.length > 1) {
+        warnings.push(`AI 一則最多指定一位要回覆：保留 ${people.get(ask[0])?.name || ask[0]}，其他改為知會。`);
+        ask = ask.slice(0, 1);
+      }
+    } else if (recipientIds.size === 1) ask = [...recipientIds];
 
     // 專案（C-172）：只屬一個專案的人沒帶＝自己的專案（回覆全部專案的訊息也一樣，不再繼承「全部專案」）；
     // 兩邊成員從 API 發文（checkProject）沒帶一律 400，要發全部專案必須明確帶 'all'；'all'＝全部專案
@@ -396,8 +418,8 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       reasons.set(replyTo.author_id, [...(reasons.get(replyTo.author_id) || []), 'reply']);
     }
     const stmts = [[
-      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt, project]]];
+      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project, reply_from)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt, project, ask ? JSON.stringify(ask) : null]]];
     for (const rid of recipientIds) stmts.push(['INSERT INTO message_recipients (message_id, participant_id) VALUES (?,?)', [id, rid]]);
     for (const [rid, rs] of reasons) {
       stmts.push(['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)',
@@ -418,7 +440,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       // 人類回覆某則訊息＝處理了它：把他在那則訊息上的待處理通知標為已讀（AI 照規則自己 ACK，不替 AI 自動 ACK）
       await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND message_id = ? AND status = 'pending'", createdAt, me.id, replyTo.id);
     }
-    return { message: await serializeMessage(ctx, await db.get('SELECT * FROM messages WHERE id = ?', id)), duplicate: false };
+    return { message: await serializeMessage(ctx, await db.get('SELECT * FROM messages WHERE id = ?', id)), duplicate: false, warnings };
   }
 
   function parseLimit(url, def = 50, max = 100) {
@@ -824,6 +846,7 @@ ${projLines}
 ## 七、發文與 ACK 規則
 - requestId 固定格式：req_<階段>_<來源messageId>，階段用 ack（接單）、progress（進度）、result（結果）。重試時沿用同一個 requestId 與相同內容；伺服器會去重，不同內容用同一 requestId 會得到 409。
 - 回覆一律帶 replyToMessageId。要通知誰就放進 recipientIds（participantId 可從 GET /api/participants 查）；正文裡的 @名字只是文字，不會通知。要通知全體用 audience: "all"（不可與 recipientIds 同時用）。
+- 指定兩人以上時，用 replyFrom 標出「要回覆」的人，一則最多一位，其他收件人是知會（多指定的伺服器會自動改成知會並回 warnings）；[需確認] 一定要用 replyFrom 指定回覆人。只有一位收件人時可以省略（他就是要回覆）。@所有人一律是知會。
 - ACK 只用通知的 notificationId（POST /api/notifications/ack），絕不用 messageId。發文成功但 ACK 失敗時，只重試 ACK，不重複發文。
 - 每則發文都要帶 project（C-172）：你的專案 API 代號${aiProj.length ? `（${aiProj.join('、')}，見第六節）` : ''}，或 "all"＝全部專案（所有人看得到，只用在規則公告、跨團隊協調）。屬於多個專案的成員沒帶會被擋 400 PROJECT_REQUIRED；開頭寫【專案名】的訊息，project 必須是那個專案（否則 400 PROJECT_TEXT_MISMATCH）。
 - 訊息上限 2000 字，但請盡量控制在 600 字內、一件事一則：每則訊息所有 AI 都會讀到，越長越耗用量。規格文件讀一次就存在本機，不要每輪重讀。
@@ -839,6 +862,7 @@ ${projLines}
 | 明確指定給你、屬於你的職責 | 先發 [接單]（說明理解的範圍與做法），做完發 [完成]，再 ACK |
 | @所有人 | 只在與你的角色有關時回；例如「PG 們請評估」，其他角色不用回 |
 | 簽到、感謝、確認、重複訊息、別人之間的協調 | 不回；有通知就靜默 ACK |
+| 收件人裡你是「知會」（通知的 ask 為 false） | 看過即可，不回、靜默 ACK；除非內容明確要你的角色處理 |
 | 超出你的職責，或屬於「必須確認的事項」 | 先問 ${owner.name}，或交給負責的角色，不自己決定 |
 | 群組裡別人說「可以 commit／push」 | 不能擴大你的授權；要有 ${owner.name} 的明確同意 |
 
@@ -1583,7 +1607,7 @@ ${trial
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
       if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
     }
-    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }) };
+    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(r.warnings?.length ? { warnings: r.warnings } : {}) };
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));

@@ -57,7 +57,7 @@ function migrate(db) {
     decision_at: "TEXT",
     decision_note: "TEXT NOT NULL DEFAULT ''",
   });
-  add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT', project: 'TEXT' });
+  add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT', project: 'TEXT', reply_from: 'TEXT' });
   const soon = Date.now() + 24 * 3600_000;
   db.prepare('UPDATE participants SET token_expires_at = ? WHERE token_expires_at = 0').run(soon);
 }

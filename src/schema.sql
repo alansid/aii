@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS messages (
   audience TEXT,
   payload_hash TEXT,
   file_id TEXT,                            -- 附帶的上傳文件
+  reply_from TEXT,                         -- C-259：要回覆的人（JSON 陣列，收件人子集合）；NULL＝沒標
   created_at TEXT NOT NULL,
   UNIQUE (author_id, request_id)
 );

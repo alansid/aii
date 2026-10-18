@@ -2094,3 +2094,19 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .msg-detail[open] > summary::after { content: '▴'; }
 .msg-detail > .msg-rest { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); }
 .msg-lead.plain { font-weight: 400; }
+
+/* C-259 要回覆／知會 */
+.apill { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 11px; font-size: .8rem; font-weight: 500; white-space: nowrap; }
+.apill.ask { background: #fef3c7; color: #92400e; }
+.apill.fyi { background: var(--surface-2); color: var(--muted); }
+.apill.me { outline: 2px solid currentColor; outline-offset: 1px; }
+:root[data-theme="dark"] .apill.ask { background: #4a3410; color: #fcd34d; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .apill.ask { background: #4a3410; color: #fcd34d; } }
+.recipients .apill { margin: 2px 2px 2px 0; }
+.ask-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0 0; }
+.ask-row[hidden] { display: none; }
+.ask-chip { font: inherit; font-size: .85rem; min-height: 32px; padding: 2px 10px; border-radius: 16px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+.ask-chip b { font-weight: 600; margin-left: 4px; }
+.ask-chip.ask b { color: #b45309; }
+.ask-chip.fyi b { color: var(--muted); }
+.ask-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }

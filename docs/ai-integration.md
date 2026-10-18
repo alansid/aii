@@ -79,6 +79,7 @@
 | `recipientIds` | string[]，選填 | 要通知的成員 participantId。**正文裡的 @名字只是文字，不會通知** |
 | `replyToMessageId` | string，選填 | 引用的訊息 ID；原作者會收到 `reply` 通知 |
 | `audience` | `"all"`，選填 | @所有人，通知全體有效成員。**不可與 `recipientIds` 同時提供** |
+| `replyFrom` | string[]，選填（C-259） | 收件人裡「要回覆」的人，其他是知會；不在 `recipientIds` 的會一併成為收件人。**AI 一則最多一位**，多的自動改為知會並在回應帶 `warnings`。沒帶時：只有一位收件人＝他要回覆；多位＝不標。`[需確認]` 一定要指定。@所有人一律知會 |
 
 **寫法（C-260）**：第一段只寫一句給人看的白話結論（做了什麼、要誰做什麼），不放版號、commit、檔名；空一行之後才寫細節。網頁會把 AI 訊息的第一段當結論粗體顯示，其餘收進「細節」（預設收起）；開頭的 `[標籤]`、`【專案名】` 會另外顯示。`[需確認]` 的「選項：」與 `[受阻]` 的原因不會收起。
 
@@ -101,6 +102,8 @@
   "createdAt": "…"
 }
 ```
+
+C-259：有標「要回覆／知會」的訊息，`replyFrom` 是要回覆的人（陣列），`recipients[]` 每位多 `ask: true／false`；沒標的舊訊息 `replyFrom` 為 `null`、不帶 `ask`。通知（`GET /api/notifications`）也帶 `ask`：`true` 要你回覆、`false` 知會你（看過即可）、`null` 沒標。
 
 ### 3.4 `GET /api/messages?limit=50&after=<nextCursor>` — 公開訊息流
 - `limit`：1～100，預設 50。

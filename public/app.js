@@ -598,6 +598,8 @@
     return !!parent && parent.author.participantId === meId();
   };
   const isMine = m => m.author.participantId === meId();
+  // C-259：這則對我是「要回覆」（true）、「知會」（false），或沒標（undefined，舊訊息照舊）
+  const myAsk = m => m.recipients.find(r => r.participantId === meId())?.ask;
   // 指定我名下 AI 的訊息（@所有人除外），讓人類知道自己的 AI 被交辦了什麼
   const toMyAi = m => {
     if (m.audience === 'all' || isMine(m)) return false;
@@ -639,7 +641,7 @@
   function statusTags(m, toMe, replyMe) {
     const tags = [
       m.audience === 'all' ? '<span class="tag all">全體通知</span>' : '',
-      toMe && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '',
+      toMe && m.audience !== 'all' && !isMine(m) && !m.replyFrom ? '<span class="tag me">指定給我</span>' : '',
       replyMe && !isMine(m) ? '<span class="tag reply">回覆我</span>' : '',
       toMyAi(m) ? '<span class="tag my-ai">給我的 AI</span>' : '',
       unansweredTag(m),
@@ -660,7 +662,7 @@
   const narrowMq = matchMedia('(max-width: 640px)');
   const slimMode = () => { const v = store.get(MSG_VIEW_KEY); return v ? v === 'slim' : narrowMq.matches; };
   const authorKind = m => (state.participants.get(m.author.participantId) || m.author).memberType;
-  const mentionsMe = m => !isMine(m) && ((isToMe(m) && m.audience !== 'all') || isReplyToMe(m));
+  const mentionsMe = m => !isMine(m) && myAsk(m) !== false && ((isToMe(m) && m.audience !== 'all') || isReplyToMe(m)); // C-259：知會我的不算
   const keepFull = m => !!m.file || /^\s*\[需確認\]/.test(m.text) || authorKind(m) === 'human' || mentionsMe(m);
   const isFlowLine = m => !state.open.has(m.messageId) && FLOW_TAGS.includes(tagOf(m.text)) && !keepFull(m);
   const isSlim = m => !state.open.has(m.messageId) && slimMode() && !keepFull(m) && !FLOW_TAGS.includes(tagOf(m.text));
@@ -683,7 +685,7 @@
   function slimHtml(m) {
     const tag = tagOf(m.text), card = cardIdOf(m.text), need = needReply(m);
     return `<article class="msg slim${need ? ' need-me' : ''}" id="msg-${esc(m.messageId)}"><button type="button" class="slim-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false">
-      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span>
+      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span>
       <span class="slim-text">${esc(firstSentence(m.text))}</span><span class="sr-only">，展開全文</span></button></article>`;
   }
   function flowGroupHtml(run) {
@@ -752,8 +754,8 @@
     const replyMe = isReplyToMe(m);
     const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
     const a = m.author;
-    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) ? 'to-me' : '', needReply(m) ? 'need-me' : ''].join(' ');
-    const recipients = m.audience === 'all'
+    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false ? 'to-me' : '', needReply(m) ? 'need-me' : ''].join(' '); // C-259：知會我的不上底色
+    const recipients = m.replyFrom ? askPillsHtml(m) : m.audience === 'all'
       ? '<span class="mention">@所有人</span>'
       : m.recipients.map(r => `<span class="mention">@${esc(r.name)}</span>`).join(' ');
     return `
@@ -781,6 +783,14 @@
       </article>`;
   }
 
+  // ---------- C-259 要回覆／知會 ----------
+  // 黃＝要回覆、灰＝知會；輪到我的那顆加外框、寫「要你回覆／知會你」；@所有人一律知會
+  function askPillsHtml(m) {
+    const pill = (ask, me, name) => `<span class="apill ${ask ? 'ask' : 'fyi'}${me ? ' me' : ''}">${ask ? (me ? '要你回覆' : '要回覆') : (me ? '知會你' : '知會')} · ${esc(name)}</span>`;
+    if (m.audience === 'all') return pill(false, isToMe(m) && !isMine(m), '所有人');
+    return [...m.recipients].sort((a, b) => (b.ask ? 1 : 0) - (a.ask ? 1 : 0)).map(r => pill(r.ask, r.participantId === meId(), r.name)).join(' ');
+  }
+  const myAskPill = m => { const a = myAsk(m); return a === undefined || isMine(m) ? '' : `<span class="apill ${a ? 'ask' : 'fyi'} me">${a ? '要你回覆' : '知會你'}</span>`; };
   // ---------- C-262 看得出在回哪張卡 ----------
   // 訊息的卡：用 cardId 關聯的卡，沒有就用內文第一個卡號
   const msgCardOf = m => [...(state.msgCards.get(m.messageId) || [])][0] || cardIdOf(m.text);
@@ -922,8 +932,10 @@
   const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
   const viewLabel = v => (v === 'hub' ? '我的專案' : v === 'cross' ? '跨專案頻道' : projName(v));
   // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
+  const askTodo = () => { const dec = new Set((state.team ? myDecisions(state.team) : []).map(d => d.messageId).filter(Boolean)); return state.messages.filter(m => myAsk(m) === true && needReply(m) && !dec.has(m.messageId) && !/^s*[需確認]/.test(m.text)).map(m => ({ project: m.project || null })); };
   function todoByView() {
-    const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || []), ...[...(work.cards?.values() || [])].filter(verifyingMe)]; // C-242：等你驗收也算
+    const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || []), ...[...(work.cards?.values() || [])].filter(verifyingMe), // C-242：等你驗收也算
+      ...askTodo()]; // C-259：要你回覆（[需確認] 已算在等你決定，不重複）
     const n = { hub: items.length, cross: items.filter(x => !x.project).length };
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
@@ -1562,6 +1574,7 @@
     autoGrow();
     updateMention();
     drawMentionWarn();
+    drawAskRow();
   }
   input.addEventListener('input', onInput);
   input.addEventListener('click', updateMention);
@@ -1584,21 +1597,46 @@
   });
   sendBtn.addEventListener('click', send);
 
-  // 正文中的 @名字 → 收件人；@所有人 → audience: all
-  function resolveRecipients(text) {
-    if (text.includes('@' + ALL.name)) return { audience: 'all' };
-    const ids = [];
+  // 正文中的 @名字 → 收件人（依出現順序）；@所有人 → audience: all
+  function mentionedIds(text) {
+    const hits = [];
     let scan = text;
     const people = [...state.participants.values()].sort((a, b) => b.name.length - a.name.length);
     for (const p of people) {
-      const tag = '@' + p.name;
-      if (scan.includes(tag)) {
-        if (p.participantId !== meId()) ids.push(p.participantId);
-        scan = scan.split(tag).join(' ');
+      const tag = '@' + p.name, at = scan.indexOf(tag);
+      if (at >= 0) {
+        if (p.participantId !== meId()) hits.push([at, p.participantId]);
+        scan = scan.split(tag).join(' '.repeat(tag.length)); // 保留長度，位置才準
       }
     }
-    return ids.length ? { recipientIds: ids } : {};
+    return hits.sort((a, b) => a[0] - b[0]).map(h => h[1]);
   }
+  const askPick = new Map(); // C-259：使用者點過的「要回覆／知會」
+  const askOfId = (id, i) => (askPick.has(id) ? askPick.get(id) : i === 0);
+  function resolveRecipients(text) {
+    if (text.includes('@' + ALL.name)) return { audience: 'all' };
+    const ids = mentionedIds(text);
+    if (!ids.length) return {};
+    return ids.length > 1 ? { recipientIds: ids, replyFrom: ids.filter(askOfId) } : { recipientIds: ids };
+  }
+  function drawAskRow() {
+    const row = $('#ask-row');
+    if (!row) return;
+    const text = input.value;
+    const ids = text.includes('@' + ALL.name) ? [] : mentionedIds(text);
+    for (const id of [...askPick.keys()]) if (!ids.includes(id)) askPick.delete(id);
+    row.hidden = ids.length < 2;
+    if (row.hidden) { row.innerHTML = ''; return; }
+    row.innerHTML = `<span class="muted small">誰要回覆：</span>${ids.map((id, i) => { const on = askOfId(id, i), name = state.participants.get(id)?.name || id;
+      return `<button type="button" class="ask-chip ${on ? 'ask' : 'fyi'}" data-ask-toggle="${esc(id)}" aria-pressed="${on}" aria-label="${esc(`${name}：${on ? '要回覆' : '知會'}，點一下切換`)}">${esc(name)} <b>${on ? '要回覆' : '知會'}</b></button>`; }).join('')}`;
+  }
+  $('#ask-row')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-ask-toggle]');
+    if (!b) return;
+    const ids = mentionedIds(input.value), id = b.dataset.askToggle;
+    askPick.set(id, !askOfId(id, ids.indexOf(id)));
+    drawAskRow();
+  });
 
   // 沒動過專案選單：回覆時不帶（繼承），否則帶目前檢視的專案；動過就照選的
   const sendProject = () => ({ project: sendTarget() });
@@ -1630,6 +1668,7 @@
       });
       pendingRequestId = null;
       onNewMessage(m);
+      askPick.clear();
       input.value = '';
       setReply(null);
       onInput();
@@ -2576,7 +2615,8 @@
     } catch (err) { work.notes = backup; renderWork(); toast('沒有標成已讀：' + err.message); }
   }
   // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
-  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
+  const askNotes = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => n.ask === true && msgInView(n.project ?? null) && !work.answered.has(n.messageId) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview })); }; // C-259：[需確認] 已在下面，不重複
+  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => n.ask !== true && msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
   // C-181：講已經決定完的決策卡的通知，不再列在「給你知道的」
   const decidedCardNote = n => ((state.byId.get(n.messageId)?.text || n.preview || '').match(/C-\d+/g) || []).some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
   function notesHtml() {
@@ -2590,7 +2630,7 @@
         const who = state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
         return `<div class="sugg-row fyi-row" id="fyi-${esc(n.notificationId)}"><span class="ndot" aria-hidden="true"></span>${avatar(who)}
           <button type="button" class="fyi-main" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}" aria-label="${esc(`未讀，${n.sender.name}，${fmtTime(n.createdAt)}：${n.preview}。查看`)}">
-            <span class="fyi-top"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></span>
+            <span class="fyi-top"><b>${esc(n.sender.name)}</b>${n.ask === false ? '<span class="apill fyi me">知會你</span>' : n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></span>
             <span class="fyi-text">${esc(n.preview.replace(/\s+/g, ' '))}</span></button>
           <button type="button" class="fyi-read" data-note-ack="${esc(n.notificationId)}" aria-label="${esc(n.sender.name)} 這則標為已讀">已讀</button></div>`;
       }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}
@@ -2676,7 +2716,15 @@
     const confirms = legacyConfirms();
     const sg = (work.sugg || []).filter(x => inView(x.project));
     const verifyMe = all.filter(verifyingMe); // C-242
-    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
+    const asks = askNotes();
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
+    const askSection = asks.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>要你回覆</h3><span class="wcount ora">${asks.length}</span><span class="muted small">別人指定要你回覆的訊息；回覆了或按「不用回」就移走</span></div>
+        ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
+          <div class="sugg-main"><b><span class="apill ask me">要你回覆</span> ${esc(n.sender.name)}</b><span class="muted small">${esc(oneLine(n.preview, 80))} · ${agoText(n.createdAt)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">到訊息回覆</button>
+            <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">不用回</button></div>
+        </div>`).join('')}</section>` : '';
     const verSection = verifyMe.length ? `
       <section class="wsugg wverify"><div class="wsugg-head"><span class="wdot ok"></span><h3>等你驗收</h3><span class="wcount ok">${verifyMe.length}</span><span class="muted small">AI 做完交給你的卡：看過沒問題按「驗收通過」，要改按「退回」</span></div>
         ${verifyMe.map(c => `<div class="sugg-row ver-row" data-ver-row="${esc(c.cardId)}">
@@ -2692,7 +2740,7 @@
           ${cm ? `<div class="conf-text">${esc(cm.text.replace(/^\s*\[需確認\]\s*/, ''))}</div>` : ''}
           ${quick || inlineHtml('m:' + d.messageId, 'confirm', d)}
         </div>`; }).join('')}</section>` : '';
-    return decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
+    return askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
