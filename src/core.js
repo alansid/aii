@@ -497,13 +497,17 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     // C-146 A：看不到的訊息（例如被移出專案後）的通知不列出
     const scope = await messageScope(me, 'm');
     const join = scope ? ` AND EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql})` : '';
+    // order=desc（網頁收件匣用）：先給最新的；預設由舊到新（AI 依序處理）
+    const desc = url.searchParams.get('order') === 'desc';
     const sql = status === 'pending'
-      ? `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join} ORDER BY n.created_at, n.id LIMIT ?`
+      ? `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join} ORDER BY ${desc ? 'n.created_at DESC, n.id DESC' : 'n.created_at, n.id'} LIMIT ?`
       : `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'acked'${join} ORDER BY n.acked_at DESC LIMIT ?`;
     let rows = await db.all(sql, me.id, ...(scope ? scope.args : []), limit + 1);
     const hasMore = rows.length > limit;
     if (hasMore) rows = rows.slice(0, limit);
-    return { items: await serializeNotifications(ctx, rows), hasMore };
+    // 超過 limit 時附上總數，讓畫面寫「還有幾則」
+    const total = hasMore && status === 'pending' ? (await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join}`, me.id, ...(scope ? scope.args : []))).c : undefined;
+    return { items: await serializeNotifications(ctx, rows), hasMore, ...(total !== undefined ? { total } : {}) };
   }
 
   async function ackNotifications(me, ids) {

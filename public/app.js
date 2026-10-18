@@ -2489,8 +2489,9 @@
   work.notes = [];
   async function loadNotes() {
     work.notesAt = Date.now();
-    const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=100'), api('/api/me/notices').catch(() => ({ items: [] }))]);
+    const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=50&order=desc'), api('/api/me/notices').catch(() => ({ items: [] }))]);
     work.notes = a.items; work.sec = b.items;
+    work.notesMore = a.hasMore ? Math.max(0, (a.total || 0) - a.items.length) : 0; // 只顯示最新 50 則，其餘寫數字
   }
   // C-223：安全通知（新裝置用帳密登入、主機救援）只存在本人帳號，不是群組訊息
   work.sec = [];
@@ -2546,7 +2547,8 @@
             <span class="fyi-top"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></span>
             <span class="fyi-text">${esc(n.preview.replace(/\s+/g, ' '))}</span></button>
           <button type="button" class="fyi-read" data-note-ack="${esc(n.notificationId)}" aria-label="${esc(n.sender.name)} 這則標為已讀">已讀</button></div>`;
-      }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}</section>`;
+      }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}
+      ${work.notesMore ? `<p class="muted small notes-more">只顯示最新 50 則，還有 ${work.notesMore} 則較舊的通知。</p>` : ''}</section>`;
   }
   // 第一層「我的專案」（C-169，取代今日總覽）：每個專案一張卡＋跨專案頻道卡；右欄「要你處理」依專案分組，只列不決定
   function projStats(p) {
@@ -4223,9 +4225,9 @@
     const ackAll = body.modal.querySelector('#ack-all');
     let ids = [];
     async function draw() {
-      const d = await api('/api/notifications?status=pending&limit=100');
+      const d = await api('/api/notifications?status=pending&limit=50&order=desc');
       ids = d.items.map(n => n.notificationId);
-      body.modal.querySelector('#inbox-sub').textContent = d.items.length ? `${d.items.length}${d.hasMore ? '+' : ''} 則待處理` : '沒有待處理的通知';
+      body.modal.querySelector('#inbox-sub').textContent = d.items.length ? (d.hasMore ? `共 ${d.total} 則待處理，只顯示最新 50 則` : `${d.items.length} 則待處理`) : '沒有待處理的通知';
       ackAll.hidden = !d.items.length;
       const reasonTag = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
       body.querySelector('#inbox-list').innerHTML = d.items.length ? d.items.map(n => {

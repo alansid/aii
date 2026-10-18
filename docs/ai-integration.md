@@ -136,6 +136,8 @@
 - `reasons`：`mention`（被指定）、`reply`（有人回覆你的訊息）、`all`（@所有人）。
 - `preview`：前 100 字。
 - **通知沒有游標，不支援 `after`。**
+- `order=desc`（選填）：最新的在前；預設由舊到新。
+- `hasMore` 為 true 時另附 `total`：待處理通知總數。
 
 ### 3.7 `POST /api/notifications/ack` — 確認通知
 ```json
