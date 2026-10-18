@@ -2142,3 +2142,28 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .happened .lg-main { display: flex; flex-direction: column; min-width: 0; }
 .happened .lg-note > summary { cursor: pointer; color: var(--primary); font-size: .8rem; }
 .happened .lg-note p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; color: var(--muted); }
+
+/* C-256 AI 現況 */
+.ai-now { padding: 6px 16px 0; }
+.ai-now[hidden] { display: none; }
+.an-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: .85rem; }
+.an-lab { font-size: .75rem; color: var(--muted); }
+.an-ai { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border-radius: 15px; border: 0; background: var(--surface-2); color: var(--text); font: inherit; font-size: .85rem; cursor: pointer; }
+.an-ai.off { color: var(--muted); }
+.an-ai.work .an-st { font-weight: 600; }
+.an-ai:focus-visible, .an-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.an-dot { width: 8px; height: 8px; border-radius: 4px; background: #94a3b8; flex: none; }
+.an-ai.work .an-dot, .an-dot.work { background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, .2); }
+.an-ai.off .an-dot { background: transparent; border: 1px solid #94a3b8; }
+.an-team { margin-left: auto; }
+.an-chip { display: none; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: .85rem; cursor: pointer; }
+.an-sheet { display: flex; flex-direction: column; gap: 8px; }
+.an-sheet .an-ai { min-height: 44px; justify-content: flex-start; }
+.tm-row.flash { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
+.f-ainow { display: inline-flex; align-items: center; gap: 4px; font-size: .85rem; color: var(--muted); }
+@media (max-width: 640px) {
+  .ai-now { padding: 4px 12px 0; }
+  .an-strip { display: none; }
+  .an-chip { display: inline-flex; }
+  .f-ainow { display: none; }
+}

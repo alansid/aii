@@ -161,12 +161,14 @@
           <option>完成</option><option>受阻</option><option>交接</option><option>回覆</option>
         </select>
         <div class="seg-scope seg-view" role="group" aria-label="顯示"><button type="button" data-msg-view="slim" aria-pressed="false">精簡</button><button type="button" data-msg-view="full" aria-pressed="true">完整</button></div>
+        <label class="chk f-ainow"><input type="checkbox" id="f-ainow" checked> AI 現況</label>
         <button type="button" id="f-clear" class="btn mini" hidden>清除篩選</button>
         <span id="f-count" class="muted small"></span>
         <div class="m-scope f-mobile" role="group" aria-label="範圍"><button type="button" data-scope="all" aria-pressed="true">全部</button><button type="button" data-scope="related" aria-pressed="false">與我相關</button></div>
         <button type="button" id="f-open" class="btn f-mobile" aria-haspopup="dialog">篩選 ▾</button>
         <span id="f-summary" class="muted small f-mobile"></span>
       </div>
+      <div id="ai-now" class="ai-now" hidden></div>
       <main id="messages" class="messages" aria-live="polite"></main>
       <button type="button" id="new-pill" class="new-pill" hidden></button>
       <button type="button" id="latest-btn" class="latest-btn" aria-label="回到最新訊息" hidden><span class="np-long">回到最新 ↓</span><span class="np-short" aria-hidden="true">↓</span></button>

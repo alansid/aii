@@ -1104,6 +1104,8 @@
     sel.value = f.member;
     $('#f-clear').hidden = !filtering();
     const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
+    const an = $('#f-ainow'); if (an) an.checked = aiNowOn();
+    drawAiNow();
   }
   // C-215：範圍「全部／與我相關」已在手機頂部兩顆，篩選按鈕只算成員、標籤（「給我的」不在兩顆裡，仍算一個）
   const filterCount = () => (state.filter.scope === 'mine' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
@@ -1133,6 +1135,7 @@
         <div class="field"><span class="field-label" id="fs-view">顯示</span>
           <div class="seg-scope full" role="group" aria-labelledby="fs-view" id="fs-view-g"></div>
           <span class="muted small">精簡：AI 訊息只露第一句，點了看全文。記在這台裝置。</span></div>
+        <label class="chk"><input type="checkbox" id="fs-ainow" ${aiNowOn() ? 'checked' : ''}> 顯示「AI 現況」（記在這台裝置）</label>
       </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除</button><button class="btn primary grow" type="button" id="fs-apply">套用</button>' });
     const draw = () => {
       body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
@@ -2257,6 +2260,7 @@
     work.since = d.nextSince;
     work.loaded = true;
     work.lastSync = Date.now();
+    drawAiNow(); // C-256：卡片到了，「在做」才準
     await loadSuggestions();
   }
   async function loadSuggestions() {
@@ -2274,7 +2278,7 @@
     if (!d.items.length && !suggChanged) return;
     const archMoved = d.items.some(c => c.status === '已封存' || work.cards.get(c.cardId)?.status === '已封存');
     for (const c of d.items) work.cards.set(c.cardId, c);
-    if (d.items.length) work.since = d.nextSince;
+    if (d.items.length) { work.since = d.nextSince; drawAiNow(); }
     if (archMoved) await refreshArchivedCount(); // 有卡被封存或重新打開，已封存數字跟著更新
     renderWork();
     if (state.page === 'messages' && d.items.length) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
@@ -3012,7 +3016,7 @@
   // 最近一次交接是誰交來的（紀錄新的在前）
   const prevHandName = d => { for (const l of d.log || []) { const m = /^交接 (.+?) → (.+?)：/.exec(l.text); if (m) return m[1]; } return ''; };
   // 短名：名字很長的 AI 用代號（RVVW），其他照原名
-  const shortOf = name => { const p = [...state.participants.values()].find(x => x.name === name); return p && p.memberType === 'ai' && name.length >= 10 && p.shortCode ? p.shortCode : name; };
+  const shortOf = name => { const p = [...state.participants.values()].find(x => x.name === name); return p && p.memberType === 'ai' && name.length >= 10 && /[一-鿿]/.test(name) && p.shortCode ? p.shortCode : name; };
   const actBtn = (act, label, desc, pri = false) => `<button type="button" class="act-btn${pri ? ' pri' : ''}" data-act="${act}"><b>${label}</b><span>${esc(desc)}</span></button>`;
   // 「現在要你做的」：依情況只露 1～2 顆大按鈕；不是你的卡不顯示
   function nowActsHtml(d) {
@@ -3806,6 +3810,71 @@
     } catch {}
   }
 
+  // ---------- C-256 哪個 AI 正在作業 ----------
+  // 在做：先看該 AI 負責、狀態「進行中」的卡；沒有才看最後的 [接單]／[進度]，超過 2 小時沒動靜改回待命
+  // 待命：watcher 在線（或最近有呼叫）；離線：都沒有。資料全來自已載入的團隊狀態與卡片，不多查伺服器
+  const AINOW_KEY = 'aigile-switch-ainow';
+  const aiNowOn = () => store.get(AINOW_KEY) !== '0';
+  const WORK_FRESH_MS = 2 * 3600_000;
+  function aiNowOf(mb) {
+    const pv = projectView(), inProj = PROJECTS.includes(pv);
+    const card = [...(work.cards?.values() || [])].filter(c => c.owner?.participantId === mb.participantId && c.status === '進行中' && (!inProj || c.project === pv))
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+    if (card) return { kind: 'work', cardId: card.cardId, title: card.title };
+    const s = mb.status;
+    if (s && s.state === 'working' && s.source !== 'card' && Date.now() - Date.parse(s.at) < WORK_FRESH_MS) return { kind: 'work', cardId: cardIdOf(s.title), title: s.title };
+    if (mb.standby || mb.isOnline) return { kind: 'idle' };
+    return { kind: 'off' };
+  }
+  function aiNowList() {
+    if (!state.team) return [];
+    const pv = projectView(), rank = { work: 0, idle: 1, off: 2 };
+    return state.team.members
+      .filter(mb => mb.memberType === 'ai' && inViewPerson(mb.participantId) && (!PROJECTS.includes(pv) || (mb.projects || state.participants.get(mb.participantId)?.projects || []).includes(pv)))
+      .map(mb => ({ mb, now: aiNowOf(mb) }))
+      .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
+  }
+  const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + x.now.cardId : ''}` : x.now.kind === 'idle' ? '待命' : '離線');
+  const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span>${esc(shortOf(x.mb.name))} <span class="an-st">${esc(aiNowText(x))}</span></button>`;
+  function drawAiNow() {
+    const el = $('#ai-now');
+    if (!el) return;
+    const list = aiNowList();
+    drawPresence(list);
+    el.hidden = !aiNowOn() || !list.length || projectView() === 'hub';
+    if (el.hidden) { el.innerHTML = ''; return; }
+    const n = list.filter(x => x.now.kind === 'work').length;
+    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(aiNowBtn).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
+      <button type="button" class="an-chip" data-ainow-sheet><span class="an-dot ${n ? 'work' : 'idle'}" aria-hidden="true"></span>${n ? `${n} 個 AI 在做事` : 'AI 都沒在做事'} <span aria-hidden="true">›</span></button>`;
+  }
+  // 側欄人數拆開：人類 N 在線 · AI N 在做事、N 待命
+  function drawPresence(list) {
+    if (!state.team) return;
+    const humans = [...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled' && p.isOnline).length;
+    const w = list.filter(x => x.now.kind === 'work').length, i = list.filter(x => x.now.kind === 'idle').length;
+    document.querySelectorAll('.sb-presence-text').forEach(el => { el.innerHTML = `人類 ${humans} 在線<br>AI ${w} 在做事、${i} 待命`; });
+  }
+  function openAiNowSheet() {
+    const list = aiNowList();
+    openModal('AI 現況', `<div class="an-sheet">${list.map(aiNowBtn).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
+  }
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('[data-ainow-sheet]')) return openAiNowSheet();
+    const a = e.target.closest?.('[data-ainow]'), t = e.target.closest?.('[data-ainow-team]');
+    if (!a && !t) return;
+    if (a?.closest('.modal')) closeModal();
+    work.teamTab = 'status';
+    showPage('team');
+    if (!a) return;
+    const id = a.dataset.ainow, until = Date.now() + 3000;
+    const seek = () => { const row = document.querySelector(`.tm-row[data-tm-id="${CSS.escape(id)}"]`); if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1600); } else if (Date.now() < until) setTimeout(seek, 150); };
+    seek();
+  });
+  document.addEventListener('change', e => {
+    if (e.target.id !== 'f-ainow' && e.target.id !== 'fs-ainow') return;
+    store.set(AINOW_KEY, e.target.checked ? '1' : '0');
+    drawAiNow();
+  });
   function renderTeamBar() {
     const t = state.team;
     const bar = $('#team-bar');
@@ -3827,6 +3896,7 @@
     const dec = '';
     bar.innerHTML = dec + chips;
     bar.hidden = false;
+    drawAiNow();
     // C-165：側欄「團隊」「設定」的紅點拿掉（受阻看今日總覽與工作頁，Token 問題看頂端警示列）
   }
   for (const el of [$('#team-bar')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
@@ -3869,7 +3939,7 @@
     const rows = t.members.filter(mb => inViewPerson(mb.participantId)).map(mb => {
       const h = health(mb);
       const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
-      return `<div class="tm-row">
+      return `<div class="tm-row" data-tm-id="${esc(mb.participantId)}">
         <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small">${esc(roleIn(mb, pv))}${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
         <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
         <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
