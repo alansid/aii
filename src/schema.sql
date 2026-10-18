@@ -39,6 +39,20 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL,
   UNIQUE (author_id, request_id)
 );
+-- C-270 私訊自己的 AI：只有人類與他名下的 AI 兩方；不進群組訊息
+CREATE TABLE IF NOT EXISTS dms (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT NOT NULL UNIQUE,
+  human_id TEXT NOT NULL,
+  ai_id TEXT NOT NULL,
+  from_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  project TEXT,
+  request_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (from_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dms_pair ON dms (human_id, ai_id, seq);
 CREATE TABLE IF NOT EXISTS message_recipients (
   message_id TEXT NOT NULL,
   participant_id TEXT NOT NULL,

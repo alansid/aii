@@ -248,10 +248,14 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   async function serializeNotifications(ctx, rows) {
     if (!rows.length) return [];
+    const dmIds = rows.filter(n => n.reasons === '["dm"]').map(n => n.message_id);
     const msgs = new Map((await db.all('SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))',
-      JSON.stringify(rows.map(n => n.message_id)))).map(m => [m.id, m]));
+      JSON.stringify(rows.filter(n => n.reasons !== '["dm"]').map(n => n.message_id)))).map(m => [m.id, m]));
+    // C-270：私訊通知（只有收件的本人看得到自己的通知）
+    if (dmIds.length) for (const d of await db.all('SELECT * FROM dms WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(dmIds)))
+      msgs.set(d.id, { id: d.id, author_id: d.from_id, reply_to: null, project: d.project, text: d.text, dm: true });
     const people = await peopleMap(ctx, [...msgs.values()].map(m => m.author_id));
-    return rows.map(n => {
+    return rows.filter(n => msgs.has(n.message_id)).map(n => {
       const m = msgs.get(n.message_id);
       const sender = people.get(m.author_id);
       return {
@@ -261,6 +265,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
         replyToMessageId: m.reply_to,
         project: m.project || null,
         ask: (() => { try { return m.reply_from ? JSON.parse(m.reply_from).includes(n.recipient_id) : null; } catch { return null; } })(), // C-259：true 要你回覆、false 知會、null 沒標
+        ...(m.dm ? { dm: true } : {}), // C-270：私訊（用 GET /api/dm 讀，GET /api/messages/:id 讀不到）
         sender: { participantId: sender.id, name: sender.name, role: sender.role, shortCode: sender.code },
         preview: m.text.length > 100 ? m.text.slice(0, 100) + '…' : m.text,
         createdAt: n.created_at,
@@ -528,7 +533,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
     const limit = parseLimit(url);
     // C-146 A：看不到的訊息（例如被移出專案後）的通知不列出
     const scope = await messageScope(me, 'm');
-    const join = scope ? ` AND EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql})` : '';
+    const join = scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''; // C-270：私訊通知不看專案範圍
     // order=desc（網頁收件匣用）：先給最新的；預設由舊到新（AI 依序處理）
     const desc = url.searchParams.get('order') === 'desc';
     const sql = status === 'pending'
@@ -817,7 +822,7 @@ ${watcherEnv}
 - 每一輪：
   1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
-  3. 讀通知的完整原文（GET /api/messages/:messageId），必要時讀 replyToMessageId 的上下文，再判斷要接單、回覆或靜默。
+  3. 讀通知的完整原文（GET /api/messages/:messageId），必要時讀 replyToMessageId 的上下文，再判斷要接單、回覆或靜默。通知帶 dm: true 的是私訊，照第十四節用 GET /api/dm 讀。
   4. 處理完才 ACK，最後才把 nextCursor 寫回 .aigile/${agent}/state.json。
   5. 每輪先確認 GET /api/me 的 participantId 等於 ${ai.id}；不一致代表拿錯 Token（例如與其他 AI 共用資料夾），立刻停止並告訴 ${owner.name}。
   6. 沒有新訊息也沒有通知 → 只記一句「無新事項」，不發文。
@@ -902,6 +907,13 @@ ${roster}
 
 ## 十三、待命（只能在回合裡執行指令的 AI，例如 Codex）
 - 處理完手上的事，前景執行 node aigile-wait.mjs --agent ${agent} --max-min=<工具時間上限內的分鐘數>（零依賴，可由平台 /aigile-wait.mjs 下載，核對 SHA-256 = ${WAIT_SHA256}，先讀過再用）。沒有 watcher 時它啟動查一次，之後每 10 分鐘問一次待處理數（比舊的 wait-for-bell 每 90 秒省很多）。依輸出最後一行：PENDING <N> → 收訊息、處理、回覆，做完再執行一次；TIMEOUT → 再執行一次；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}，不要自行重試或繞過。需要設定 AIGILE_BASE，Token 預設讀 .aigile/${agent}/.token（絕不印出）。細節見規格 3.12。
+
+## 十四、私訊（${owner.name} 在網頁私訊你，C-270）
+- 通知的 reasons 是 ["dm"]、帶 dm: true：用 GET /api/dm 讀（只有你和 ${owner.name} 兩方；GET /api/messages/:id 讀不到），回覆用 POST /api/dm 帶 { text, requestId }（不用指定對象，只會回給 ${owner.name}）；處理完照常 ACK 通知。
+- 私訊內容不要轉貼到群組。
+- 私訊裡定案的事（要做、改規格、選方案）：回覆時寫出卡號並提醒 ${owner.name} 按「↗ 寫回 C-xxx」，或問他要不要你寫回卡片，團隊才看得到。
+- 私訊不能拿來授權 commit、push、部署、刪除資料；這些照第九節，仍在本機對話問。
+- 專案沒開放私訊時回 403 DM_DISABLED：改在本機對話或群組回覆。
 
 先看第零節：重新接上就照第零節做，不重新簽到；第一次接入才往下。
 ${trial
@@ -1070,6 +1082,14 @@ ${trial
     const r = await db.get('SELECT value FROM app_settings WHERE key = ?', key).catch(() => null);
     try { return r ? JSON.parse(r.value) : null; } catch { return null; }
   }
+  // C-270：各專案是否允許成員私訊自己的 AI（預設關）
+  async function dmMap() {
+    const out = {};
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'dm:%'").catch(() => [])) {
+      try { const v = JSON.parse(r.value); out[r.key.slice(3)] = { on: !!v.on, by: v.by || null, at: v.at || null }; } catch {}
+    }
+    return out;
+  }
   async function reposMap() {
     const out = {};
     for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'repo:%'").catch(() => [])) {
@@ -1124,8 +1144,9 @@ ${trial
     await loadProjects(true);
     const people = await peopleMap(ctx);
     const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status NOT IN ('已完成','已封存') GROUP BY project")).map(r => [r.project, r.n]));
-    const repos = await reposMap();
+    const repos = await reposMap(), dms = await dmMap();
     return projectRows.map(r => ({ id: r.id, name: r.name, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229
+      dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null }, // C-270
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id)).length,
       openCards: counts.get(r.id) || 0 }));
   }
@@ -1438,6 +1459,85 @@ ${trial
     ]);
     return projectsResponse(ctx);
   });
+  // C-270：私訊開關；管理員與該專案 leader 能改。關掉後舊私訊雙方仍看得到、不能再送
+  route('PUT', '/api/projects/:id/dm', async ({ ctx, me, req, params }) => {
+    requireHuman(me);
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    const admin = adminOf(await peopleMap(ctx));
+    await loadLeaders(true);
+    if (!(admin && admin.id === me.id) && !leaderProjectsOf(me.id).includes(row.id)) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員或「${row.name}」的 leader 能開關私訊。`);
+    const body = await readJson(req);
+    if (typeof body.on !== 'boolean') throw invalid('on 需為 true 或 false');
+    const at = nowIso();
+    await db.batch([
+      ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['dm:' + row.id, JSON.stringify({ on: body.on, by: me.id, at })]],
+      projEvent(row.id, me.id, `${me.name} ${body.on ? '開放' : '關閉'}成員私訊自己的 AI`, at),
+    ]);
+    return projectsResponse(ctx);
+  });
+
+  // ---------- C-270 私訊自己的 AI ----------
+  // 只有人類與他名下的 AI 兩方；不進群組訊息、團隊狀態、卡片紀錄；通知 reasons=["dm"]
+  const DM_MAX = 2000;
+  // 這對人類／AI 共同、而且開了私訊的專案
+  async function dmProjects(human, ai) {
+    const dms = await dmMap();
+    return projectsOf(ai).filter(pj => projectsOf(human).includes(pj) && dms[pj]?.on);
+  }
+  // 解析對話的兩方：人類要帶 aiId（只能是自己名下的 AI）；AI 一律跟所屬人類
+  async function dmPair(ctx, me, aiId) {
+    const people = await peopleMap(ctx, aiId ? [String(aiId)] : [me.owner_id]);
+    if (me.kind === 'human') {
+      const ai = aiId && people.get(String(aiId));
+      if (!ai || ai.kind !== 'ai' || ai.owner_id !== me.id || ai.status !== 'active') throw new ApiError(403, 'DM_NOT_YOUR_AI', '只能私訊自己名下的 AI。');
+      return { human: me, ai };
+    }
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有人類與 AI 能私訊。');
+    const human = people.get(me.owner_id);
+    if (!human || human.status !== 'active') throw new ApiError(404, 'NOT_FOUND', '找不到所屬人類。');
+    return { human, ai: me };
+  }
+  const dmView = (d, people) => ({ dmId: d.id, seq: d.seq, from: { participantId: d.from_id, name: people.get(d.from_id)?.name || '?' }, text: d.text, project: d.project || null, createdAt: d.created_at });
+  route('GET', '/api/dm', async ({ ctx, me, url }) => {
+    const { human, ai } = await dmPair(ctx, me, url.searchParams.get('aiId'));
+    const after = Number(url.searchParams.get('after')) || 0;
+    const limit = parseLimit(url, 50, 100);
+    const rows = await db.all('SELECT * FROM dms WHERE human_id = ? AND ai_id = ? AND seq > ? ORDER BY seq LIMIT ?', human.id, ai.id, after, limit + 1);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit);
+    const people = await peopleMap(ctx);
+    // 人類打開對話＝讀了：他在這段對話的私訊通知標為已讀（AI 照規則自己 ACK）
+    if (me.kind === 'human') await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND status = 'pending' AND reasons = '[\"dm\"]' AND message_id IN (SELECT id FROM dms WHERE human_id = ? AND ai_id = ?)", nowIso(), me.id, human.id, ai.id);
+    const open = (await dmProjects(human, ai)).length > 0;
+    return { items: items.map(d => dmView(d, people)), nextAfter: items.length ? items[items.length - 1].seq : after, hasMore, canSend: open, ...(open ? {} : { reason: '這個專案沒有開放私訊，舊的私訊還看得到，但不能再送。' }) };
+  });
+  route('POST', '/api/dm', async ({ ctx, me, req }) => {
+    const body = await readJson(req);
+    const { human, ai } = await dmPair(ctx, me, body.aiId);
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (!text || text.length > DM_MAX) throw invalid(`text 需為 1～${DM_MAX} 字`);
+    const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
+    if (!requestId || requestId.length > 128) throw invalid('requestId 為必填，長度 1～128');
+    const people = await peopleMap(ctx);
+    const dup = await db.get('SELECT * FROM dms WHERE from_id = ? AND request_id = ?', me.id, requestId);
+    if (dup) {
+      if (dup.text !== text || dup.human_id !== human.id || dup.ai_id !== ai.id) throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', '相同 requestId 已用於不同內容');
+      return dmView(dup, people);
+    }
+    const open = await dmProjects(human, ai);
+    if (!open.length) throw new ApiError(403, 'DM_DISABLED', '這個專案沒有開放私訊（專案設定由管理員或 leader 開啟）；舊的私訊還看得到，但不能再送。');
+    const project = body.project && open.includes(body.project) ? body.project : open[0];
+    const id = randId('dm'), at = nowIso(), to = me.id === human.id ? ai.id : human.id;
+    await db.batch([
+      ['INSERT INTO dms (id, human_id, ai_id, from_id, text, project, request_id, created_at) VALUES (?,?,?,?,?,?,?,?)', [id, human.id, ai.id, me.id, text, project, requestId, at]],
+      ['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)', [randId('notif'), to, id, '["dm"]', at]],
+    ]);
+    if (to === ai.id) ringDoorbell([ai.id], at); // 叫醒 AI（門鈴只含 ID 與時間）
+    return { __status: 201, ...dmView(await db.get('SELECT * FROM dms WHERE id = ?', id), people) };
+  });
+
   route('POST', '/api/projects/:id/archive', async ({ ctx, me, params }) => {
     await requireAdmin(ctx, me);
     await loadProjects(true);
@@ -1616,7 +1716,7 @@ ${trial
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
   route('GET', '/api/notifications/count', async ({ me }) => {
     const scope = await messageScope(me, 'm');
-    const r = await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql})` : ''}`, me.id, ...(scope ? scope.args : []));
+    const r = await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''}`, me.id, ...(scope ? scope.args : [])); // C-270：私訊通知也算
     return { pending: r.c };
   });
   route('POST', '/api/notifications/ack', async ({ me, req }) => ackNotifications(me, (await readJson(req)).notificationIds));

@@ -999,7 +999,7 @@
   const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
   const viewLabel = v => (v === 'hub' ? '我的專案' : v === 'cross' ? '跨專案頻道' : projName(v));
   // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
-  const askTodo = () => askNoteRaw().map(n => ({ project: n.project ?? null })); // C-268：跟收件匣列表同一個來源
+  const askTodo = () => [...askNoteRaw(), ...(work.notes || []).filter(n => n.dm)].map(n => ({ project: n.project ?? null })); // C-268：跟收件匣列表同一個來源；C-270 私訊也算
   function todoByView() {
     const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || []), ...[...(work.cards?.values() || [])].filter(verifyingMe), // C-242：等你驗收也算
       ...askTodo()]; // C-259：要你回覆（[需確認] 已算在等你決定，不重複）
@@ -2692,10 +2692,11 @@
   // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
   // C-259／C-268：「要你回覆」只看通知（跟徽章同一個來源）；[需確認]、交接、等你驗收／決定的卡已在別區，不重複
   const askNoteRaw = () => { const dup = new Set(legacyConfirms().map(d => d.messageId));
-    return (work.notes || []).filter(n => n.ask === true && !work.answered.has(n.messageId) && !dup.has(n.messageId) && !/^\s*\[(需確認|交接)\]/.test(n.preview || '') && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !askCardElsewhere(n)); };
+    return (work.notes || []).filter(n => !n.dm && n.ask === true && !work.answered.has(n.messageId) && !dup.has(n.messageId) && !/^\s*\[(需確認|交接)\]/.test(n.preview || '') && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !askCardElsewhere(n)); };
   const askCardElsewhere = n => [...(state.msgCards.get(n.messageId) || []), cardIdOf(n.preview || '')].filter(Boolean).some(id => { const c = work.cards.get(id); return c && (verifyingMe(c) || decidingMe(c)); });
   const askNotes = () => askNoteRaw().filter(n => msgInView(n.project ?? null));
-  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => n.ask !== true && msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
+  const dmNotes = () => (work.notes || []).filter(n => n.dm && msgInView(n.project ?? null)); // C-270
+  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !n.dm && n.ask !== true && msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
   // C-181：講已經決定完的決策卡的通知，不再列在「給你知道的」
   const decidedCardNote = n => ((state.byId.get(n.messageId)?.text || n.preview || '').match(/C-\d+/g) || []).some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
   function notesHtml() {
@@ -2784,6 +2785,7 @@
   // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議（C-107）
   const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId && !cardOfConfirm(d) && inView(d.project) && !work.answered.has(d.messageId));
   function updateTodoBadge() {
+    drawDmSide();
     const counts = todoByView(), n = counts[projectView()] || 0, total = counts.hub; // 收件匣徽章＝所在專案；分頁標題＝全部
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
     if (document.querySelector('.ps-btn[aria-expanded="false"]') || !document.querySelector('.ps-btn')) drawProjSwitch(); // 下拉的件數跟著更新（開著時不重畫）
@@ -2795,8 +2797,8 @@
     const confirms = legacyConfirms();
     const sg = (work.sugg || []).filter(x => inView(x.project));
     const verifyMe = all.filter(verifyingMe); // C-242
-    const asks = askNotes();
-    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
+    const asks = askNotes(), dms = dmNotes();
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
     const askSection = asks.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>要你回覆</h3><span class="wcount ora">${asks.length}</span><span class="muted small">別人指定要你回覆的訊息；回覆了或按「不用回」就移走</span></div>
         ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
@@ -2819,7 +2821,11 @@
           ${cm ? `<div class="conf-text">${esc(cm.text.replace(/^\s*\[需確認\]\s*/, ''))}</div>` : ''}
           ${quick || inlineHtml('m:' + d.messageId, 'confirm', d)}
         </div>`; }).join('')}</section>` : '';
-    return askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
+    const dmSection = dms.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dms.length}</span><span class="muted small">只有你看得到</span></div>
+        ${dms.map(n => `<div class="sugg-row"><div class="sugg-main"><b>${esc(n.sender.name)} 回你了</b><span class="muted small">${esc(oneLine(n.preview, 80))} · ${agoText(n.createdAt)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}">打開私訊</button></div></div>`).join('')}</section>` : '';
+    return dmSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
@@ -3912,6 +3918,7 @@
   const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + x.now.cardId : ''}` : x.now.kind === 'idle' ? '待命' : '離線');
   const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${esc(aiNowText(x))}</span></button>`;
   function drawAiNow() {
+    drawDmSide();
     const el = $('#ai-now');
     if (!el) return;
     const list = aiNowList();
@@ -3919,9 +3926,99 @@
     el.hidden = !aiNowOn() || !list.length || projectView() === 'hub';
     if (el.hidden) { el.innerHTML = ''; return; }
     const n = list.filter(x => x.now.kind === 'work').length;
-    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(aiNowBtn).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
+    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(x => aiNowBtn(x) + dmBtn(x.mb)).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
       <button type="button" class="an-chip" data-ainow-sheet><span class="an-dot ${n ? 'work' : 'idle'}" aria-hidden="true"></span>${n ? `${n} 個 AI 在做事` : 'AI 都沒在做事'} <span aria-hidden="true">›</span></button>`;
   }
+  // ---------- C-270 私訊自己的 AI ----------
+  // 只有本人與他名下的 AI 看得到；專案沒開就整區不出現。資料只在打開對話時讀
+  const dmOn = pj => !!state.projectList.find(p => p.id === pj)?.dm?.on;
+  const dmVisible = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && dmOn(projectView());
+  const isMyAi = p => p && p.memberType === 'ai' && p.ownerParticipantId === meId();
+  const myAisHere = () => [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled' && (p.projects || []).includes(projectView()));
+  const aiKind = id => { const mb = state.team?.members.find(m => m.participantId === id); return mb ? aiNowOf(mb).kind : 'off'; };
+  const dmUnread = id => (work.notes || []).filter(n => n.dm && n.sender.participantId === id).length;
+  const dmBtn = mb => (dmVisible() && isMyAi(state.participants.get(mb.participantId)) ? `<button type="button" class="an-dm" data-dm-open="${esc(mb.participantId)}" aria-label="${esc(`私訊 ${mb.name}`)}">💬 私訊</button>` : '');
+  function drawDmSide() {
+    const ais = dmVisible() ? myAisHere() : [];
+    document.querySelectorAll('[data-dm-side]').forEach(el => {
+      el.hidden = !ais.length;
+      el.innerHTML = ais.length ? `<div class="dm-head">🔒 私訊我的 AI</div>${ais.map(a => { const u = dmUnread(a.participantId);
+        return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name">${esc(a.name)}</span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}` : '';
+    });
+  }
+  const dm = { aiId: null, after: 0, items: [], canSend: true, reason: '', timer: null, wb: null };
+  function dmBubble(d) {
+    const mine = d.from.participantId === meId();
+    const cards = mine ? [] : [...new Set(String(d.text).match(/\bC-\d{3,}\b/g) || [])];
+    const wb = dm.wb && dm.wb.id === d.dmId;
+    return `<div class="dm-b ${mine ? 'me' : 'ai'}" id="dm-${esc(d.dmId)}"><div class="dm-text">${renderText(d.text)}</div>
+      ${cards.map(c => `<button type="button" class="dm-wb" data-dm-wb="${esc(d.dmId)}" data-card-id="${c}">↗ 寫回 ${c}</button>`).join(' ')}
+      ${wb ? `<div class="dm-wb-box"><label class="small">寫回 ${esc(dm.wb.card)} 的留言（發到群組時標「來自私訊」，可以先改字）<textarea id="dm-wb-text" rows="3" maxlength="1900">${esc(d.text)}</textarea></label>
+        <div class="row end"><button type="button" class="btn small" data-dm-wb-cancel>取消</button><button type="button" class="btn small primary" data-dm-wb-go>寫回</button></div></div>` : ''}
+      </div><div class="dm-t ${mine ? 'me' : ''}">${fmtTime(d.createdAt)}</div>`;
+  }
+  function drawDm() {
+    const list = $('#dm-list');
+    if (!list) return false;
+    const near = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+    list.innerHTML = dm.items.map(dmBubble).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
+    const mb = state.team?.members.find(m => m.participantId === dm.aiId), now = mb ? aiNowOf(mb) : { kind: 'off' };
+    $('#dm-status').textContent = now.kind === 'work' ? `⏳ 它在做${now.cardId ? ' ' + now.cardId : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '有新私訊會叫醒它' : '它目前離線，上線後會看到';
+    const ta = $('#dm-input'), sb = $('#dm-send');
+    ta.disabled = sb.disabled = !dm.canSend;
+    $('#dm-note').textContent = dm.canSend ? '' : dm.reason;
+    if (near) list.scrollTop = list.scrollHeight;
+    return true;
+  }
+  async function dmLoad() {
+    const d = await api(`/api/dm?aiId=${encodeURIComponent(dm.aiId)}&after=${dm.after}`);
+    dm.items.push(...d.items); dm.after = d.nextAfter; dm.canSend = d.canSend; dm.reason = d.reason || '';
+    const before = (work.notes || []).length;
+    work.notes = (work.notes || []).filter(n => !(n.dm && n.sender.participantId === dm.aiId)); // 伺服器已標已讀
+    if (work.notes.length !== before) { updateTodoBadge(); drawDmSide(); }
+    return d;
+  }
+  async function openDm(aiId) {
+    const ai = state.participants.get(aiId);
+    if (!ai) return;
+    if (document.querySelector('#modal-root .modal')) closeModal();
+    Object.assign(dm, { aiId, after: 0, items: [], wb: null });
+    clearInterval(dm.timer);
+    openModal(ai.name, `<div class="dm-lock">🔒 只有你和這個 AI 看得到，其他人（含管理員畫面）看不到內容也看不到數量。<b>定案的事請寫回卡片</b>，團隊才看得到。</div>
+      <div class="dm-status muted small" id="dm-status" role="status"></div>
+      <div class="dm-list" id="dm-list" aria-live="polite"></div>
+      <div class="dm-comp"><textarea id="dm-input" rows="2" maxlength="2000" placeholder="${esc(`私訊 ${ai.name}…`)}" aria-label="私訊內容"></textarea><button class="btn primary" type="button" id="dm-send">送出</button></div>
+      <p class="muted small" id="dm-note"></p>`, { size: 'wide', sub: '🔒 私訊' });
+    try { await dmLoad(); } catch (err) { return toast(err.message); }
+    drawDm(); $('#dm-input')?.focus();
+    // 對話開著才每 10 秒看一次新私訊；關掉就停
+    dm.timer = setInterval(async () => { if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
+  }
+  async function dmSend() {
+    const ta = $('#dm-input'), text = ta.value.trim();
+    if (!text || !dm.canSend) return;
+    $('#dm-send').disabled = true;
+    try {
+      await api('/api/dm', { method: 'POST', body: { aiId: dm.aiId, text, requestId: newRequestId(), project: projectView() } });
+      ta.value = '';
+      await dmLoad(); drawDm();
+      const l = $('#dm-list'); if (l) l.scrollTop = l.scrollHeight;
+    } catch (err) { toast(err.message); } finally { const sb = $('#dm-send'); if (sb) sb.disabled = !dm.canSend; }
+  }
+  document.addEventListener('click', async e => {
+    const o = e.target.closest?.('[data-dm-open]');
+    if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen); }
+    if (e.target.closest?.('#dm-send')) return dmSend();
+    const w = e.target.closest?.('[data-dm-wb]');
+    if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }
+    if (e.target.closest?.('[data-dm-wb-cancel]')) { dm.wb = null; return drawDm(); }
+    if (e.target.closest?.('[data-dm-wb-go]')) {
+      const t = $('#dm-wb-text')?.value.trim(), c = dm.wb?.card;
+      if (!t || !c) return;
+      try { await postMsg({ text: `[回覆] ${c}（來自私訊）：${t}`, cardId: c, requestId: newRequestId() }); toast(`已寫回 ${c}`); dm.wb = null; drawDm(); } catch (err) { toast(err.message); }
+    }
+  });
+  document.addEventListener('keydown', e => { if (e.target.id === 'dm-input' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); dmSend(); } });
   // 側欄人數拆開：人類 N 在線 · AI N 在做事、N 待命
   function drawPresence(list) {
     if (!state.team) return;
@@ -3931,7 +4028,7 @@
   }
   function openAiNowSheet() {
     const list = aiNowList();
-    openModal('AI 現況', `<div class="an-sheet">${list.map(aiNowBtn).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
+    openModal('AI 現況', `<div class="an-sheet">${list.map(x => aiNowBtn(x) + dmBtn(x.mb)).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
   }
   document.addEventListener('click', e => {
     if (e.target.closest?.('[data-ainow-sheet]')) return openAiNowSheet();
@@ -4513,7 +4610,7 @@
   // 收件匣：有新訊息通知時更新（徽章只算「要你做的」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
   async function refreshInboxCount() {
     try {
-      if ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > 300_000) { await loadNotes(); if (state.page === 'inbox') renderWork(); } // C-245：沒新訊息就不重抓；C-268：徽章要算要你回覆，所以每頁都更新
+      if ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > (dmVisible() ? 60_000 : 300_000)) { await loadNotes(); if (state.page === 'inbox') renderWork(); } // C-270：有開私訊時每分鐘看一次（AI 回私訊不是群組訊息） // C-245：沒新訊息就不重抓；C-268：徽章要算要你回覆，所以每頁都更新
       updateTodoBadge();
     } catch {}
   }
@@ -5182,6 +5279,7 @@
       const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
           <button type="button" role="menuitem" data-pp="rename">改名</button>
           <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">程式庫設定</button>
+          <button type="button" role="menuitem" data-pp="dm">${p.dm?.on ? '關閉私訊…' : '開放成員私訊自己的 AI…'}<span class="pm-sub">${p.dm?.on ? `已開放${p.dm.at ? ' · ' + esc(mmdd(p.dm.at)) : ''}${p.dm.byName ? ' ' + esc(p.dm.byName) + ' 打開' : ''}` : '預設關'}</span></button>
           <button type="button" role="menuitem" data-pp="log">異動紀錄</button>
           <button type="button" role="menuitem" class="danger" data-pp="archive" ${blocked ? `aria-disabled="true" title="${esc(why)}"` : ''}>封存…${blocked ? `<span class="pm-sub">${esc(why)}</span>` : ''}</button></div>` : '';
       const last = p.archived ? '<button type="button" class="btn small" data-pp="unarchive">還原</button>'
@@ -5413,6 +5511,14 @@
         if (pp.getAttribute('aria-disabled') === 'true') { drawPerm(); return toast(pp.title); }
         if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(id))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以還原。` })) return;
         await api(`/api/projects/${encodeURIComponent(id)}/archive`, { method: 'POST' });
+      } else if (a === 'dm') { // C-270
+        const on = !state.projectList.find(p => p.id === id)?.dm?.on;
+        const ok = await confirmDialog(on
+          ? { title: '開放私訊？', confirmText: '開放', message: `打開後，「<b>${esc(projName(id))}</b>」的成員可以在網頁、手機直接跟自己名下的 AI 講話。內容只有雙方看得到，你也看不到內容和數量。<br><span class="muted small">定案的事仍要寫回卡片。私訊存在平台資料庫，系統維護者技術上仍讀得到。</span>` }
+          : { title: '關閉私訊？', confirmText: '關閉', danger: true, message: '關掉後成員不能再送私訊，舊的私訊雙方還看得到。' });
+        if (!ok) return;
+        await api(`/api/projects/${encodeURIComponent(id)}/dm`, { method: 'PUT', body: { on } });
+        toast(on ? '已開放私訊' : '已關閉私訊');
       } else if (a === 'unarchive') {
         await api(`/api/projects/${encodeURIComponent(id)}/unarchive`, { method: 'POST' });
       }
