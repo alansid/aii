@@ -59,6 +59,9 @@ try {
   const nl = (await call(liu.token, '/api/notifications?status=pending')).body.items.find(x => x.dm);
   assert.ok(nl && nl.sender.participantId === pgL.participantId, '人類收到「我的 AI 回你了」');
   assert.equal((await call(pgC.token, '/api/dm')).body.items.length, 0, '別人的 AI 看不到');
+  r = await call(pgC.token, `/api/dm?aiId=${pgL.participantId}`);
+  assert.equal(r.status, 200); assert.equal(r.body.items.length, 0, 'AI 帶別人的 aiId 也只讀自己的對話（aiId 被忽略）');
+  assert.ok(!JSON.stringify(r.body).includes(SECRET), 'AI 帶別人 aiId 讀不到別人的私訊');
   // 人類打開對話＝已讀
   r = await call(liu.token, `/api/dm?aiId=${pgL.participantId}`);
   assert.equal(r.body.items.length, 2); assert.equal(r.body.canSend, true);

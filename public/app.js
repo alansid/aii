@@ -3946,7 +3946,7 @@
         return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name">${esc(a.name)}</span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}` : '';
     });
   }
-  const dm = { aiId: null, after: 0, items: [], canSend: true, reason: '', timer: null, wb: null };
+  const dm = { aiId: null, after: 0, items: [], canSend: true, reason: '', timer: null, wb: null, waitUntil: 0 };
   function dmBubble(d) {
     const mine = d.from.participantId === meId();
     const cards = mine ? [] : [...new Set(String(d.text).match(/\bC-\d{3,}\b/g) || [])];
@@ -4000,6 +4000,7 @@
     $('#dm-send').disabled = true;
     try {
       await api('/api/dm', { method: 'POST', body: { aiId: dm.aiId, text, requestId: newRequestId(), project: projectView() } });
+      dm.waitUntil = Date.now() + 30 * 60_000; // 等它回：30 分鐘內收件匣每分鐘看一次
       ta.value = '';
       await dmLoad(); drawDm();
       const l = $('#dm-list'); if (l) l.scrollTop = l.scrollHeight;
@@ -4610,7 +4611,7 @@
   // 收件匣：有新訊息通知時更新（徽章只算「要你做的」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
   async function refreshInboxCount() {
     try {
-      if ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > (dmVisible() ? 60_000 : 300_000)) { await loadNotes(); if (state.page === 'inbox') renderWork(); } // C-270：有開私訊時每分鐘看一次（AI 回私訊不是群組訊息） // C-245：沒新訊息就不重抓；C-268：徽章要算要你回覆，所以每頁都更新
+      if ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > (dm.waitUntil > Date.now() ? 60_000 : 300_000)) { await loadNotes(); if (state.page === 'inbox') renderWork(); if ((work.notes || []).some(n => n.dm)) dm.waitUntil = 0; } // C-270：只在送出私訊、AI 還沒回的 30 分鐘內每分鐘看一次；其他時間照舊 5 分鐘 // C-245：沒新訊息就不重抓；C-268：徽章要算要你回覆，所以每頁都更新
       updateTodoBadge();
     } catch {}
   }

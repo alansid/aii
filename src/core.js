@@ -1488,7 +1488,7 @@ ${trial
   }
   // 解析對話的兩方：人類要帶 aiId（只能是自己名下的 AI）；AI 一律跟所屬人類
   async function dmPair(ctx, me, aiId) {
-    const people = await peopleMap(ctx, aiId ? [String(aiId)] : [me.owner_id]);
+    const people = await peopleMap(ctx, [me.kind === 'human' ? String(aiId || '') : me.owner_id].filter(Boolean)); // AI 一律只跟所屬人類，帶的 aiId 忽略
     if (me.kind === 'human') {
       const ai = aiId && people.get(String(aiId));
       if (!ai || ai.kind !== 'ai' || ai.owner_id !== me.id || ai.status !== 'active') throw new ApiError(403, 'DM_NOT_YOUR_AI', '只能私訊自己名下的 AI。');
