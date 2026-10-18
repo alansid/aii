@@ -827,6 +827,7 @@
     const many = msgs.length > 4 && !state.grpOpen.has(key);
     const shown = many ? msgs.slice(-3) : msgs;
     if (many) for (const m of msgs.slice(0, -3)) state.grpHidden.set(m.messageId, key);
+    for (const m of shown) if (state.grpHidden.has(m.replyToMessageId)) state.kids?.delete(m.messageId); // C-271：原訊息被收起的回覆不縮排（不然像接在組標題下）
     const title = c ? cardTitle(c) : '';
     return `<section class="cgrp" aria-label="${esc(`卡片 ${cid}${title ? ' ' + title : ''}，${msgs.length} 則訊息`)}">
       <button type="button" class="cg-head" data-cap="${cid}"><span class="cg-dot ${c ? ST_DOT[c.status] || 'todo' : 'todo'}" aria-hidden="true"></span><b>${cid}</b><span class="cg-title">${esc(title)}</span><span class="cg-meta">${c ? esc(c.status) + ' · ' : ''}${msgs.length} 則 ›</span></button>
