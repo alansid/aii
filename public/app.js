@@ -358,7 +358,6 @@
 
   function drawMe() {
     const meCard = `<button type="button" class="me-avatar-btn" data-change-avatar title="更換頭像" aria-label="更換頭像">${avatar(state.me)}<span class="pen" aria-hidden="true">✎</span></button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · 本人</span></div>`;
-    $('#me-line').innerHTML = meCard + '<button type="button" class="av-btn me-more" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu" aria-label="個人選單">⋯</button>'; // C-244
     $('#sheet-me').innerHTML = meCard;
   }
 
@@ -374,7 +373,8 @@
   function drawAvatarMenu() {
     if (!state.me) return;
     document.querySelectorAll('.av-btn:not(.me-more)').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
-    $('#av-menu').innerHTML = `<div class="av-head"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()), isAdmin() ? '管理員' : ''].filter(Boolean).join(' · '))}</span></div>
+    $('#av-menu').innerHTML = `<div class="av-head">${avatar(state.me)}<span class="av-head-txt"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()) || '未設定角色', isAdmin() ? '管理員' : '', '本人'].filter(Boolean).join(' · '))}</span></span></div>
+      <button type="button" role="menuitem" data-av="avatar">更換頭像</button>
       <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
       ${isAdmin() || myLeadProjects().length ? `<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
       <button type="button" role="menuitem" data-av="settings">個人設定</button>
@@ -407,6 +407,7 @@
     const k = it.dataset.av;
     if (k === 'myai' || k === 'perm') goTop(k);
     else if (k === 'settings') openSettings();
+    else if (k === 'avatar') changeMyAvatar();
     else if (k === 'api') openApi();
     else if (k === 'devices') openDevices();
     else if (k === 'logout') logout(true);
@@ -1085,7 +1086,7 @@
   function parseRoute() {
     const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
     const page = x => PAGE_BY_NAME[x] || (PAGE_NAME[x] ? x : null);
-    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.name === seg[1] || x.id === seg[1]); if (p && page(seg[2]) === 'dm') state.dmAi = seg[3] || null; return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
+    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.name === seg[1] || x.id === seg[1]); if (p && page(seg[2]) === 'dm') { state.dmAi = seg[3] || null; state.dmOpenOnBoot = true; } return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
     if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
     if (seg[0] === 'members') return { view: null, page: 'perm' };
@@ -1095,7 +1096,7 @@
     if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     const v = projectView();
     if (v === 'hub') return '/';
-    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(projName(v))}/${encodeURIComponent(PAGE_NAME[state.page] || '訊息')}${state.page === 'dm' && state.dmAi ? '/' + encodeURIComponent(state.dmAi) : ''}`;
+    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(projName(v))}/${encodeURIComponent(PAGE_NAME[state.page] || '訊息')}`;
   }
   function syncUrl(replace) {
     const u = routePath();
@@ -2479,8 +2480,8 @@
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); showPage(page, { replace, noHistory }); }); // C-182：有未儲存的變更先提醒
     if (work.openId) closeCard();
     const v = projectView();
-    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(page) && !(v === 'cross' && page === 'work') ? page : page === 'dm' && PROJECTS.includes(v) ? 'dm' : 'messages';
-    if (state.page !== 'dm') clearInterval(dm.timer); // 離開私訊頁就不再看新私訊
+    if (page === 'dm') { page = 'messages'; setTimeout(() => dmPanel(true), 0); } // C-270 A A：私訊改面板，舊網址照樣打開
+    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
     if (state.page !== 'team') work.teamScrollTab = null; // C-157：離開團隊頁就不再保留捲動位置（UX 第 1010 則），回來從頂端開始
     if (state.page !== 'hub' && !TOP_PAGES[state.page]) store.set(PAGE_KEY, state.page);
     if (!noHistory) syncUrl(replace);
@@ -2506,8 +2507,6 @@
       return renderMyAiPage();
     } else if (state.page === 'perm') {
       return renderPermPage();
-    } else if (state.page === 'dm') {
-      return renderDmPage();
     } else if (state.page === 'inbox') {
       return Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(loadConfirmMsgs).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
     } else scrollBottom();
@@ -3947,7 +3946,7 @@
     el.hidden = !aiNowOn() || !list.length || projectView() === 'hub';
     if (el.hidden) { el.innerHTML = ''; return; }
     const n = list.filter(x => x.now.kind === 'work').length;
-    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(x => aiNowBtn(x) + dmBtn(x.mb)).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
+    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(x => aiNowBtn(x)).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
       <button type="button" class="an-chip" data-ainow-sheet><span class="an-dot ${n ? 'work' : 'idle'}" aria-hidden="true"></span>${n ? `${n} 個 AI 在做事` : 'AI 都沒在做事'} <span aria-hidden="true">›</span></button>`;
   }
   // ---------- C-270 私訊自己的 AI ----------
@@ -3960,9 +3959,6 @@
   const dmUnread = id => (work.notes || []).filter(n => n.dm && n.sender.participantId === id).length;
   // 這個專案可以看到私訊入口（有自己名下、在這專案的 AI）；沒開時入口淡色，點了說明怎麼開（C-270 退回）
   const dmEntry = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && myAisHere().length > 0;
-  const dmBtn = mb => (dmEntry() && isMyAi(state.participants.get(mb.participantId))
-    ? (dmVisible() ? `<button type="button" class="an-dm" data-dm-open="${esc(mb.participantId)}" aria-label="${esc(`私訊 ${mb.name}`)}">💬 私訊</button>`
-      : `<button type="button" class="an-dm off" data-dm-enable aria-label="私訊還沒開放，看怎麼打開">💬 私訊</button>`) : '');
   async function dmEnable() {
     const pv = projectView(), can = isAdmin() || myLeadProjects().includes(pv);
     if (!can) {
@@ -3976,28 +3972,33 @@
       await loadProjectList();
       drawAiNow();
       toast('已開放私訊');
-      document.querySelectorAll('[data-dm-side]').forEach(el => { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); });
+      document.querySelectorAll('[data-dm-toggle]').forEach(el => { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); });
     } catch (err) { toast(err.message); }
   }
   function drawDmSide() {
     const entry = dmEntry(), on = entry && dmVisible(), ais = on ? myAisHere() : [];
-    document.querySelectorAll('[data-dm-side]').forEach(el => {
-      el.hidden = !entry;
-      if (entry && !on) { el.innerHTML = '<button type="button" class="dm-item dm-off" data-dm-enable><span class="dm-name">🔒 私訊我的 AI · 未開放</span></button>'; return; }
-      // C-270 退回②：只列有對話的（含未讀、正在看的）最多 3 個，其他收進「＋ 私訊其他 AI」
-      const sorted = dmSorted(ais), has = a => dmSum().has(a.participantId) || dmUnread(a.participantId) || (state.page === 'dm' && state.dmAi === a.participantId);
-      const top = sorted.filter(has).slice(0, 3), rest = sorted.filter(a => !top.includes(a));
-      const item = a => { const u = dmUnread(a.participantId), cur = state.page === 'dm' && state.dmAi === a.participantId;
-        return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"${cur ? ' aria-current="page"' : ''}><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name"><span class="dm-nm">${esc(a.name)}</span><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; };
-      el.innerHTML = ais.length ? `<div class="dm-head">🔒 私訊</div>${top.map(item).join('')}${rest.length ? `<button type="button" class="dm-item dm-more" data-dm-more aria-expanded="${state.dmMore ? 'true' : 'false'}"><span class="dm-name">${state.dmMore ? '－ 收起' : '＋ 私訊其他 AI'}</span></button>${state.dmMore ? rest.map(item).join('') : ''}` : ''}` : '';
+    const n = ais.reduce((t, a) => t + dmUnread(a.participantId), 0);
+    document.querySelectorAll('[data-dm-toggle]').forEach(b => {
+      b.hidden = !entry;
+      const bd = b.querySelector('.badge'); bd.hidden = !n; bd.textContent = n > 99 ? '99+' : n;
+      b.setAttribute('aria-label', n ? `私訊我的 AI，${n} 則未讀` : '私訊我的 AI');
     });
-    document.querySelectorAll('[data-dm-top]').forEach(b => { b.hidden = !entry; const n = ais.reduce((t, a) => t + dmUnread(a.participantId), 0); b.querySelector('.badge').hidden = !n; b.querySelector('.badge').textContent = n; });
+    if (!state.dmBooted && entry) { // 重新整理後：面板原本開著就照樣打開（舊的私訊網址也會打開）
+      state.dmBooted = true;
+      const s = store.get(DMP_KEY);
+      if (state.dmOpenOnBoot || s) { if (!state.dmAi && s && s !== '-') state.dmAi = s; state.dmOpenOnBoot = false; dmPanel(true); }
+    }
+    if (dmIsOpen()) {
+      if (!entry) dmPanel(false);
+      else if (dm.aiId && !ais.some(a => a.participantId === dm.aiId)) { state.dmAi = null; renderDmPanel(); } // 換到沒有這個 AI 的專案
+      else if (!state.dmAi) drawDmList(ais);
+    }
     if (on && !(state.dmSumAt || {})[projectView()]) loadDmSummary();
   }
   // 清單的最後一句：每個專案開頁查一次；之後只在有私訊通知或打開對話時更新
   async function loadDmSummary() {
     state.dmSumAt = { ...(state.dmSumAt || {}), [projectView()]: Date.now() };
-    try { const d = await api('/api/dm/summary'); state.dmSummary = new Map(d.items.map(x => [x.aiId, x])); drawDmSide(); if (state.page === 'dm' && !state.dmAi) renderDmPage(); } catch {}
+    try { const d = await api('/api/dm/summary'); state.dmSummary = new Map(d.items.map(x => [x.aiId, x])); drawDmSide(); } catch {}
   }
   const dm = { aiId: null, after: 0, items: [], canSend: true, reason: '', timer: null, wb: null, waitUntil: 0 };
   // C-272 頭像提案卡：現在 → 新的；只有被產圖的本人能按「套用為頭像」「不要」
@@ -4069,31 +4070,61 @@
     if (work.notes.length !== before) { updateTodoBadge(); drawDmSide(); }
     return d;
   }
-  // C-270 改版：私訊跟群組訊息同一個位置整頁打開；網址記得是哪段；切走再回來對話還在
+  // C-270 A A：私訊在右側面板打開（每頁都能開、可一直開著；手機全螢幕）；重新整理後照樣開著
+  const DMP_KEY = 'aigile-switch-dm-panel';
+  const dmIsOpen = () => !!$('#dm-panel') && !$('#dm-panel').hidden;
+  function dmPanel(open) {
+    const el = $('#dm-panel');
+    if (!el) return;
+    if (open && !dmEntry()) open = false;
+    el.hidden = !open;
+    document.body.classList.toggle('dm-open', open);
+    document.querySelectorAll('[data-dm-toggle]').forEach(b => b.setAttribute('aria-expanded', String(open)));
+    if (!open) {
+      store.set(DMP_KEY, '');
+      clearInterval(dm.timer); dm.gen = (dm.gen || 0) + 1; dm.loading = null; dm.aiId = null; // 關掉就停，不再看新私訊
+      const box = $('#dm-box'); box.innerHTML = ''; box.dataset.h = '';
+      return;
+    }
+    const tb = document.querySelector('.topbar'); // 桌面：面板接在頂欄下面；手機頂欄不顯示＝全螢幕
+    document.documentElement.style.setProperty('--dmp-top', `${tb && tb.offsetParent ? Math.round(tb.getBoundingClientRect().bottom) : 0}px`);
+    return renderDmPanel();
+  }
   function openDm(aiId) {
     if (document.querySelector('#modal-root .modal')) closeModal();
     state.dmAi = aiId || null;
-    if (state.page === 'dm') { syncUrl(false); return renderDmPage(); }
-    return showPage('dm');
+    return dmPanel(true);
   }
   const dmSum = () => state.dmSummary || new Map();
   const dmSorted = ais => [...ais].sort((a, b) => String(dmSum().get(b.participantId)?.createdAt || '').localeCompare(String(dmSum().get(a.participantId)?.createdAt || '')));
   const dmPreview = id => { const s = dmSum().get(id); return s ? (s.fromMe ? '你：' : '') + s.text : '還沒有私訊'; };
+  // 清單：有對話的（含未讀）最多 3 個，其他收進「＋ 私訊其他 AI（n）」；沒開私訊就說明怎麼開
   function dmListHtml(ais) {
-    if (!ais.length) return `<div class="dm-empty-page"><p class="muted">${dmEntry() ? '這個專案還沒開放私訊。' : '你在這個專案沒有自己的 AI。'}</p>${dmEntry() ? '<button type="button" class="btn" data-dm-enable>看怎麼打開</button>' : ''}</div>`;
-    return `<div class="dm-listpage"><h2 class="dm-h">🔒 私訊</h2><p class="muted small">只有你和自己的 AI 看得到。</p>${dmSorted(ais).map(a => { const u = dmUnread(a.participantId);
-      return `<button type="button" class="dm-row" data-dm-open="${esc(a.participantId)}">${avatar(a)}<span class="dm-row-main"><b>${esc(a.name)}</b><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}</div>`;
+    if (!dmVisible()) return `<div class="dm-empty-page"><p class="muted">「${esc(projName(projectView()))}」還沒開放私訊自己的 AI。</p><button type="button" class="btn" data-dm-enable>看怎麼打開</button></div>`;
+    if (!ais.length) return '<div class="dm-empty-page"><p class="muted">你在這個專案沒有自己的 AI。</p></div>';
+    const sorted = dmSorted(ais), has = a => dmSum().has(a.participantId) || dmUnread(a.participantId);
+    let top = sorted.filter(has).slice(0, 3);
+    if (!top.length) top = sorted.slice(0, 3);
+    const rest = sorted.filter(a => !top.includes(a));
+    const row = a => { const u = dmUnread(a.participantId);
+      return `<button type="button" class="dm-row" data-dm-open="${esc(a.participantId)}">${avatar(a)}<span class="dm-row-main"><b>${esc(a.name)}</b><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; };
+    return `<div class="dm-listpage"><p class="muted small dm-lp-note">只有你和自己的 AI 看得到。</p>${top.map(row).join('')}${rest.length ? `<button type="button" class="dm-row dm-more" data-dm-more aria-expanded="${state.dmMore ? 'true' : 'false'}">${state.dmMore ? '－ 收起' : `＋ 私訊其他 AI（${rest.length}）`}</button>${state.dmMore ? rest.map(row).join('') : ''}` : ''}</div>`;
   }
-  async function renderDmPage() {
-    const box = $('#page-work');
-    box.classList.remove('is-board');
+  function drawDmList(ais) {
+    const box = $('#dm-box'), h = dmListHtml(ais);
+    if (box && box.dataset.h !== h) { box.dataset.h = h; box.innerHTML = h; }
+  }
+  async function renderDmPanel() {
+    const box = $('#dm-box');
+    if (!box) return;
     clearInterval(dm.timer);
     const ais = dmVisible() ? myAisHere() : [];
     const ai = state.dmAi && ais.find(a => a.participantId === state.dmAi);
-    drawDmSide();
-    if (!ai) { state.dmAi = null; box.innerHTML = dmListHtml(ais); return; }
+    store.set(DMP_KEY, ai ? ai.participantId : '-');
+    if (!ai) { state.dmAi = null; dm.gen = (dm.gen || 0) + 1; dm.loading = null; dm.aiId = null; drawDmList(ais); return drawDmSide(); }
     const gen = (dm.gen || 0) + 1; // 重畫一次就作廢上一次還沒回來的載入與計時器
     Object.assign(dm, { aiId: ai.participantId, after: 0, items: [], wb: null, gen, loading: null });
+    box.dataset.h = '';
     box.innerHTML = `<div class="dm-page">
       <div class="dm-top"><button type="button" class="icon-btn dm-back" data-dm-back aria-label="回私訊清單">‹</button>${avatar(ai)}<div class="dm-who"><b>${esc(ai.name)}</b><span class="muted small">🔒 只有你和它看得到 · <span id="dm-status" role="status"></span></span><span class="muted small dm-tip">定案的事請寫回卡片，團隊才看得到</span></div></div>
       <div class="dm-list" id="dm-list" aria-live="polite"></div>
@@ -4108,11 +4139,16 @@
       if (window.ResizeObserver) new ResizeObserver(() => { if (stick) l0.scrollTop = l0.scrollHeight; }).observe(l0);
     }
     if (isDesktop()) $('#dm-input')?.focus();
-    if (state.dmPrefill) { const ta = $('#dm-input'); if (ta && dm.canSend) { ta.value = state.dmPrefill; ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } state.dmPrefill = null; } // C-272：從個人設定來的預填
+    if (state.dmPrefill) { const ta = $('#dm-input'); if (ta && dm.canSend) { ta.value = state.dmPrefill; ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } state.dmPrefill = null; } // C-272：從更換頭像來的預填
+    drawDmSide();
     // 對話開著才每 10 秒看一次新私訊；關掉就停
     clearInterval(dm.timer); // 只留一個計時器
     dm.timer = setInterval(async () => { if (gen !== dm.gen) return; if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
   }
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !dmIsOpen() || !e.target.closest?.('#dm-panel') || document.querySelector('#modal-root .modal, .confirm-root')) return;
+    e.preventDefault(); dmPanel(false); document.querySelector('[data-dm-toggle]:not([hidden])')?.focus();
+  });
   async function dmSend() {
     const ta = $('#dm-input'), text = ta.value.trim();
     if (!text || !dm.canSend) return;
@@ -4129,11 +4165,13 @@
   document.addEventListener('click', async e => {
     const o = e.target.closest?.('[data-dm-open]');
     if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen); }
-    if (e.target.closest?.('[data-dm-more]')) { state.dmMore = !state.dmMore; return drawDmSide(); }
+    if (e.target.closest?.('[data-dm-more]')) { state.dmMore = !state.dmMore; return drawDmList(dmVisible() ? myAisHere() : []); }
+    if (e.target.closest?.('[data-dm-toggle]')) { if (e.target.closest('#sheet')) closeSheet(false); return dmPanel(!dmIsOpen()); }
+    if (e.target.closest?.('[data-dm-close]')) { dmPanel(false); return document.querySelector('[data-dm-toggle]:not([hidden])')?.focus(); }
     const en = e.target.closest?.('[data-dm-enable]');
     if (en) { if (en.closest('#sheet')) closeSheet(false); if (en.closest('#modal-root')) closeModal(); return dmEnable(); }
     if (e.target.closest?.('#dm-send')) return dmSend();
-    if (e.target.closest?.('[data-dm-back]')) { state.dmAi = null; syncUrl(false); return renderDmPage(); }
+    if (e.target.closest?.('[data-dm-back]')) { state.dmAi = null; return renderDmPanel(); }
     const w = e.target.closest?.('[data-dm-wb]');
     if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }
     if (e.target.closest?.('[data-dm-wb-cancel]')) { dm.wb = null; return drawDm(); }
@@ -4167,7 +4205,7 @@
   }
   function openAiNowSheet() {
     const list = aiNowList();
-    openModal('AI 現況', `<div class="an-sheet">${list.map(x => aiNowBtn(x) + dmBtn(x.mb)).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
+    openModal('AI 現況', `<div class="an-sheet">${list.map(x => aiNowBtn(x)).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
   }
   document.addEventListener('click', e => {
     if (e.target.closest?.('[data-ainow-sheet]')) return openAiNowSheet();
@@ -5728,7 +5766,7 @@
       if (PROJECTS.includes(pv) && dmEntry()) return dmEnable();
       return toast(`${ais.length === 1 ? ais[0].name + ' ' : '你的 AI '}所在的專案還沒開放私訊；請管理員或 leader 在「成員與權限 → 專案 → ⋯」打開。`);
     }
-    const go = ({ a, pj }) => { state.dmPrefill = prefill; state.dmAi = a.participantId; return pj !== pv ? setProjectView(pj, 'dm') : openDm(a.participantId); };
+    const go = ({ a, pj }) => { state.dmPrefill = prefill; state.dmAi = a.participantId; return pj !== pv ? Promise.resolve(setProjectView(pj)).then(() => openDm(a.participantId)) : openDm(a.participantId); };
     if (cands.length === 1) return go(cands[0]);
     const body = openModal('請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: '會打開跟它的私訊，幫你先打好開頭' });
     body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });

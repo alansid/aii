@@ -119,16 +119,14 @@
         </div>
         </div>
         <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
-        <div class="dm-side" data-dm-side hidden></div>
       </nav>
-      <!-- C-244：個人卡片在側欄最下面，「⋯」＝原本的頭像選單 -->
-      <div id="me-line" class="me-card side-me"></div>
     </aside>
 
     <div class="main">
       <!-- 手機頂部 -->
       <div class="topbar">
         <nav id="crumbs" class="crumbs" aria-label="目前位置"></nav>
+        <button type="button" class="dm-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊我的 AI" hidden><span aria-hidden="true">💬</span><span class="badge" hidden></span></button>
         <button type="button" class="av-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu"></button>
       </div>
       <div id="av-menu" class="av-menu" role="menu" aria-label="個人選單" hidden></div>
@@ -139,7 +137,7 @@
           <button class="presence" type="button" data-open="members"><span class="dot on"></span><span class="presence-text">…</span></button>
         </div>
         <button type="button" class="top-btn" data-nav="inbox" data-proj-only>收件匣 <span class="badge inbox-badge" hidden></span></button>
-        <button type="button" class="top-btn" data-dm-top data-dm-open="" hidden>私訊 <span class="badge" hidden></span></button>
+        <button type="button" class="top-btn dm-top-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊我的 AI" hidden><span aria-hidden="true">💬</span> <span class="badge" hidden></span></button>
         <button type="button" class="top-btn m-todo" id="m-todo" hidden>要你處理 <span class="badge m-todo-n" hidden></span></button>
         <button type="button" class="top-btn" id="menu-btn" aria-haspopup="dialog" aria-controls="sheet">選單</button>
         <button type="button" class="av-btn m-av" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu"></button>
@@ -203,6 +201,11 @@
       </div>
       <div id="page-work" class="page page-work" hidden></div>
     </div>
+    <!-- C-270 A A：私訊面板（每頁都能開；手機全螢幕） -->
+    <aside id="dm-panel" class="dm-panel" aria-label="私訊我的 AI" hidden>
+      <div class="dmp-head"><b>🔒 私訊我的 AI</b><button type="button" class="icon-btn" data-dm-close aria-label="收起私訊">×</button></div>
+      <div id="dm-box" class="dmp-body"></div>
+    </aside>
 
     <!-- 手機選單：從底部滑出 -->
     <div id="sheet" class="sheet" hidden>
