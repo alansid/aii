@@ -915,6 +915,7 @@ ${roster}
 - 私訊裡定案的事（要做、改規格、選方案）：回覆時寫出卡號並提醒 ${owner.name} 按「↗ 寫回 C-xxx」，或問他要不要你寫回卡片，團隊才看得到。
 - 私訊不能拿來授權 commit、push、部署、刪除資料；這些照第九節，仍在本機對話問。
 - 專案沒開放私訊時回 403 DM_DISABLED：改在本機對話或群組回覆。
+- ${owner.name} 請你換頭像（C-272）：產生 256×256 的 png／jpg／webp（200 KB 內），POST /api/avatar-proposals?note=一句說明（本文直接放圖片，Content-Type 用圖片類型）；平台會在私訊放一張提案卡，${owner.name} 按「套用」才會換，你不能直接改人類的頭像。你的工具不能產圖，就直接說做不到，不要假裝。
 
 先看第零節：重新接上就照第零節做，不重新簽到；第一次接入才往下。
 ${trial
@@ -1512,8 +1513,24 @@ ${trial
     // 人類打開對話＝讀了：他在這段對話的私訊通知標為已讀（AI 照規則自己 ACK）
     if (me.kind === 'human') await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND status = 'pending' AND reasons = '[\"dm\"]' AND message_id IN (SELECT id FROM dms WHERE human_id = ? AND ai_id = ?)", nowIso(), me.id, human.id, ai.id);
     const open = (await dmProjects(human, ai)).length > 0;
-    return { items: items.map(d => dmView(d, people)), nextAfter: items.length ? items[items.length - 1].seq : after, hasMore, canSend: open, ...(open ? {} : { reason: '這個專案沒有開放私訊，舊的私訊還看得到，但不能再送。' }) };
+    const views = items.map(d => dmView(d, people));
+    const propIds = views.map(v => AP_RE.exec(v.text)?.[1]).filter(Boolean);
+    if (propIds.length) {
+      const props = new Map((await db.all('SELECT id, human_id, status, created_at, decided_at FROM avatar_proposals WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(propIds))).map(p => [p.id, p]));
+      for (const v of views) { const p = props.get(AP_RE.exec(v.text)?.[1]); if (p) v.proposal = apView(p); }
+    }
+    return { items: views, nextAfter: items.length ? items[items.length - 1].seq : after, hasMore, canSend: open, ...(open ? {} : { reason: '這個專案沒有開放私訊，舊的私訊還看得到，但不能再送。' }) };
   });
+  // 寫一則私訊＋對方的通知（POST /api/dm 與頭像提案共用）
+  async function writeDm({ human, ai, from, text, project, requestId }) {
+    const id = randId('dm'), at = nowIso(), to = from === human.id ? ai.id : human.id;
+    await db.batch([
+      ['INSERT INTO dms (id, human_id, ai_id, from_id, text, project, request_id, created_at) VALUES (?,?,?,?,?,?,?,?)', [id, human.id, ai.id, from, text, project, requestId, at]],
+      ['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)', [randId('notif'), to, id, '["dm"]', at]],
+    ]);
+    if (to === ai.id) ringDoorbell([ai.id], at);
+    return id;
+  }
   route('POST', '/api/dm', async ({ ctx, me, req }) => {
     const body = await readJson(req);
     const { human, ai } = await dmPair(ctx, me, body.aiId);
@@ -1530,13 +1547,82 @@ ${trial
     const open = await dmProjects(human, ai);
     if (!open.length) throw new ApiError(403, 'DM_DISABLED', '這個專案沒有開放私訊（專案設定由管理員或 leader 開啟）；舊的私訊還看得到，但不能再送。');
     const project = body.project && open.includes(body.project) ? body.project : open[0];
-    const id = randId('dm'), at = nowIso(), to = me.id === human.id ? ai.id : human.id;
-    await db.batch([
-      ['INSERT INTO dms (id, human_id, ai_id, from_id, text, project, request_id, created_at) VALUES (?,?,?,?,?,?,?,?)', [id, human.id, ai.id, me.id, text, project, requestId, at]],
-      ['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)', [randId('notif'), to, id, '["dm"]', at]],
-    ]);
-    if (to === ai.id) ringDoorbell([ai.id], at); // 叫醒 AI（門鈴只含 ID 與時間）
+    const id = await writeDm({ human, ai, from: me.id, text, project, requestId }); // 叫醒 AI（門鈴只含 ID 與時間）
     return { __status: 201, ...dmView(await db.get('SELECT * FROM dms WHERE id = ?', id), people) };
+  });
+
+  // ---------- C-272 AI 產頭像、人類按「套用」才換 ----------
+  const AP_TTL = 24 * 3600_000;
+  const AP_RE = /^\[頭像提案 (ap_[A-Za-z0-9_-]+)\]/;
+  const apStatus = p => (p.status === 'pending' && Date.now() - p.created_at > AP_TTL ? 'expired' : p.status);
+  const apView = p => ({ proposalId: p.id, status: apStatus(p), expiresAt: iso(p.created_at + AP_TTL), decidedAt: p.decided_at ? iso(p.decided_at) : null });
+  async function apOf(me, id, { forHuman = false } = {}) {
+    const p = await db.get('SELECT id, human_id, ai_id, status, created_at, decided_at, mime FROM avatar_proposals WHERE id = ?', id);
+    if (!p || (p.human_id !== me.id && p.ai_id !== me.id)) throw new ApiError(404, 'NOT_FOUND', '找不到這個頭像提案');
+    if (forHuman && p.human_id !== me.id) throw new ApiError(403, 'FORBIDDEN', '只有被產圖的人能套用或略過。');
+    return p;
+  }
+  // AI 上傳提案圖（本文是圖片）：只能給所屬人類；平台在私訊放一張提案卡
+  route('POST', '/api/avatar-proposals', async ({ ctx, me, req, url }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 能提頭像提案；人類請直接在個人設定換頭像。');
+    const { human, ai } = await dmPair(ctx, me);
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (!bytes.length) throw invalid('沒有收到圖片');
+    if (bytes.length > AVATAR_MAX) throw invalid('頭像圖片超過 200 KB，請先縮小（256×256）');
+    const mime = avatarMime(bytes);
+    if (!mime) throw invalid('頭像只接受 png、jpg、webp 圖片');
+    const open = await dmProjects(human, ai);
+    if (!open.length) throw new ApiError(403, 'DM_DISABLED', '這個專案沒有開放私訊，頭像提案只能放在私訊裡。');
+    const note = String(url.searchParams.get('note') || '').trim().slice(0, 200);
+    const id = randId('ap'), now = Date.now();
+    await db.run('INSERT INTO avatar_proposals (id, human_id, ai_id, mime, data, status, created_at) VALUES (?,?,?,?,?,?,?)', id, human.id, ai.id, mime, bytes, 'pending', now);
+    const dmId = await writeDm({ human, ai, from: ai.id, text: `[頭像提案 ${id}]${note ? ' ' + note : ''}`, project: open[0], requestId: 'avprop_' + id });
+    await db.run('UPDATE avatar_proposals SET dm_id = ? WHERE id = ?', dmId, id);
+    return { __status: 201, proposalId: id, dmId, expiresAt: iso(now + AP_TTL) };
+  });
+  route('GET', '/api/avatar-proposals/:id/image', async ({ me, params }) => {
+    const p = await apOf(me, params.id);
+    if (apStatus(p) !== 'pending') throw new ApiError(410, 'GONE', '這個提案已處理或過期，圖已刪掉。');
+    const row = await db.get('SELECT data FROM avatar_proposals WHERE id = ?', p.id);
+    const bytes = row.data instanceof Uint8Array ? row.data : new Uint8Array(row.data);
+    return new Response(bytes, { headers: { 'Content-Type': p.mime, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' } });
+  });
+  // 套用：先把目前的頭像存成「上一張」，再換成提案圖；提案圖刪掉
+  route('POST', '/api/avatar-proposals/:id/apply', async ({ ctx, me, params }) => {
+    const p = await apOf(me, params.id, { forHuman: true });
+    if (apStatus(p) !== 'pending') throw new ApiError(409, 'PROPOSAL_CLOSED', '這個提案已處理或超過 24 小時。');
+    const row = await db.get('SELECT data FROM avatar_proposals WHERE id = ?', p.id);
+    const now = Date.now(), ts = nowIso();
+    const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', me.id);
+    await db.batch([
+      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + me.id, cur ? cur.mime : 'none', cur ? cur.data : new Uint8Array(0), ts]],
+      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [me.id, p.mime, row.data, ts]],
+      ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [now, ts, me.id]],
+      ["UPDATE avatar_proposals SET status = 'applied', data = NULL, decided_at = ? WHERE id = ?", [now, p.id]],
+    ]);
+    invalidatePeople();
+    return { proposal: apView({ ...p, status: 'applied', decided_at: now }), me: identity(await db.get('SELECT * FROM participants WHERE id = ?', me.id), await peopleMap(ctx)) };
+  });
+  route('POST', '/api/avatar-proposals/:id/skip', async ({ me, params }) => {
+    const p = await apOf(me, params.id, { forHuman: true });
+    if (p.status !== 'pending') return { proposal: apView(p) };
+    const now = Date.now();
+    await db.run("UPDATE avatar_proposals SET status = 'skipped', data = NULL, decided_at = ? WHERE id = ?", now, p.id);
+    return { proposal: apView({ ...p, status: 'skipped', decided_at: now }) };
+  });
+  // 換回上一張（套用提案前的頭像）
+  route('GET', '/api/me/avatar/prev', async ({ me }) => ({ hasPrev: !!(await db.get('SELECT 1 AS x FROM avatars WHERE participant_id = ?', 'prev:' + me.id)) }));
+  route('POST', '/api/me/avatar/revert', async ({ ctx, me }) => {
+    const prev = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', 'prev:' + me.id);
+    if (!prev) throw new ApiError(404, 'NOT_FOUND', '沒有上一張頭像可以換回。');
+    const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', me.id);
+    const ts = nowIso(), stmts = [];
+    stmts.push(cur ? ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + me.id, cur.mime, cur.data, ts]] : ['DELETE FROM avatars WHERE participant_id = ?', ['prev:' + me.id]]);
+    if (prev.mime === 'none') stmts.push(['DELETE FROM avatars WHERE participant_id = ?', [me.id]], ['UPDATE participants SET avatar_v = 0, updated_at = ? WHERE id = ?', [ts, me.id]]);
+    else stmts.push(['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [me.id, prev.mime, prev.data, ts]], ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [Date.now(), ts, me.id]]);
+    await db.batch(stmts);
+    invalidatePeople();
+    return identity(await db.get('SELECT * FROM participants WHERE id = ?', me.id), await peopleMap(ctx));
   });
 
   route('POST', '/api/projects/:id/archive', async ({ ctx, me, params }) => {
@@ -2166,7 +2252,8 @@ ${trial
       ...(origin ? [`<meta property="og:image" content="${escHtml(origin)}/og-image.png">`, '<meta property="og:image:width" content="1200">', '<meta property="og:image:height" content="630">', '<meta name="twitter:card" content="summary_large_image">'] : [])].join('\n  ');
     return html.split(DEFAULT_GROUP_NAME).join(name).replace('</title>', `</title>\n  ${meta}`);
   };
-  handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db) });
+  handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db),
+    proposalsExpired: (await db.run("UPDATE avatar_proposals SET status = 'expired', data = NULL WHERE status = 'pending' AND created_at < ?", Date.now() - 24 * 3600_000).catch(() => ({ changes: 0 }))).changes }); // C-272
   return handle;
 
   // C-220：只屬部分專案的人，回應裡別人的 projects、projectRoles 只留看的人自己也在的專案（不露出別專案的名稱或代號）。

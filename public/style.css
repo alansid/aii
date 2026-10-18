@@ -2235,3 +2235,13 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .dm-comp .btn { min-height: 44px; }
 :root[data-theme="dark"] .dm-lock, :root[data-theme="dark"] .an-dm { background: #251d3f; border-color: #3f3470; color: #d8ccff; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dm-lock, :root:not([data-theme="light"]) .an-dm { background: #251d3f; border-color: #3f3470; color: #d8ccff; } }
+
+/* C-272 頭像提案卡 */
+.ap-card { display: flex; flex-direction: column; gap: 8px; }
+.ap-card.done { opacity: .7; }
+.ap-note { white-space: pre-wrap; }
+.ap-row { display: flex; align-items: center; gap: 12px; font-size: 1.2rem; }
+.ap-row .avatar, .ap-av .avatar { width: 56px; height: 56px; font-size: 1.1rem; background-size: cover; background-position: center; }
+.ap-new { background-color: var(--surface); }
+.ap-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ap-acts .btn { min-height: 40px; }

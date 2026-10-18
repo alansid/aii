@@ -110,7 +110,20 @@ CREATE TABLE IF NOT EXISTS file_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_participants_owner ON participants (owner_id);
--- 頭像圖片（256×256，網頁裁切後上傳；不會過期）
+-- C-272 AI 產的頭像提案：只在私訊顯示，被產圖的人類按「套用」才換；24 小時沒按作廢、圖刪掉
+CREATE TABLE IF NOT EXISTS avatar_proposals (
+  id TEXT PRIMARY KEY,
+  human_id TEXT NOT NULL,
+  ai_id TEXT NOT NULL,
+  dm_id TEXT,
+  mime TEXT,
+  data BLOB,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_avprop_status ON avatar_proposals (status, created_at);
+-- 頭像圖片（256×256，網頁裁切後上傳；不會過期）。participant_id 為 prev:<id> 的列＝套用提案前的上一張（C-272）
 CREATE TABLE IF NOT EXISTS avatars (
   participant_id TEXT PRIMARY KEY,
   mime TEXT NOT NULL,

@@ -79,6 +79,36 @@ try {
   assert.equal(team.members.find(m => m.participantId === pgL.participantId).pendingCount, 0, '團隊狀態的待處理數不算私訊');
   assert.equal(team.unanswered.length, 0);
 
+  // ---- C-272 頭像提案 ----
+  const png = n => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, n, 1, 2, 3]);
+  const raw = async (token, p, method, bytes) => { const res = await app(new Request(BASE + p, { method, headers: { 'Content-Type': 'image/png', Authorization: `Bearer ${token}` }, body: bytes }), BASE); return { status: res.status, body: await res.json().catch(() => ({})), res }; };
+  assert.equal((await raw(liu.token, '/api/avatar-proposals', 'POST', png(1))).status, 403, '人類不能提提案');
+  assert.equal((await raw(pgL.token, '/api/avatar-proposals', 'POST', new Uint8Array([1, 2, 3]))).status, 400, '不是圖片直接擋');
+  let ap = await raw(pgL.token, '/api/avatar-proposals?note=' + encodeURIComponent('藍色系'), 'POST', png(7));
+  assert.equal(ap.status, 201); const P1 = ap.body.proposalId;
+  r = await call(liu.token, `/api/dm?aiId=${pgL.participantId}`);
+  const card = r.body.items.find(x => x.proposal?.proposalId === P1);
+  assert.ok(card && card.proposal.status === 'pending' && card.text.includes('藍色系'), '私訊帶提案卡');
+  assert.equal((await raw(liu.token, `/api/avatar-proposals/${P1}/image`, 'GET')).status, 200, '本人看得到提案圖');
+  assert.equal((await call(chen.token, `/api/avatar-proposals/${P1}/apply`, 'POST')).status, 404, '別人不能套用');
+  assert.equal((await call(pgL.token, `/api/avatar-proposals/${P1}/apply`, 'POST')).status, 403, 'AI 不能替人類套用');
+  r = await call(liu.token, `/api/avatar-proposals/${P1}/apply`, 'POST');
+  assert.equal(r.status, 200); assert.ok(r.body.me.avatarImg, '套用後有圖片頭像');
+  assert.equal((await raw(liu.token, `/api/avatar-proposals/${P1}/image`, 'GET')).status, 410, '套用後提案圖刪掉');
+  assert.equal((await call(liu.token, '/api/me/avatar/prev')).body.hasPrev, true);
+  r = await call(liu.token, '/api/me/avatar/revert', 'POST');
+  assert.equal(r.status, 200); assert.equal(r.body.avatarImg, null, '換回上一張（原本沒有圖片）');
+  // 略過
+  ap = await raw(pgL.token, '/api/avatar-proposals', 'POST', png(8));
+  r = await call(liu.token, `/api/avatar-proposals/${ap.body.proposalId}/skip`, 'POST');
+  assert.equal(r.body.proposal.status, 'skipped');
+  assert.equal((await call(liu.token, `/api/avatar-proposals/${ap.body.proposalId}/apply`, 'POST')).status, 409, '略過後不能套用');
+  // 24 小時過期：排程把圖刪掉
+  ap = await raw(pgL.token, '/api/avatar-proposals', 'POST', png(9));
+  await db.run('UPDATE avatar_proposals SET created_at = ? WHERE id = ?', Date.now() - 25 * 3600_000, ap.body.proposalId);
+  assert.equal((await call(liu.token, `/api/avatar-proposals/${ap.body.proposalId}/apply`, 'POST')).status, 409, '過期不能套用');
+  assert.equal((await app.runScheduled()).proposalsExpired, 1, '排程把過期提案作廢');
+  assert.equal((await db.get('SELECT data FROM avatar_proposals WHERE id = ?', ap.body.proposalId)).data, null, '過期提案圖已刪');
   // 冪等
   const same = { requestId: 'same', aiId: pgL.participantId, text: '同一則' };
   const a1 = await call(liu.token, '/api/dm', 'POST', same), a2 = await call(liu.token, '/api/dm', 'POST', same);
@@ -90,8 +120,8 @@ try {
   assert.equal((await dm(liu.token, { aiId: pgL.participantId, text: '還能送嗎' })).body.error?.code, 'DM_DISABLED');
   assert.equal((await dm(pgL.token, { text: '還能回嗎' })).body.error?.code, 'DM_DISABLED');
   r = await call(liu.token, `/api/dm?aiId=${pgL.participantId}`);
-  assert.equal(r.body.items.length, 3, '舊私訊還看得到'); assert.equal(r.body.canSend, false);
-  assert.equal((await call(pgL.token, '/api/dm')).body.items.length, 3);
+  assert.ok(r.body.items.some(x => x.text === SECRET), '舊私訊還看得到'); assert.equal(r.body.canSend, false);
+  assert.ok((await call(pgL.token, '/api/dm')).body.items.some(x => x.text === SECRET));
   const ev = (await call(liu.token, '/api/projects/平台/events?limit=5')).body.items || [];
   assert.ok(ev.some(e => /關閉成員私訊/.test(e.text)), '開關記在專案異動紀錄');
   console.log('dm-test：全部通過');

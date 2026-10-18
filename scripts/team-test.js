@@ -227,6 +227,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(ob.includes('## 十四、私訊') && ob.includes('GET /api/dm') && ob.includes('私訊不能拿來授權 commit、push、部署'), 'C-270：接入設定有私訊一節');
     assert.ok(!ob.includes('${owner') && !ob.includes('${agent') && !ob.includes('${base'), '接入設定沒有沒替換的變數');
     assert.ok(ob.includes('新工作開新卡'), 'C-276：接入設定提醒新工作開新卡');
+    assert.ok(ob.includes('POST /api/avatar-proposals') && ob.includes('不要假裝'), 'C-272：接入設定有頭像提案');
     // C-251：本機跳不出選項的 AI 改用 [需確認]＋選項：或決策卡；授權仍在本機問
     assert.ok(ob.includes('不論你的本機介面跳不跳得出選項') && ob.includes('規格 3.9.1') && ob.includes('已發到網頁，請在網頁選') && ob.includes('照上面的規定仍在本機對話問'), 'C-265：要人選擇一律發到網頁，授權仍在本機');
     const upd = (await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: '行外' })).body;

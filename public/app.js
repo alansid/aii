@@ -2026,13 +2026,17 @@
         if (r.removeImg) await api('/api/me/avatar', { method: 'DELETE' });
         me = await api('/api/me', { method: 'PATCH', body: { avatar: r.text } });
       }
-      Object.assign(state.me, { avatar: me.avatar, avatarImg: me.avatarImg });
-      drawMe();
-      await loadParticipants();
-      renderMessages(false);
-      document.querySelectorAll('#set-avatar').forEach(el => { el.innerHTML = avatar(state.me); });
+      await afterAvatar(me);
       toast('頭像已更新');
     } catch (err) { toast(err.message); }
+  }
+  async function afterAvatar(me) {
+    Object.assign(state.me, { avatar: me.avatar, avatarImg: me.avatarImg });
+    drawMe();
+    await loadParticipants();
+    renderMessages(false);
+    document.querySelectorAll('#set-avatar').forEach(el => { el.innerHTML = avatar(state.me); });
+    const rv = $('#av-revert'); if (rv) api('/api/me/avatar/prev').then(d => { rv.hidden = !d.hasPrev; }).catch(() => {});
   }
 
   // ---------- 工作卡片（第一階段） ----------
@@ -2823,7 +2827,7 @@
         </div>`; }).join('')}</section>` : '';
     const dmSection = dms.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dms.length}</span><span class="muted small">只有你看得到</span></div>
-        ${dms.map(n => `<div class="sugg-row"><div class="sugg-main"><b>${esc(n.sender.name)} 回你了</b><span class="muted small">${esc(oneLine(n.preview, 80))} · ${agoText(n.createdAt)}</span></div>
+        ${dms.map(n => `<div class="sugg-row"><div class="sugg-main"><b>${esc(n.sender.name)} 回你了</b><span class="muted small">${esc(oneLine(String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${agoText(n.createdAt)}</span></div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}">打開私訊</button></div></div>`).join('')}</section>` : '';
     return dmSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }
@@ -3948,7 +3952,19 @@
     });
   }
   const dm = { aiId: null, after: 0, items: [], canSend: true, reason: '', timer: null, wb: null, waitUntil: 0 };
+  // C-272 頭像提案卡：現在 → 新的；只有被產圖的本人能按「套用為頭像」「不要」
+  const apUrls = new Map();
+  const apImg = id => { if (!apUrls.has(id)) apUrls.set(id, fetch(`/api/avatar-proposals/${encodeURIComponent(id)}/image`, { headers: { Authorization: `Bearer ${state.token}` } }).then(r => (r.ok ? r.blob() : null)).then(b => (b ? URL.createObjectURL(b) : null)).catch(() => null)); return apUrls.get(id); };
+  const AP_LABEL = { applied: '✓ 已套用為頭像', skipped: '已略過，圖已刪掉', expired: '已過期（24 小時沒處理），圖已刪掉' };
+  function apCard(d) {
+    const p = d.proposal, note = d.text.replace(/^\[頭像提案 [^\]]+\]\s*/, '');
+    const pending = p.status === 'pending', canAct = pending && state.me?.memberType === 'human';
+    return `<div class="ap-card${pending ? '' : ' done'}"><b>🖼 頭像提案</b>${note ? `<div class="ap-note">${esc(note)}</div>` : ''}
+      ${pending ? `<div class="ap-row"><span class="ap-av" title="現在">${avatar(state.me)}</span><span aria-hidden="true">→</span><span class="avatar human ap-new" data-ap-img="${esc(p.proposalId)}" role="img" aria-label="新的頭像"></span></div>` : ''}
+      ${canAct ? `<div class="ap-acts"><button type="button" class="btn small primary" data-ap-apply="${esc(p.proposalId)}">套用為頭像</button><button type="button" class="btn small" data-ap-skip="${esc(p.proposalId)}">不要</button><span class="muted small">${esc(fmtTime(p.expiresAt))} 前有效</span></div>` : `<span class="muted small">${AP_LABEL[p.status] || ''}</span>`}</div>`;
+  }
   function dmBubble(d) {
+    if (d.proposal) return `<div class="dm-b ai" id="dm-${esc(d.dmId)}">${apCard(d)}</div><div class="dm-t">${fmtTime(d.createdAt)}</div>`;
     const mine = d.from.participantId === meId();
     const cards = mine ? [] : [...new Set(String(d.text).match(/\bC-\d{3,}\b/g) || [])];
     const wb = dm.wb && dm.wb.id === d.dmId;
@@ -3969,6 +3985,7 @@
     ta.disabled = sb.disabled = !dm.canSend;
     $('#dm-note').textContent = dm.canSend ? '' : dm.reason;
     if (near) list.scrollTop = list.scrollHeight;
+    list.querySelectorAll('[data-ap-img]').forEach(el => apImg(el.dataset.apImg).then(u => { if (u) { el.style.backgroundImage = `url("${u}")`; el.classList.add('img-on'); } }));
     return true;
   }
   async function dmLoad() {
@@ -4014,6 +4031,18 @@
     const w = e.target.closest?.('[data-dm-wb]');
     if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }
     if (e.target.closest?.('[data-dm-wb-cancel]')) { dm.wb = null; return drawDm(); }
+    const ap = e.target.closest?.('[data-ap-apply], [data-ap-skip]');
+    if (ap) {
+      const apply = !!ap.dataset.apApply, id = ap.dataset.apApply || ap.dataset.apSkip;
+      ap.disabled = true;
+      try {
+        const r = await api(`/api/avatar-proposals/${encodeURIComponent(id)}/${apply ? 'apply' : 'skip'}`, { method: 'POST' });
+        for (const it of dm.items) if (it.proposal?.proposalId === id) it.proposal = r.proposal;
+        if (apply) { await afterAvatar(r.me); toast('已換成新頭像；個人設定可以換回上一張'); } else toast('已略過，圖已刪掉');
+        drawDm();
+      } catch (err) { ap.disabled = false; toast(err.message); }
+      return;
+    }
     if (e.target.closest?.('[data-dm-wb-go]')) {
       const t = $('#dm-wb-text')?.value.trim(), c = dm.wb?.card;
       if (!t || !c) return;
@@ -5567,7 +5596,13 @@
       input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
     });
   }
+  // C-272：換回上一張
+  document.addEventListener('click', async e => {
+    if (!e.target.closest?.('#av-revert')) return;
+    try { await afterAvatar(await api('/api/me/avatar/revert', { method: 'POST' })); toast('已換回上一張頭像'); } catch (err) { toast(err.message); }
+  });
   function openSettings(opts = {}) {
+    setTimeout(() => { const rv = $('#av-revert'); if (rv && state.me?.memberType === 'human') api('/api/me/avatar/prev').then(d => { rv.hidden = !d.hasPrev; }).catch(() => {}); }, 0); // C-272：只在打開設定時查
     const theme = store.get(THEME_KEY) || 'system';
     const body = openModal('個人設定', `
       <div class="field"><span class="field-label" id="theme-label">外觀</span>
@@ -5578,6 +5613,7 @@
         <span class="av-56" id="set-avatar">${avatar(state.me)}</span>
         <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
         <button class="btn small" type="button" data-change-avatar>更換</button>
+        <button class="link small" type="button" id="av-revert" hidden>換回上一張</button>
       </div>
       <div class="field"><span class="field-label">所屬專案</span>
         <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員與權限」調整，這裡只能看。</p>
