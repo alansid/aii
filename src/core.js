@@ -1777,8 +1777,16 @@ ${trial
     requireHuman(me);
     const limit = parseLimit(url, 100, 500);
     const people = await peopleMap(ctx);
-    const rows = await db.all('SELECT * FROM file_audit ORDER BY at DESC LIMIT ?', limit);
+    // C-255：全站稽核只給管理員；其他人只看自己專案的檔案紀錄＋自己做的動作
+    // （發到「全部專案」、沒有專案的檔案與別人被拒的上傳，只有管理員看得到）
+    const isAdmin = adminOf(people)?.id === me.id;
+    const mine = projectsOf(me).filter(pj => PROJECTS.includes(pj));
+    const rows = isAdmin
+      ? await db.all('SELECT * FROM file_audit ORDER BY at DESC LIMIT ?', limit)
+      : await db.all(`SELECT a.* FROM file_audit a LEFT JOIN files f ON f.id = a.file_id LEFT JOIN messages m ON m.id = f.message_id
+          WHERE a.actor_id = ?${mine.length ? ` OR m.project IN (${mine.map(() => '?').join(',')})` : ''} ORDER BY a.at DESC LIMIT ?`, me.id, ...mine, limit);
     return {
+      scope: isAdmin ? 'all' : 'mine',
       items: rows.map(a => ({
         auditId: a.id, action: a.action, at: a.at, fileId: a.file_id, name: a.name, size: a.size, sha256: a.sha256,
         declared: a.declared === null ? null : !!a.declared, detail: a.detail,
