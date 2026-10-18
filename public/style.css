@@ -2187,3 +2187,9 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 :root[data-theme="dark"] .cg-head { background: #172a4a; color: #bfd3ff; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cgrp { border-color: #2c4a7a; } :root:not([data-theme="light"]) .cg-head { background: #172a4a; color: #bfd3ff; } }
 @media (max-width: 640px) { .cg-head { font-size: .85rem; } }
+
+/* C-269 名字太長截斷加…，滑過看全名 */
+.an-name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-sheet .an-name { max-width: none; white-space: normal; }
+.nm-cut { max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.happened .lg-main b { overflow-wrap: anywhere; }

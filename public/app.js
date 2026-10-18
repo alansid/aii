@@ -830,7 +830,7 @@
     const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
     const body = m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m);
     return `<article class="${cls}" id="msg-${esc(m.messageId)}">
-      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author">${esc(shortOf(a.name))}</b>${tag ? leadPill(tag) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time>${ask}${unansweredTag(m)}</div>
+      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time>${ask}${unansweredTag(m)}</div>
       ${re}
       ${body}
       ${authHtml(m)}
@@ -3074,7 +3074,7 @@
   // 最近一次交接是誰交來的（紀錄新的在前）
   const prevHandName = d => { for (const l of d.log || []) { const m = /^交接 (.+?) → (.+?)：/.exec(l.text); if (m) return m[1]; } return ''; };
   // 短名：名字很長的 AI 用代號（RVVW），其他照原名
-  const shortOf = name => { const p = [...state.participants.values()].find(x => x.name === name); return p && p.memberType === 'ai' && name.length >= 10 && /[一-鿿]/.test(name) && p.shortCode ? p.shortCode : name; };
+  const shortOf = name => name; // C-269：一律顯示名字、不顯示代碼；太長的由 CSS 截斷加…，滑過看全名
   const actBtn = (act, label, desc, pri = false) => `<button type="button" class="act-btn${pri ? ' pri' : ''}" data-act="${act}"><b>${label}</b><span>${esc(desc)}</span></button>`;
   // 「現在要你做的」：依情況只露 1～2 顆大按鈕；不是你的卡不顯示
   function nowActsHtml(d) {
@@ -3893,7 +3893,7 @@
       .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
   }
   const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + x.now.cardId : ''}` : x.now.kind === 'idle' ? '待命' : '離線');
-  const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span>${esc(shortOf(x.mb.name))} <span class="an-st">${esc(aiNowText(x))}</span></button>`;
+  const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${esc(aiNowText(x))}</span></button>`;
   function drawAiNow() {
     const el = $('#ai-now');
     if (!el) return;
