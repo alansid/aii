@@ -7,6 +7,14 @@ compatibility_date = "2026-09-01"
 [placement]
 mode = "smart"
 
+# C-248：開 Workers Logs，500 的原因事後查得到（儀表板 Workers → aigile-switch → Logs，保留 3 天）。
+# 只留程式自己印的紀錄（console.error），不記每一次請求：量小、免費額度內，也不會把網址參數存進日誌
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false
+
 [assets]
 directory = "./public"
 binding = "ASSETS"

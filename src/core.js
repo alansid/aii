@@ -86,12 +86,20 @@ export function createApp({ db, docText, config = {}, storage = null }) {
   // 成員快取：同一請求共用，跨請求最多沿用 30 秒；成員資料有寫入時清除（C-245：原 10 秒，一天讀 4 千次）
   let peopleCache = { at: 0, map: null };
   const invalidatePeople = () => { peopleCache = { at: 0, map: null }; teamCache = { at: 0, data: null }; };
-  async function peopleMap(ctx) {
+  const loadPeople = async ctx => {
+    peopleCache = { at: Date.now(), map: new Map((await db.all('SELECT * FROM participants')).map(p => [p.id, p])) };
+    ctx.people = peopleCache.map;
+    ctx.peopleFresh = true;
+  };
+  // needIds：這次要查的成員。C-248：Cloudflare 同時跑好幾份程式，各有自己的快取；
+  // 別份剛新增的成員，這份的快取裡還沒有 → 缺人就重抓一次（每個請求最多一次）
+  async function peopleMap(ctx, needIds) {
     if (!ctx.people) {
-      if (!peopleCache.map || Date.now() - peopleCache.at > 30_000) {
-        peopleCache = { at: Date.now(), map: new Map((await db.all('SELECT * FROM participants')).map(p => [p.id, p])) };
-      }
-      ctx.people = peopleCache.map;
+      if (!peopleCache.map || Date.now() - peopleCache.at > 30_000) await loadPeople(ctx);
+      else ctx.people = peopleCache.map;
+    }
+    if (needIds && !ctx.peopleFresh) {
+      for (const id of needIds) if (id && !ctx.people.has(id)) { await loadPeople(ctx); break; }
     }
     return ctx.people;
   }
@@ -194,10 +202,10 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   async function serializeMessages(ctx, rows) {
     if (!rows.length) return [];
-    const people = await peopleMap(ctx);
     const recRows = await db.all(
       'SELECT message_id, participant_id FROM message_recipients WHERE message_id IN (SELECT value FROM json_each(?))',
       JSON.stringify(rows.map(m => m.id)));
+    const people = await peopleMap(ctx, [...rows.map(m => m.author_id), ...recRows.map(r => r.participant_id)]);
     const fileIds = rows.map(m => m.file_id).filter(Boolean);
     const fileRows = fileIds.length
       ? await db.all('SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(fileIds)) : [];
@@ -237,9 +245,9 @@ export function createApp({ db, docText, config = {}, storage = null }) {
 
   async function serializeNotifications(ctx, rows) {
     if (!rows.length) return [];
-    const people = await peopleMap(ctx);
     const msgs = new Map((await db.all('SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))',
       JSON.stringify(rows.map(n => n.message_id)))).map(m => [m.id, m]));
+    const people = await peopleMap(ctx, [...msgs.values()].map(m => m.author_id));
     return rows.map(n => {
       const m = msgs.get(n.message_id);
       const sender = people.get(m.author_id);
@@ -272,6 +280,7 @@ export function createApp({ db, docText, config = {}, storage = null }) {
       if (ownerStatus !== 'active') throw new ApiError(401, 'INVALID_TOKEN', '所屬人類已離開群組');
     }
     delete p.owner_status;
+    if (peopleCache.map && !peopleCache.map.has(p.id)) invalidatePeople(); // C-248：在別份程式剛註冊的新成員，這份快取還沒有他
     const now = Date.now();
     if (p.kind !== 'human' && p.token_expires_at && p.token_expires_at < now) { // 人類登入碼長期有效（C-202）
       throw new ApiError(401, 'TOKEN_EXPIRED', 'Token 已過期，請所屬人類在網頁重新產生');
@@ -1105,7 +1114,7 @@ ${trial
     const who = pj => (byLeader ? `${me.name}（${nameOf(pj)} leader）` : me.name);
     await loadProjects(true);
     ov = ov || await loadCrossRoles();
-    const people = await peopleMap(ctx);
+    const people = await peopleMap(ctx, changes.map(ch => String(ch.id)));
     const plan = [];
     for (const ch of changes) {
       const target = people.get(String(ch.id));
@@ -1164,14 +1173,14 @@ ${trial
     const body = await readJson(req);
     const impact = await applyMembership(ctx, me, [{ id: params.id, projects: body.projects }], { dryRun: body.dryRun === true });
     if (body.dryRun === true) return { dryRun: true, impact };
-    const people = await peopleMap(ctx);
+    const people = await peopleMap(ctx, [params.id]);
     return { ...identity(people.get(params.id), people), impact };
   });
   // C-219：改某位人類在各專案的角色。管理員全部、該專案 leader、本人只改自己
   route('PUT', '/api/participants/:id/project-roles', async ({ ctx, me, req, params }) => {
     requireHuman(me);
     await loadProjects(true); await loadLeaders(true); await loadProjectRoles(true);
-    const people = await peopleMap(ctx), admin = adminOf(people);
+    const people = await peopleMap(ctx, [params.id]), admin = adminOf(people);
     const target = people.get(params.id);
     if (!target || target.status !== 'active' || target.kind !== 'human') throw new ApiError(404, 'NOT_FOUND', '找不到這位人類成員（AI 的角色在「我的 AI」改）');
     const body = await readJson(req);
@@ -1512,7 +1521,7 @@ ${trial
     return (await readState(me.id)) || { state: null, updatedAt: null };
   });
   route('GET', '/api/participants/:id/state', async ({ ctx, me, params }) => {
-    const people = await peopleMap(ctx);
+    const people = await peopleMap(ctx, [params.id]);
     const target = people.get(params.id);
     if (!target || target.kind !== 'ai' || target.status !== 'active') throw new ApiError(404, 'NOT_FOUND', '找不到這位 AI');
     if (!canSeeState(me, target)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '這位 AI 不屬於你的專案，看不到它的工作記憶。');
@@ -1921,7 +1930,7 @@ ${trial
     }
     const decisions = asks.filter(m => !resolved.has(m.id)).slice(0, 30).map(m => ({
       messageId: m.id, sequence: m.seq, title: headline(m.text), createdAt: m.created_at, project: m.project || null, at: m.created_at,
-      author: identity(people.get(m.author_id), people), replyCount: replyCount.get(m.id) || 0,
+      author: identity(people.get(m.author_id) || { id: m.author_id, name: '?', kind: 'human' }, people), replyCount: replyCount.get(m.id) || 0,
     }));
 
     // 決策卡片等決策者的，一併列入「等你決定」（網頁只對指定的決策者顯示）
@@ -2058,7 +2067,7 @@ ${trial
       throw new ApiError(404, 'NOT_FOUND', '找不到此 API');
     } catch (e) {
       if (!(e instanceof ApiError)) {
-        console.error(e);
+        console.error(`500 ${req.method} ${url.pathname}`, e); // C-248：Workers Logs 看得出是哪支 API
         e = new ApiError(500, 'INTERNAL', '伺服器錯誤');
       }
       const headers = e.extra.retryAfter ? { 'Retry-After': String(e.extra.retryAfter) } : {};

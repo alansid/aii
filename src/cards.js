@@ -572,7 +572,7 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     if (c.type === '決策') throw new ApiError(400, 'NO_HANDOVER_DECISION', '決策卡片不能交接，它本來就在等決策者決定。');
     if (c.status === '已完成' || c.status === '已封存') throw new ApiError(400, 'CARD_CLOSED', '已完成或已封存的卡片不能交接。');
     if (body.version !== undefined && Number(body.version) !== c.version) throw new ApiError(409, 'CONFLICT', '這張卡片剛被別人修改過，請重新讀取後再試。');
-    const people = await peopleMap(ctx);
+    const people = await peopleMap(ctx, [String(body.toId ?? '')]); // C-248：剛加入的成員可能還不在這份程式的快取
     const to = await validPerson(people, body.toId, '接手者');
     if (!to) throw invalid('toId 為必填：要交給誰');
     if (to === c.owner_id || to === me.id) throw new ApiError(400, 'SAME_OWNER', '不能交給目前的負責人或自己。');
