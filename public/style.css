@@ -2322,3 +2322,12 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .av-head .avatar { width: 36px; height: 36px; }
 .av-head-txt { display: grid; min-width: 0; }
 .av-head-txt b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* C-279：右上「💬 私訊」圖示＋文字，未讀紅點在右上角 */
+.dm-btn { width: auto; height: 40px; min-height: 40px; padding: 0 14px 0 11px; gap: 6px; font-size: 14px; font-weight: 600; color: var(--text); }
+.dm-btn .dm-ico { font-size: 16px; line-height: 1; }
+.dm-top-btn { position: relative; display: inline-flex; align-items: center; gap: 5px; }
+.dm-top-btn .dm-ico { font-size: 15px; line-height: 1; }
+.dm-top-btn .badge { position: absolute; top: -5px; right: -5px; margin: 0; }
+.dm-top-btn .badge[hidden] { display: none; }
+@media (max-width: 374px) { .dm-top-btn .dm-btn-t { display: none; } .dm-top-btn { padding: 0 10px; } } /* 真的太窄才只留圖示 */

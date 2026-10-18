@@ -3981,7 +3981,7 @@
     document.querySelectorAll('[data-dm-toggle]').forEach(b => {
       b.hidden = !entry;
       const bd = b.querySelector('.badge'); bd.hidden = !n; bd.textContent = n > 99 ? '99+' : n;
-      b.setAttribute('aria-label', n ? `私訊我的 AI，${n} 則未讀` : '私訊我的 AI');
+      b.setAttribute('aria-label', n ? `私訊，${n} 則未讀` : '私訊'); // C-279
     });
     if (!state.dmBooted && entry) { // 重新整理後：面板原本開著就照樣打開（舊的私訊網址也會打開）
       state.dmBooted = true;
