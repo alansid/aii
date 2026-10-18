@@ -3976,8 +3976,12 @@
     document.querySelectorAll('[data-dm-side]').forEach(el => {
       el.hidden = !entry;
       if (entry && !on) { el.innerHTML = '<button type="button" class="dm-item dm-off" data-dm-enable><span class="dm-name">🔒 私訊我的 AI · 未開放</span></button>'; return; }
-      el.innerHTML = ais.length ? `<div class="dm-head">🔒 私訊</div>${dmSorted(ais).map(a => { const u = dmUnread(a.participantId), cur = state.page === 'dm' && state.dmAi === a.participantId;
-        return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"${cur ? ' aria-current="page"' : ''}><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name">${esc(a.name)}<span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; }).join('')}` : '';
+      // C-270 退回②：只列有對話的（含未讀、正在看的）最多 3 個，其他收進「＋ 私訊其他 AI」
+      const sorted = dmSorted(ais), has = a => dmSum().has(a.participantId) || dmUnread(a.participantId) || (state.page === 'dm' && state.dmAi === a.participantId);
+      const top = sorted.filter(has).slice(0, 3), rest = sorted.filter(a => !top.includes(a));
+      const item = a => { const u = dmUnread(a.participantId), cur = state.page === 'dm' && state.dmAi === a.participantId;
+        return `<button type="button" class="dm-item" data-dm-open="${esc(a.participantId)}" title="${esc(a.name)}"${cur ? ' aria-current="page"' : ''}><span class="an-dot ${aiKind(a.participantId)}" aria-hidden="true"></span><span class="dm-name"><span class="dm-nm">${esc(a.name)}</span><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; };
+      el.innerHTML = ais.length ? `<div class="dm-head">🔒 私訊</div>${top.map(item).join('')}${rest.length ? `<button type="button" class="dm-item dm-more" data-dm-more aria-expanded="${state.dmMore ? 'true' : 'false'}"><span class="dm-name">${state.dmMore ? '－ 收起' : '＋ 私訊其他 AI'}</span></button>${state.dmMore ? rest.map(item).join('') : ''}` : ''}` : '';
     });
     document.querySelectorAll('[data-dm-top]').forEach(b => { b.hidden = !entry; const n = ais.reduce((t, a) => t + dmUnread(a.participantId), 0); b.querySelector('.badge').hidden = !n; b.querySelector('.badge').textContent = n; });
     if (on && !(state.dmSumAt || {})[projectView()]) loadDmSummary();
@@ -3999,8 +4003,11 @@
       ${pending ? `<div class="ap-row"><span class="ap-av" title="現在">${avatar(state.me)}</span><span aria-hidden="true">→</span><span class="avatar human ap-new" data-ap-img="${esc(p.proposalId)}" role="img" aria-label="新的頭像"></span></div>` : ''}
       ${canAct ? `<div class="ap-acts"><button type="button" class="btn small primary" data-ap-apply="${esc(p.proposalId)}">套用為頭像</button><button type="button" class="btn small" data-ap-skip="${esc(p.proposalId)}">不要</button><span class="muted small">${esc(fmtTime(p.expiresAt))} 前有效</span></div>` : `<span class="muted small">${AP_LABEL[p.status] || ''}</span>`}</div>`;
   }
-  function dmBubble(d) {
-    if (d.proposal) return `<div class="dm-b ai" id="dm-${esc(d.dmId)}">${apCard(d)}</div><div class="dm-t">${fmtTime(d.createdAt)}</div>`;
+  // C-270 退回④：今天只寫時分；同一人連續幾則只在最後一則寫時間
+  const dmTime = iso => { const t = new Date(iso), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; return t.toDateString() === new Date().toDateString() ? hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`; };
+  function dmBubble(d, next) {
+    const showT = !next || next.from.participantId !== d.from.participantId || !!next.proposal || !!d.proposal;
+    if (d.proposal) return `<div class="dm-b ai" id="dm-${esc(d.dmId)}">${apCard(d)}</div><div class="dm-t">${dmTime(d.createdAt)}</div>`;
     const mine = d.from.participantId === meId();
     const cards = mine ? [] : [...new Set(String(d.text).match(/\bC-\d{3,}\b/g) || [])];
     const wb = dm.wb && dm.wb.id === d.dmId;
@@ -4008,13 +4015,13 @@
       ${cards.map(c => `<button type="button" class="dm-wb" data-dm-wb="${esc(d.dmId)}" data-card-id="${c}">↗ 寫回 ${c}</button>`).join(' ')}
       ${wb ? `<div class="dm-wb-box"><label class="small">寫回 ${esc(dm.wb.card)} 的留言（發到群組時標「來自私訊」，可以先改字）<textarea id="dm-wb-text" rows="3" maxlength="1900">${esc(d.text)}</textarea></label>
         <div class="row end"><button type="button" class="btn small" data-dm-wb-cancel>取消</button><button type="button" class="btn small primary" data-dm-wb-go>寫回</button></div></div>` : ''}
-      </div><div class="dm-t ${mine ? 'me' : ''}">${fmtTime(d.createdAt)}</div>`;
+      </div>${showT ? `<div class="dm-t ${mine ? 'me' : ''}">${dmTime(d.createdAt)}</div>` : ''}`;
   }
   function drawDm() {
     const list = $('#dm-list');
     if (!list) return false;
     const near = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-    list.innerHTML = dm.items.map(dmBubble).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
+    list.innerHTML = dm.items.map((d, i) => dmBubble(d, dm.items[i + 1])).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
     const mb = state.team?.members.find(m => m.participantId === dm.aiId), now = mb ? aiNowOf(mb) : { kind: 'off' };
     $('#dm-status').textContent = now.kind === 'work' ? `在做${now.cardId ? ' ' + now.cardId : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '待命，有新私訊會叫醒它' : '目前離線，上線後會看到';
     const ta = $('#dm-input'), sb = $('#dm-send');
@@ -4033,9 +4040,20 @@
     state.dmSummary.set(dm.aiId, { aiId: dm.aiId, fromMe: last.from.participantId === meId(), text: last.proposal ? (pend ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）') : String(last.text).slice(0, 80), proposalPending: pend, createdAt: last.createdAt });
     return true;
   }
-  async function dmLoad() {
-    const d = await api(`/api/dm?aiId=${encodeURIComponent(dm.aiId)}&after=${dm.after}`);
-    dm.items.push(...d.items); dm.after = d.nextAfter; dm.canSend = d.canSend; dm.reason = d.reason || '';
+  // C-270 退回①：同時只跑一個（開頁、計時器、送出後都會叫），換對話就作廢舊的；依 dmId 去重
+  function dmLoad() {
+    if (dm.loading && dm.loading.aiId === dm.aiId) return dm.loading.p;
+    const aiId = dm.aiId, gen = dm.gen;
+    const p = dmLoadOnce(aiId, gen).finally(() => { if (dm.loading?.p === p) dm.loading = null; });
+    dm.loading = { aiId, p };
+    return p;
+  }
+  async function dmLoadOnce(aiId, gen) {
+    const d = await api(`/api/dm?aiId=${encodeURIComponent(aiId)}&after=${dm.after}`);
+    if (gen !== dm.gen || aiId !== dm.aiId) return { items: [] }; // 這段對話已經換掉或重畫了
+    const seen = new Set(dm.items.map(x => x.dmId));
+    d.items = d.items.filter(x => !seen.has(x.dmId));
+    dm.items.push(...d.items); dm.after = Math.max(dm.after, d.nextAfter || 0); dm.canSend = d.canSend; dm.reason = d.reason || '';
     if (dmSumFromItems() && d.items.length) drawDmSide();
     const before = (work.notes || []).length;
     work.notes = (work.notes || []).filter(n => !(n.dm && n.sender.participantId === dm.aiId)); // 伺服器已標已讀
@@ -4065,19 +4083,26 @@
     const ai = state.dmAi && ais.find(a => a.participantId === state.dmAi);
     drawDmSide();
     if (!ai) { state.dmAi = null; box.innerHTML = dmListHtml(ais); return; }
-    Object.assign(dm, { aiId: ai.participantId, after: 0, items: [], wb: null });
+    const gen = (dm.gen || 0) + 1; // 重畫一次就作廢上一次還沒回來的載入與計時器
+    Object.assign(dm, { aiId: ai.participantId, after: 0, items: [], wb: null, gen, loading: null });
     box.innerHTML = `<div class="dm-page">
-      <div class="dm-top"><button type="button" class="icon-btn dm-back" data-dm-back aria-label="回私訊清單">‹</button>${avatar(ai)}<div class="dm-who"><b>${esc(ai.name)}</b><span class="muted small">🔒 只有你和它看得到 · <span id="dm-status" role="status"></span></span></div></div>
-      <div class="dm-lock small"><b>定案的事請寫回卡片</b>，團隊才看得到；其他人（含管理員畫面）看不到私訊的內容和數量。</div>
+      <div class="dm-top"><button type="button" class="icon-btn dm-back" data-dm-back aria-label="回私訊清單">‹</button>${avatar(ai)}<div class="dm-who"><b>${esc(ai.name)}</b><span class="muted small">🔒 只有你和它看得到 · <span id="dm-status" role="status"></span></span><span class="muted small dm-tip">定案的事請寫回卡片，團隊才看得到</span></div></div>
       <div class="dm-list" id="dm-list" aria-live="polite"></div>
       <div class="dm-comp"><textarea id="dm-input" rows="2" maxlength="2000" placeholder="${esc(`私訊 ${ai.name}…`)}" aria-label="私訊內容"></textarea><button class="btn primary send" type="button" id="dm-send">送出</button></div>
       <p class="muted small" id="dm-note"></p></div>`;
     try { await dmLoad(); } catch (err) { return toast(err.message); }
-    drawDm(); const l0 = $('#dm-list'); if (l0) l0.scrollTop = l0.scrollHeight;
+    if (gen !== dm.gen) return; // 期間又重畫了，交給新的那次
+    drawDm(); const l0 = $('#dm-list');
+    if (l0) { // 直接開網址時頁面可能還沒顯示（高度 0）：等它有高度再捲到最新；使用者自己往上捲就不再拉回
+      l0.scrollTop = l0.scrollHeight; let stick = true;
+      l0.addEventListener('scroll', () => { stick = l0.scrollHeight - l0.scrollTop - l0.clientHeight < 80; }, { passive: true });
+      if (window.ResizeObserver) new ResizeObserver(() => { if (stick) l0.scrollTop = l0.scrollHeight; }).observe(l0);
+    }
     if (isDesktop()) $('#dm-input')?.focus();
     if (state.dmPrefill) { const ta = $('#dm-input'); if (ta && dm.canSend) { ta.value = state.dmPrefill; ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } state.dmPrefill = null; } // C-272：從個人設定來的預填
     // 對話開著才每 10 秒看一次新私訊；關掉就停
-    dm.timer = setInterval(async () => { if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
+    clearInterval(dm.timer); // 只留一個計時器
+    dm.timer = setInterval(async () => { if (gen !== dm.gen) return; if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
   }
   async function dmSend() {
     const ta = $('#dm-input'), text = ta.value.trim();
@@ -4087,6 +4112,7 @@
       await api('/api/dm', { method: 'POST', body: { aiId: dm.aiId, text, requestId: newRequestId(), project: projectView() } });
       dm.waitUntil = Date.now() + 30 * 60_000; // 等它回：30 分鐘內收件匣每分鐘看一次
       ta.value = '';
+      if (dm.loading) await dm.loading.p.catch(() => {}); // 還在跑的那次可能沒包含剛送的，等它跑完再載一次
       await dmLoad(); drawDm();
       const l = $('#dm-list'); if (l) l.scrollTop = l.scrollHeight;
     } catch (err) { toast(err.message); } finally { const sb = $('#dm-send'); if (sb) sb.disabled = !dm.canSend; }
@@ -4094,6 +4120,7 @@
   document.addEventListener('click', async e => {
     const o = e.target.closest?.('[data-dm-open]');
     if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen); }
+    if (e.target.closest?.('[data-dm-more]')) { state.dmMore = !state.dmMore; return drawDmSide(); }
     const en = e.target.closest?.('[data-dm-enable]');
     if (en) { if (en.closest('#sheet')) closeSheet(false); if (en.closest('#modal-root')) closeModal(); return dmEnable(); }
     if (e.target.closest?.('#dm-send')) return dmSend();
