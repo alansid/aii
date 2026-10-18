@@ -4415,7 +4415,8 @@
         </div>
         <div class="row actions">
           ${!active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
-            : expired ? `<button class="btn primary" type="button" data-act="reissue" data-id="${id}">重發 Token</button>`
+            : expired ? `<button class="btn primary" type="button" data-act="reissue" data-id="${id}">重發 Token</button>
+               <button class="btn" type="button" data-act="edit" data-id="${id}">編輯</button>`
             : `<button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button>
                <button class="btn" type="button" data-act="copy" data-id="${id}">複製完整接入設定</button>
                <button class="btn" type="button" data-act="edit" data-id="${id}">編輯</button>
@@ -4703,7 +4704,7 @@
         loadParticipants().then(() => renderMessages(false)).catch(() => {});
         if (state.page === 'myai' || state.page === 'team') closeModal(); // 頁面模式：先關表單再重畫清單
         await openMyAi();
-        toast(editing ? '已儲存' : '已建立。按「只複製 Token」或在詳細設定裡複製完整接入設定給你的 AI');
+        toast(editing ? '已儲存' : '已建立。按卡片上的「只複製 Token」或「複製完整接入設定」給你的 AI');
       } catch (err) { body.querySelector('#ai-error').textContent = err.message; }
     });
   }
