@@ -1882,7 +1882,8 @@
 
   // 更換頭像彈窗（疊在目前彈窗上）：上傳圖片並裁切，或用文字／表情符號
   // cur：{ imgUrl, text }；回傳 { kind: 'img', blob } | { kind: 'text', text, removeImg } | null（取消）
-  function avatarDialog({ title, isAi, fallback, cur }) {
+  // aiRow：{ askLabel, prevPath }（C-272 退回①②）；按了回傳 { kind: 'ask' } 或 { kind: 'revert' }
+  function avatarDialog({ title, isAi, fallback, cur, aiRow }) {
     return new Promise(resolve => {
       const prev = document.activeElement;
       const host = document.createElement('div');
@@ -1896,6 +1897,7 @@
             <div class="av-small"><span class="av-prev s32 ${shape}"></span><span class="muted small">訊息</span></div>
             <div class="av-small"><span class="av-prev s24 ${shape}"></span><span class="muted small">清單</span></div>
           </div>
+          ${aiRow ? `<div class="av-ai-row">${aiRow.askLabel ? `<button type="button" class="btn small" data-av-ask>🖼 ${esc(aiRow.askLabel)}</button>` : ''}<button type="button" class="link small" data-av-revert hidden>換回上一張</button></div>` : ''}
           <div class="seg-scope full" role="group" aria-label="頭像類型">
             <button type="button" data-mode="img">上傳圖片</button>
             <button type="button" data-mode="text">文字／表情符號</button>
@@ -1924,6 +1926,7 @@
       });
       document.body.append(host);
       const $ = s => host.querySelector(s);
+      if (aiRow?.prevPath) api(aiRow.prevPath).then(d => { const b = $('[data-av-revert]'); if (b) b.hidden = !d.hasPrev; }).catch(() => {});
       const st = { mode: cur.imgUrl || !cur.text ? 'img' : 'text', img: null, w: 0, h: 0, zoom: 1, ox: 0, oy: 0, removed: false };
       const D = 200, BOX = 240;
       const geom = () => {
@@ -2006,6 +2009,8 @@
           if (st.mode === 'img') return done({ kind: 'keep' });
           return done({ kind: 'text', text, removeImg: !!cur.imgUrl });
         }
+        if (e.target.closest('[data-av-ask]')) return done({ kind: 'ask' });
+        if (e.target.closest('[data-av-revert]')) return done({ kind: 'revert' });
         if (e.target.closest('[data-close]')) done(null);
       });
       overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
@@ -2017,8 +2022,12 @@
   // 套用到自己
   async function changeMyAvatar() {
     const cur = { text: state.me.avatar || '', imgUrl: state.me.avatarImg ? await avatarUrl(meId(), state.me.avatarImg) : null };
-    const r = await avatarDialog({ title: '更換頭像', isAi: state.me.memberType === 'ai', fallback: [...(state.me.name || '人')][0], cur });
+    const human = state.me.memberType === 'human';
+    const aiRow = human ? { askLabel: myAisForAvatar().length ? '請我的 AI 幫我做' : '', prevPath: '/api/me/avatar/prev' } : null;
+    const r = await avatarDialog({ title: '更換頭像', isAi: state.me.memberType === 'ai', fallback: [...(state.me.name || '人')][0], cur, aiRow });
     if (!r || r.kind === 'keep') return;
+    if (r.kind === 'ask') return askAvatar(myAisForAvatar(), '幫我做一個頭像：');
+    if (r.kind === 'revert') { try { await afterAvatar(await api('/api/me/avatar/revert', { method: 'POST' })); toast('已換回上一張頭像'); } catch (err) { toast(err.message); } return; }
     try {
       let me;
       if (r.kind === 'img') {
@@ -2039,7 +2048,6 @@
     await loadParticipants();
     renderMessages(false);
     document.querySelectorAll('#set-avatar').forEach(el => { el.innerHTML = avatar(state.me); });
-    const rv = $('#av-revert'); if (rv) api('/api/me/avatar/prev').then(d => { rv.hidden = !d.hasPrev; }).catch(() => {});
   }
 
   // ---------- 工作卡片（第一階段） ----------
@@ -3999,8 +4007,9 @@
   function apCard(d) {
     const p = d.proposal, note = d.text.replace(/^\[頭像提案 [^\]]+\]\s*/, '');
     const pending = p.status === 'pending', canAct = pending && state.me?.memberType === 'human';
-    return `<div class="ap-card${pending ? '' : ' done'}"><b>🖼 頭像提案</b>${note ? `<div class="ap-note">${esc(note)}</div>` : ''}
-      ${pending ? `<div class="ap-row"><span class="ap-av" title="現在">${avatar(state.me)}</span><span aria-hidden="true">→</span><span class="avatar human ap-new" data-ap-img="${esc(p.proposalId)}" role="img" aria-label="新的頭像"></span></div>` : ''}
+    const who = p.forSelf ? (state.participants.get(d.from.participantId) || { ...d.from, memberType: 'ai' }) : state.me;
+    return `<div class="ap-card${pending ? '' : ' done'}"><b>🖼 ${p.forSelf ? `${esc(d.from.name)} 自己的頭像提案` : '頭像提案'}</b>${note ? `<div class="ap-note">${esc(note)}</div>` : ''}
+      ${pending ? `<div class="ap-row"><span class="ap-av" title="現在">${avatar(who)}</span><span aria-hidden="true">→</span><span class="avatar ${p.forSelf ? 'ai' : 'human'} ap-new" data-ap-img="${esc(p.proposalId)}" role="img" aria-label="新的頭像"></span></div>` : ''}
       ${canAct ? `<div class="ap-acts"><button type="button" class="btn small primary" data-ap-apply="${esc(p.proposalId)}">套用為頭像</button><button type="button" class="btn small" data-ap-skip="${esc(p.proposalId)}">不要</button><span class="muted small">${esc(fmtTime(p.expiresAt))} 前有效</span></div>` : `<span class="muted small">${AP_LABEL[p.status] || ''}</span>`}</div>`;
   }
   // C-270 退回④：今天只寫時分；同一人連續幾則只在最後一則寫時間
@@ -4136,7 +4145,8 @@
         const r = await api(`/api/avatar-proposals/${encodeURIComponent(id)}/${apply ? 'apply' : 'skip'}`, { method: 'POST' });
         for (const it of dm.items) if (it.proposal?.proposalId === id) it.proposal = r.proposal;
         if (dmSumFromItems()) drawDmSide();
-        if (apply) { await afterAvatar(r.me); toast('已換成新頭像；個人設定可以換回上一張'); } else toast('已略過，圖已刪掉');
+        if (apply && r.ai) { await loadParticipants(); renderMessages(false); drawDmSide(); const top = document.querySelector('.dm-top .avatar'); if (top) top.outerHTML = avatar(state.participants.get(r.ai.participantId) || r.ai); toast(`已換成 ${r.ai.name} 的新頭像；我的 AI › 編輯 › 頭像可以換回上一張`); }
+        else if (apply) { await afterAvatar(r.me); toast('已換成新頭像；更換頭像裡可以換回上一張'); } else toast('已略過，圖已刪掉');
         drawDm();
       } catch (err) { ap.disabled = false; toast(err.message); }
       return;
@@ -4634,8 +4644,21 @@
     };
     body.querySelector('#ai-avatar-change').onclick = async () => {
       const cur = { text: form.avatar.value, imgUrl: img.state === 'new' ? img.url : img.state === 'existing' ? await avatarUrl(ai.participantId, ai.avatarImg) : null };
-      const r = await avatarDialog({ title: '更換 AI 頭像', isAi: true, fallback: autoText(), cur });
+      const aiRow = editing ? { askLabel: '請它幫自己做', prevPath: `/api/my-ais/${encodeURIComponent(ai.participantId)}/avatar/prev` } : null;
+      const r = await avatarDialog({ title: '更換 AI 頭像', isAi: true, fallback: autoText(), cur, aiRow });
       if (!r || r.kind === 'keep') return;
+      if (r.kind === 'ask') return askAvatar([state.participants.get(ai.participantId) || ai], '幫你自己做一個頭像：');
+      if (r.kind === 'revert') {
+        try {
+          const v = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/avatar/revert`, { method: 'POST' });
+          Object.assign(ai, { avatar: v.avatar, avatarImg: v.avatarImg });
+          form.avatar.value = v.avatar || '';
+          Object.assign(img, { state: v.avatarImg ? 'existing' : 'none', blob: null, url: null });
+          preview(); await loadParticipants(); renderMessages(false);
+          toast('已換回上一張頭像');
+        } catch (err) { toast(err.message); }
+        return;
+      }
       if (r.kind === 'img') Object.assign(img, { state: 'new', blob: r.blob, url: r.url });
       else { form.avatar.value = r.text; Object.assign(img, { state: 'none', blob: null, url: null }); }
       preview();
@@ -5695,29 +5718,22 @@
       input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
     });
   }
-  // C-272：個人設定「請我的 AI 幫我做」→ 選一個自己的 AI → 打開私訊、預填「幫我做一個頭像：」；私訊沒開走開啟說明
-  document.addEventListener('click', e => {
-    if (!e.target.closest?.('#av-ask-ai')) return;
+  // C-272：「請我的 AI 幫我做」「請它幫自己做」→ 打開私訊、預填開頭；私訊沒開走開啟說明
+  const myAisForAvatar = () => [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled');
+  function askAvatar(ais, prefill) {
     closeModal();
     const pv = projectView();
-    const mine = [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled');
-    const cands = mine.map(a => ({ a, pj: [pv, ...(a.projects || [])].find(p => PROJECTS.includes(p) && (a.projects || []).includes(p) && dmOn(p)) })).filter(x => x.pj);
+    const cands = ais.map(a => ({ a, pj: [pv, ...(a.projects || [])].find(p => PROJECTS.includes(p) && (a.projects || []).includes(p) && dmOn(p)) })).filter(x => x.pj);
     if (!cands.length) {
       if (PROJECTS.includes(pv) && dmEntry()) return dmEnable();
-      return toast('你的 AI 所在的專案都還沒開放私訊；請管理員或 leader 在「成員與權限 → 專案 → ⋯」打開。');
+      return toast(`${ais.length === 1 ? ais[0].name + ' ' : '你的 AI '}所在的專案還沒開放私訊；請管理員或 leader 在「成員與權限 → 專案 → ⋯」打開。`);
     }
-    const go = ({ a, pj }) => { state.dmPrefill = '幫我做一個頭像：'; state.dmAi = a.participantId; return pj !== pv ? setProjectView(pj, 'dm') : openDm(a.participantId); };
+    const go = ({ a, pj }) => { state.dmPrefill = prefill; state.dmAi = a.participantId; return pj !== pv ? setProjectView(pj, 'dm') : openDm(a.participantId); };
     if (cands.length === 1) return go(cands[0]);
     const body = openModal('請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: '會打開跟它的私訊，幫你先打好開頭' });
     body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });
-  });
-  // C-272：換回上一張
-  document.addEventListener('click', async e => {
-    if (!e.target.closest?.('#av-revert')) return;
-    try { await afterAvatar(await api('/api/me/avatar/revert', { method: 'POST' })); toast('已換回上一張頭像'); } catch (err) { toast(err.message); }
-  });
+  }
   function openSettings(opts = {}) {
-    setTimeout(() => { const rv = $('#av-revert'); if (rv && state.me?.memberType === 'human') api('/api/me/avatar/prev').then(d => { rv.hidden = !d.hasPrev; }).catch(() => {}); }, 0); // C-272：只在打開設定時查
     const theme = store.get(THEME_KEY) || 'system';
     const body = openModal('個人設定', `
       <div class="field"><span class="field-label" id="theme-label">外觀</span>
@@ -5728,8 +5744,6 @@
         <span class="av-56" id="set-avatar">${avatar(state.me)}</span>
         <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
         <button class="btn small" type="button" data-change-avatar>更換</button>
-        <button class="link small" type="button" id="av-revert" hidden>換回上一張</button>
-        ${state.me.memberType === 'human' && [...state.participants.values()].some(isMyAi) ? '<button class="link small" type="button" id="av-ask-ai">請我的 AI 幫我做</button>' : ''}
       </div>
       <div class="field"><span class="field-label">所屬專案</span>
         <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員與權限」調整，這裡只能看。</p>

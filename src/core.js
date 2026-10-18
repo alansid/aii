@@ -923,7 +923,7 @@ ${roster}
 - 私訊裡定案的事（要做、改規格、選方案）：回覆時寫出卡號並提醒 ${owner.name} 按「↗ 寫回 C-xxx」，或問他要不要你寫回卡片，團隊才看得到。
 - 私訊不能拿來授權 commit、push、部署、刪除資料；這些照第九節，仍在本機對話問。
 - 專案沒開放私訊時回 403 DM_DISABLED：改在本機對話或群組回覆。
-- ${owner.name} 請你換頭像（C-272）：產生 256×256 的 png／jpg／webp（200 KB 內），POST /api/avatar-proposals?note=一句說明（本文直接放圖片，Content-Type 用圖片類型）；平台會在私訊放一張提案卡，${owner.name} 按「套用」才會換，你不能直接改人類的頭像。你的工具不能產圖，就直接說做不到，不要假裝。
+- ${owner.name} 請你換頭像（C-272）：產生 256×256 的 png／jpg／webp（200 KB 內），POST /api/avatar-proposals?note=一句說明（本文直接放圖片，Content-Type 用圖片類型）；平台會在私訊放一張提案卡，${owner.name} 按「套用」才會換，你不能直接改人類的頭像。要換你自己的頭像也一樣：POST /api/avatar-proposals?for=self&note=一句說明，${owner.name} 套用才換。你的工具不能產圖，就直接說做不到，不要假裝。
 
 先看第零節：重新接上就照第零節做，不重新簽到；第一次接入才往下。
 ${trial
@@ -995,8 +995,10 @@ ${trial
     await db.run('UPDATE participants SET avatar_v = 0, updated_at = ? WHERE id = ?', nowIso(), target.id);
     return identity(await db.get('SELECT * FROM participants WHERE id = ?', target.id), await peopleMap(ctx));
   }
-  route('PUT', '/api/me/avatar', ({ me, req, ctx }) => putAvatar(ctx, me, req));
-  route('DELETE', '/api/me/avatar', ({ me, ctx }) => deleteAvatar(ctx, me));
+  // C-272 退回②：AI 不能直接換自己的頭像圖片，要走提案（?for=self）由所屬人類套用
+  const noAiImg = me => { if (me.kind === 'ai') throw new ApiError(403, 'FORBIDDEN', 'AI 不能直接換頭像圖片；請用 POST /api/avatar-proposals?for=self 提案，所屬人類套用才換。'); };
+  route('PUT', '/api/me/avatar', ({ me, req, ctx }) => { noAiImg(me); return putAvatar(ctx, me, req); });
+  route('DELETE', '/api/me/avatar', ({ me, ctx }) => { noAiImg(me); return deleteAvatar(ctx, me); });
   route('PUT', '/api/my-ais/:id/avatar', async ({ me, req, params, ctx }) => { requireHuman(me); return putAvatar(ctx, await myAi(me, params.id), req); });
   route('DELETE', '/api/my-ais/:id/avatar', async ({ me, params, ctx }) => { requireHuman(me); return deleteAvatar(ctx, await myAi(me, params.id)); });
   // 讀圖：網址帶版本號（?v=），瀏覽器可長期快取，不會每次輪詢都讀資料庫
@@ -1571,17 +1573,21 @@ ${trial
 
   // ---------- C-272 AI 產頭像、人類按「套用」才換 ----------
   const AP_TTL = 24 * 3600_000;
-  const AP_RE = /^\[頭像提案 (ap_[A-Za-z0-9_-]+)\]/;
+  // 提案編號 ap_ 是給所屬人類的、aps_ 是 AI 給自己的（C-272 退回②，不另加欄位）
+  const AP_RE = /^\[頭像提案 (aps?_[A-Za-z0-9_-]+)\]/;
+  const apSelf = p => String(p.id).startsWith('aps_');
+  const apTarget = p => (apSelf(p) ? p.ai_id : p.human_id);
   const apStatus = p => (p.status === 'pending' && Date.now() - p.created_at > AP_TTL ? 'expired' : p.status);
-  const apView = p => ({ proposalId: p.id, status: apStatus(p), expiresAt: iso(p.created_at + AP_TTL), decidedAt: p.decided_at ? iso(p.decided_at) : null });
+  const apView = p => ({ proposalId: p.id, status: apStatus(p), forSelf: apSelf(p), expiresAt: iso(p.created_at + AP_TTL), decidedAt: p.decided_at ? iso(p.decided_at) : null });
   async function apOf(me, id, { forHuman = false } = {}) {
     const p = await db.get('SELECT id, human_id, ai_id, status, created_at, decided_at, mime FROM avatar_proposals WHERE id = ?', id);
     if (!p || (p.human_id !== me.id && p.ai_id !== me.id)) throw new ApiError(404, 'NOT_FOUND', '找不到這個頭像提案');
     if (forHuman && p.human_id !== me.id) throw new ApiError(403, 'FORBIDDEN', '只有被產圖的人能套用或略過。');
     return p;
   }
-  // AI 上傳提案圖（本文是圖片）：只能給所屬人類；平台在私訊放一張提案卡
+  // AI 上傳提案圖（本文是圖片）：給所屬人類，或 ?for=self 給自己；都由所屬人類在私訊按「套用」才換
   route('POST', '/api/avatar-proposals', async ({ ctx, me, req, url }) => {
+    const forSelf = url.searchParams.get('for') === 'self';
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 能提頭像提案；人類請直接在個人設定換頭像。');
     const { human, ai } = await dmPair(ctx, me);
     const bytes = new Uint8Array(await req.arrayBuffer());
@@ -1592,11 +1598,11 @@ ${trial
     const open = await dmProjects(human, ai);
     if (!open.length) throw new ApiError(403, 'DM_DISABLED', '這個專案沒有開放私訊，頭像提案只能放在私訊裡。');
     const note = String(url.searchParams.get('note') || '').trim().slice(0, 200);
-    const id = randId('ap'), now = Date.now();
+    const id = randId(forSelf ? 'aps' : 'ap'), now = Date.now();
     await db.run('INSERT INTO avatar_proposals (id, human_id, ai_id, mime, data, status, created_at) VALUES (?,?,?,?,?,?,?)', id, human.id, ai.id, mime, bytes, 'pending', now);
     const dmId = await writeDm({ human, ai, from: ai.id, text: `[頭像提案 ${id}]${note ? ' ' + note : ''}`, project: open[0], requestId: 'avprop_' + id });
     await db.run('UPDATE avatar_proposals SET dm_id = ? WHERE id = ?', dmId, id);
-    return { __status: 201, proposalId: id, dmId, expiresAt: iso(now + AP_TTL) };
+    return { __status: 201, proposalId: id, forSelf, dmId, expiresAt: iso(now + AP_TTL) };
   });
   route('GET', '/api/avatar-proposals/:id/image', async ({ me, params }) => {
     const p = await apOf(me, params.id);
@@ -1609,17 +1615,22 @@ ${trial
   route('POST', '/api/avatar-proposals/:id/apply', async ({ ctx, me, params }) => {
     const p = await apOf(me, params.id, { forHuman: true });
     if (apStatus(p) !== 'pending') throw new ApiError(409, 'PROPOSAL_CLOSED', '這個提案已處理或超過 24 小時。');
+    const tid = apTarget(p);
+    if (apSelf(p)) await myAi(me, tid); // AI 已不屬於你（移交、刪除）就不能換
     const row = await db.get('SELECT data FROM avatar_proposals WHERE id = ?', p.id);
     const now = Date.now(), ts = nowIso();
-    const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', me.id);
+    const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', tid);
     await db.batch([
-      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + me.id, cur ? cur.mime : 'none', cur ? cur.data : new Uint8Array(0), ts]],
-      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [me.id, p.mime, row.data, ts]],
-      ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [now, ts, me.id]],
+      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + tid, cur ? cur.mime : 'none', cur ? cur.data : new Uint8Array(0), ts]],
+      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [tid, p.mime, row.data, ts]],
+      ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [now, ts, tid]],
       ["UPDATE avatar_proposals SET status = 'applied', data = NULL, decided_at = ? WHERE id = ?", [now, p.id]],
     ]);
     invalidatePeople();
-    return { proposal: apView({ ...p, status: 'applied', decided_at: now }), me: identity(await db.get('SELECT * FROM participants WHERE id = ?', me.id), await peopleMap(ctx)) };
+    const people = await peopleMap(ctx);
+    const out = { proposal: apView({ ...p, status: 'applied', decided_at: now }), me: identity(await db.get('SELECT * FROM participants WHERE id = ?', me.id), people) };
+    if (apSelf(p)) out.ai = identity(await db.get('SELECT * FROM participants WHERE id = ?', tid), people);
+    return out;
   });
   route('POST', '/api/avatar-proposals/:id/skip', async ({ me, params }) => {
     const p = await apOf(me, params.id, { forHuman: true });
@@ -1629,19 +1640,24 @@ ${trial
     return { proposal: apView({ ...p, status: 'skipped', decided_at: now }) };
   });
   // 換回上一張（套用提案前的頭像）
-  route('GET', '/api/me/avatar/prev', async ({ me }) => ({ hasPrev: !!(await db.get('SELECT 1 AS x FROM avatars WHERE participant_id = ?', 'prev:' + me.id)) }));
-  route('POST', '/api/me/avatar/revert', async ({ ctx, me }) => {
-    const prev = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', 'prev:' + me.id);
+  const avatarHasPrev = async id => ({ hasPrev: !!(await db.get('SELECT 1 AS x FROM avatars WHERE participant_id = ?', 'prev:' + id)) });
+  async function avatarRevert(ctx, id) {
+    const prev = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', 'prev:' + id);
     if (!prev) throw new ApiError(404, 'NOT_FOUND', '沒有上一張頭像可以換回。');
-    const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', me.id);
+    const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', id);
     const ts = nowIso(), stmts = [];
-    stmts.push(cur ? ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + me.id, cur.mime, cur.data, ts]] : ['DELETE FROM avatars WHERE participant_id = ?', ['prev:' + me.id]]);
-    if (prev.mime === 'none') stmts.push(['DELETE FROM avatars WHERE participant_id = ?', [me.id]], ['UPDATE participants SET avatar_v = 0, updated_at = ? WHERE id = ?', [ts, me.id]]);
-    else stmts.push(['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [me.id, prev.mime, prev.data, ts]], ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [Date.now(), ts, me.id]]);
+    stmts.push(cur ? ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + id, cur.mime, cur.data, ts]] : ['DELETE FROM avatars WHERE participant_id = ?', ['prev:' + id]]);
+    if (prev.mime === 'none') stmts.push(['DELETE FROM avatars WHERE participant_id = ?', [id]], ['UPDATE participants SET avatar_v = 0, updated_at = ? WHERE id = ?', [ts, id]]);
+    else stmts.push(['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [id, prev.mime, prev.data, ts]], ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [Date.now(), ts, id]]);
     await db.batch(stmts);
     invalidatePeople();
-    return identity(await db.get('SELECT * FROM participants WHERE id = ?', me.id), await peopleMap(ctx));
-  });
+    return identity(await db.get('SELECT * FROM participants WHERE id = ?', id), await peopleMap(ctx));
+  }
+  route('GET', '/api/me/avatar/prev', ({ me }) => avatarHasPrev(me.id));
+  route('POST', '/api/me/avatar/revert', ({ ctx, me }) => avatarRevert(ctx, me.id));
+  // C-272 退回②：自己的 AI 的上一張（只有所屬人類能換回）
+  route('GET', '/api/my-ais/:id/avatar/prev', async ({ me, params }) => { requireHuman(me); return avatarHasPrev((await myAi(me, params.id)).id); });
+  route('POST', '/api/my-ais/:id/avatar/revert', async ({ ctx, me, params }) => { requireHuman(me); return avatarRevert(ctx, (await myAi(me, params.id)).id); });
 
   route('POST', '/api/projects/:id/archive', async ({ ctx, me, params }) => {
     await requireAdmin(ctx, me);

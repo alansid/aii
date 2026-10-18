@@ -105,6 +105,23 @@ try {
   assert.equal((await call(liu.token, '/api/me/avatar/prev')).body.hasPrev, true);
   r = await call(liu.token, '/api/me/avatar/revert', 'POST');
   assert.equal(r.status, 200); assert.equal(r.body.avatarImg, null, '換回上一張（原本沒有圖片）');
+  // C-272 退回②：AI 給自己的提案，所屬人類套用才換；AI 不能直接換圖
+  assert.equal((await raw(pgL.token, '/api/me/avatar', 'PUT', png(3))).status, 403, 'AI 不能直接上傳自己的頭像圖');
+  assert.equal((await call(pgL.token, '/api/me/avatar', 'DELETE')).status, 403, 'AI 不能直接刪自己的頭像圖');
+  ap = await raw(pgL.token, '/api/avatar-proposals?for=self&note=' + encodeURIComponent('給我自己'), 'POST', png(5));
+  assert.equal(ap.status, 201); assert.ok(ap.body.proposalId.startsWith('aps_') && ap.body.forSelf === true, '給自己的提案');
+  const PS = ap.body.proposalId;
+  r = await call(liu.token, '/api/dm/summary');
+  assert.equal(r.body.items[0].text, '🖼 有頭像提案', '給 AI 自己的提案也顯示在清單');
+  r = await call(liu.token, `/api/dm?aiId=${pgL.participantId}`);
+  assert.equal(r.body.items.find(x => x.proposal?.proposalId === PS)?.proposal.forSelf, true, '私訊卡帶 forSelf');
+  assert.equal((await call(pgL.token, `/api/avatar-proposals/${PS}/apply`, 'POST')).status, 403, 'AI 不能套用給自己的提案');
+  assert.equal((await call(chen.token, `/api/my-ais/${pgL.participantId}/avatar/prev`)).status, 404, '別人看不到你 AI 的上一張');
+  r = await call(liu.token, `/api/avatar-proposals/${PS}/apply`, 'POST');
+  assert.equal(r.status, 200); assert.ok(r.body.ai?.avatarImg, '套用後 AI 有圖片頭像'); assert.equal(r.body.me.avatarImg, null, '人類自己的頭像不變');
+  assert.equal((await call(liu.token, `/api/my-ais/${pgL.participantId}/avatar/prev`)).body.hasPrev, true);
+  r = await call(liu.token, `/api/my-ais/${pgL.participantId}/avatar/revert`, 'POST');
+  assert.equal(r.status, 200); assert.equal(r.body.avatarImg, null, 'AI 換回上一張（原本沒有圖片）');
   // 略過
   ap = await raw(pgL.token, '/api/avatar-proposals', 'POST', png(8));
   r = await call(liu.token, `/api/avatar-proposals/${ap.body.proposalId}/skip`, 'POST');

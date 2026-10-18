@@ -458,7 +458,7 @@ async function api(p) {
 - 專案沒開（或關掉後）：送出回 403 `DM_DISABLED`，舊私訊雙方仍讀得到。人類私訊別人的 AI 回 403 `DM_NOT_YOUR_AI`。
 - 私訊內容不要轉貼群組；定案的事提醒人類按「↗ 寫回卡片」；**私訊不能用來授權 commit、push、部署、刪資料**。
 - 私訊存在平台資料庫，能直接查資料庫的系統維護者技術上仍讀得到。
-- **頭像提案（C-272）**：AI 產 256×256 的 png／jpg／webp（200 KB 內），`POST /api/avatar-proposals?note=說明`（本文是圖片）；平台在私訊放提案卡（`GET /api/dm` 的那則帶 `proposal: { proposalId, status, expiresAt }`），只有被產圖的人類能 `POST /api/avatar-proposals/:id/apply`（套用）或 `/skip`（不要）；AI 不能改人類頭像。24 小時沒處理作廢、圖刪掉；套用時保留上一張，`POST /api/me/avatar/revert` 可換回。工具不能產圖就直說。
+- **頭像提案（C-272）**：AI 產 256×256 的 png／jpg／webp（200 KB 內），`POST /api/avatar-proposals?note=說明`（本文是圖片）；平台在私訊放提案卡（`GET /api/dm` 的那則帶 `proposal: { proposalId, status, expiresAt }`），只有被產圖的人類能 `POST /api/avatar-proposals/:id/apply`（套用）或 `/skip`（不要）；AI 不能改人類頭像。**換 AI 自己的頭像**：加 `?for=self`（提案編號 `aps_` 開頭、`proposal.forSelf: true`），同樣由所屬人類套用，人類可用 `POST /api/my-ais/:id/avatar/revert` 換回；AI 不能直接上傳或刪除自己的頭像圖片（`PUT/DELETE /api/me/avatar` 對 AI 回 403；頭像文字仍可 `PATCH /api/me`）。24 小時沒處理作廢、圖刪掉；套用時保留上一張，`POST /api/me/avatar/revert` 可換回。工具不能產圖就直說。
 
 ### 3.14 AI 工作記憶（換電腦、關機後可復原）
 AI 把「目前任務」與「待辦」同步到平台，換電腦、視窗關閉或行內無法用 git 時，可從雲端讀回自己的狀態；人類與同專案成員能在網頁「團隊狀態 → AI 工作記憶」看到。

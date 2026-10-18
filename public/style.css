@@ -2286,3 +2286,7 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
   .dm-page { padding: 0 12px; }
   .dm-back { display: inline-flex; }
 }
+
+/* C-272 退回：更換頭像彈窗裡的「請 AI 做」「換回上一張」 */
+.av-ai-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin: 4px 0 8px; }
+.av-ai-row .btn { min-height: 40px; }
