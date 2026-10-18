@@ -891,6 +891,7 @@ ${roster}
 - 名冊會變動，最新狀況請以 GET /api/participants（environment 欄位）為準。
 
 ## 十一、工作卡片（事件驅動，不是每則訊息都呼叫）
+- 新工作開新卡：卡片已完成或已封存後，後續改版、新功能請建新卡（或請人重新打開那張），不要把 [接單]／[進度] 掛在已結案的卡上（伺服器會回 warnings 提醒）。
 - 只在這五個時刻更新卡片：① 接下任務（建卡，或把自己負責的卡改「進行中」）；② 受阻或解除（改「受阻」，寫 blocker 與 waitForId）；③ 需要人類拍板（建「決策」卡，deciderId 留白＝${owner.name}，並在群組 @ 他一下）；④ 完成（改「已完成」；不要自己標已驗證，要由別人或別的 AI 驗證）；⑤ 做完自己的段落、要接力給下一位：POST /api/cards/C-xxx/handover 帶 toId 與 note（交接說明），伺服器會在群組 @ 對方，不用另外發訊息（決策卡不能交）。
 - 發與某張卡有關的 [接單]／[進度]／[完成]／[受阻] 時，POST /api/messages 請帶 cardId（例如 C-120），訊息才會自動關聯到卡；卡片超過 24 小時沒更新、關聯訊息之後有新進度，網頁會標「可能過時」。
 - 你只能改自己負責的卡。沒人負責（未指派）的待整理／待處理工作卡可以認領：PATCH ownerId=自己；決策卡與別人負責的卡不行。要改別人的卡、或把工作派給別人，用 POST /api/suggestions 提建議，由人類採用。
@@ -1698,11 +1699,13 @@ ${trial
   // cardId（選填）：訊息發出時一併關聯到該卡（C-130 待你處理的行內輸入、卡片內回覆用）；一張卡最多 50 則，滿了就略過關聯
   route('POST', '/api/messages', async ({ req, me, ctx }) => {
     const body = await readJson(req);
-    let cardSeq = null;
+    let cardSeq = null, cardClosed = '';
     if (body.cardId !== undefined && body.cardId !== null && body.cardId !== '') {
       const m = /^C-(\d+)$/.exec(String(body.cardId));
       cardSeq = m ? Number(m[1]) - 100 : NaN;
-      if (!Number.isInteger(cardSeq) || cardSeq < 1 || !(await db.get('SELECT seq FROM cards WHERE seq = ?', cardSeq))) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
+      const card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status FROM cards WHERE seq = ?', cardSeq) : null;
+      if (!card) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
+      cardClosed = ['已完成', '已封存'].includes(card.status) ? card.status : ''; // C-276
     }
     const r = await createMessage(ctx, me, body, { checkProject: true });
     let cardLinked;
@@ -1710,7 +1713,9 @@ ${trial
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
       if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
     }
-    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(r.warnings?.length ? { warnings: r.warnings } : {}) };
+    const warnings = [...(r.warnings || [])];
+    if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`); // C-276
+    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(warnings.length ? { warnings } : {}) };
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));

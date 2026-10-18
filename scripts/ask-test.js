@@ -75,6 +75,13 @@ try {
   assert.equal((await call(pg.token, '/api/messages', 'POST', b0)).status, 201);
   assert.equal((await call(pg.token, '/api/messages', 'POST', b0)).status, 200, '同內容重送＝200');
   assert.equal((await call(pg.token, '/api/messages', 'POST', { ...b0, replyFrom: [L] })).status, 409, '同 requestId 改帶 replyFrom＝不同內容');
+  // C-276：對已結案的卡發接單／進度回 warnings（不擋）
+  const cd = (await call(pg.token, '/api/cards', 'POST', { title: '舊卡', type: '工作', project: '平台', requestId: 'oldcard' })).body;
+  await call(liu.token, `/api/cards/${cd.cardId}`, 'PATCH', { status: '已完成', version: cd.version });
+  r = await post(pg.token, { cardId: cd.cardId, text: '[接單] 新功能' });
+  assert.equal(r.status, 201, '不擋'); assert.ok(r.body.warnings?.some(w => w.includes('新工作請開新卡')), '已結案的卡回提醒');
+  r = await post(pg.token, { cardId: cd.cardId, text: '[完成] 補一句' });
+  assert.ok(!r.body.warnings, '完成類訊息不提醒');
   // 讀訊息列表也帶 ask
   const list = (await call(liu.token, '/api/messages?limit=50')).body.items;
   assert.equal(list.find(m => m.messageId === aiMsg).recipients.find(x => x.participantId === U).ask, false, '列表也帶 ask');

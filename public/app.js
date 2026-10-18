@@ -3903,7 +3903,8 @@
       .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
     if (card) return { kind: 'work', cardId: card.cardId, title: card.title };
     const s = mb.status;
-    if (s && s.state === 'working' && s.source !== 'card' && Date.now() - Date.parse(s.at) < WORK_FRESH_MS) return { kind: 'work', cardId: cardIdOf(s.title), title: s.title };
+    const sc = s && cardIdOf(s.title), scard = sc && work.cards?.get(sc);
+    if (s && s.state === 'working' && s.source !== 'card' && Date.now() - Date.parse(s.at) < WORK_FRESH_MS && !(scard && closedSt(scard.status))) return { kind: 'work', cardId: sc, title: s.title }; // C-276：掛的卡已結案就不算在做
     if (mb.standby || mb.isOnline) return { kind: 'idle' };
     return { kind: 'off' };
   }
