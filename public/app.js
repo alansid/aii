@@ -932,7 +932,7 @@
   const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
   const viewLabel = v => (v === 'hub' ? '我的專案' : v === 'cross' ? '跨專案頻道' : projName(v));
   // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
-  const askTodo = () => { const dec = new Set((state.team ? myDecisions(state.team) : []).map(d => d.messageId).filter(Boolean)); return state.messages.filter(m => myAsk(m) === true && needReply(m) && !dec.has(m.messageId) && !/^s*[需確認]/.test(m.text)).map(m => ({ project: m.project || null })); };
+  const askTodo = () => askNoteRaw().map(n => ({ project: n.project ?? null })); // C-268：跟收件匣列表同一個來源
   function todoByView() {
     const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || []), ...[...(work.cards?.values() || [])].filter(verifyingMe), // C-242：等你驗收也算
       ...askTodo()]; // C-259：要你回覆（[需確認] 已算在等你決定，不重複）
@@ -2610,7 +2610,7 @@
     if (!ids.length) return;
     const gone = new Set(ids), backup = work.notes;
     work.notes = work.notes.filter(n => !gone.has(n.notificationId));
-    renderWork();
+    renderWork(); updateTodoBadge();
     if (msg) toast(msg);
     try {
       const chunks = [];
@@ -2619,7 +2619,11 @@
     } catch (err) { work.notes = backup; renderWork(); toast('沒有標成已讀：' + err.message); }
   }
   // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
-  const askNotes = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => n.ask === true && msgInView(n.project ?? null) && !work.answered.has(n.messageId) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview })); }; // C-259：[需確認] 已在下面，不重複
+  // C-259／C-268：「要你回覆」只看通知（跟徽章同一個來源）；[需確認]、交接、等你驗收／決定的卡已在別區，不重複
+  const askNoteRaw = () => { const dup = new Set(legacyConfirms().map(d => d.messageId));
+    return (work.notes || []).filter(n => n.ask === true && !work.answered.has(n.messageId) && !dup.has(n.messageId) && !/^\s*\[(需確認|交接)\]/.test(n.preview || '') && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !askCardElsewhere(n)); };
+  const askCardElsewhere = n => [...(state.msgCards.get(n.messageId) || []), cardIdOf(n.preview || '')].filter(Boolean).some(id => { const c = work.cards.get(id); return c && (verifyingMe(c) || decidingMe(c)); });
+  const askNotes = () => askNoteRaw().filter(n => msgInView(n.project ?? null));
   const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => n.ask !== true && msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
   // C-181：講已經決定完的決策卡的通知，不再列在「給你知道的」
   const decidedCardNote = n => ((state.byId.get(n.messageId)?.text || n.preview || '').match(/C-\d+/g) || []).some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
@@ -3086,7 +3090,7 @@
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && (p.projects || []).includes(d.project));
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
-        <div class="info-box">${esc(d.cardId)} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態回到「待處理」，並在群組 @ 對方通知。</div>
+        <div class="info-box">${esc(d.cardId)} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
         <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
         <label>交接說明（必填）<textarea autocomplete="off" autocorrect="on" name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
         <p class="muted small">說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。</p>
@@ -3192,7 +3196,7 @@
             ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
           </div>` : ''}
           ${d.staleHint ? `<div class="stale-note" role="status"><b>可能過時</b><span class="small">卡片最後更新 ${esc(shortTime(d.staleHint.lastUpdatedAt))}，但之後 ${esc(shortTime(d.staleHint.latestMessageAt))} 有新的相關訊息。</span>${d.staleHint.latestMessageId ? `<button type="button" class="link small" data-stale-jump="${esc(d.staleHint.latestMessageId)}">看最新訊息</button>` : ''}</div>` : ''}
-          ${handoverChain(d)}
+          ${d.type === NOTE ? handoverChain(d) : ''}
           ${d.type === '決策' && d.decision ? `<section class="ddecision"><h3>決策</h3><p class="dq">${esc(d.decision.question)}</p>${decisionBox(d)}${decisionStatus(d)}</section>` : ''}
           ${work.editing ? `
           <form id="card-edit" class="stack">
@@ -4438,7 +4442,7 @@
   // 收件匣：有新訊息通知時更新（徽章只算「要你做的」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
   async function refreshInboxCount() {
     try {
-      if (state.page === 'inbox' && ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > 300_000)) { await loadNotes(); renderWork(); } // C-245：沒新訊息就不重抓
+      if ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > 300_000) { await loadNotes(); if (state.page === 'inbox') renderWork(); } // C-245：沒新訊息就不重抓；C-268：徽章要算要你回覆，所以每頁都更新
       updateTodoBadge();
     } catch {}
   }
