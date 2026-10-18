@@ -699,6 +699,7 @@
     state.groupOf = new Map();
     state.grpHidden = new Map();
     state.lastCard = '';
+    markKids(list);
     const out = [];
     for (let i = 0; i < list.length;) {
       const cid = effCard(list[i]);
@@ -764,7 +765,8 @@
     const replyMe = isReplyToMe(m);
     const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
     const a = m.author;
-    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false ? 'to-me' : '', needReply(m) ? 'need-me' : ''].join(' '); // C-259：知會我的不上底色
+    const kid = isKid(m); // C-271
+    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false ? 'to-me' : '', needReply(m) ? 'need-me' : '', kid ? 'kid' : ''].join(' '); // C-259：知會我的不上底色
     const recipients = m.replyFrom ? askPillsHtml(m) : m.audience === 'all'
       ? '<span class="mention">@所有人</span>'
       : m.recipients.map(r => `<span class="mention">@${esc(r.name)}</span>`).join(' ');
@@ -780,7 +782,7 @@
         ${statusTags(m, toMe, replyMe)}
         ${recipients ? `<div class="recipients"><span class="muted">給</span> ${recipients}</div>` : ''}
         ${cardRefHtml(m, prevCard)}
-        ${m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
+        ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
         ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, ai) : textHtml(m)}
         ${authHtml(m)}
         <div class="msg-foot">
@@ -801,6 +803,20 @@
     return [...m.recipients].sort((a, b) => (b.ask ? 1 : 0) - (a.ask ? 1 : 0)).map(r => pill(r.ask, r.participantId === meId(), r.name)).join(' ');
   }
   const myAskPill = m => { const a = myAsk(m); return a === undefined || isMine(m) ? '' : `<span class="apill ${a ? 'ask' : 'fyi'} me">${a ? '要你回覆' : '知會你'}</span>`; };
+  // ---------- C-271 回覆縮排接在原訊息下 ----------
+  // 原訊息就在上面（中間只隔同一串的回覆）才縮排；回覆的回覆不再往右（最多一層）；卡片組內外各自算；不搬順序
+  function markKids(list) {
+    state.kids = new Set();
+    let box = null, ids = new Set();
+    for (const m of list) {
+      const c = effCard(m);
+      if (c !== box) { box = c; ids = new Set(); }
+      if (m.replyToMessageId && ids.has(m.replyToMessageId)) state.kids.add(m.messageId); else ids = new Set();
+      ids.add(m.messageId);
+    }
+  }
+  const isKid = m => !!state.kids?.has(m.messageId);
+  const kidSr = m => { const p = state.byId.get(m.replyToMessageId); return `<span class="sr-only">回覆 ${esc(p?.author.name || '')}：</span>`; };
   // ---------- C-262 B：同一張卡的連續訊息收成一組 ----------
   // 訊息的卡：自己的（cardId 或內文第一個卡號），沒有就沿用被回覆那則的卡
   const effCard = m => { let x = m, guard = 0; while (x && guard++ < 4) { const c = msgCardOf(x); if (c) return c; x = x.replyToMessageId ? state.byId.get(x.replyToMessageId) : null; } return ''; };
@@ -823,10 +839,10 @@
   function groupMsgHtml(m, ids) {
     const a = m.author, tag = tagOf(m.text), parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
     const ai = aiParts(m);
-    const re = !m.replyToMessageId ? '' : parent && ids.has(parent.messageId)
+    const re = !m.replyToMessageId ? '' : isKid(m) ? kidSr(m) : parent && ids.has(parent.messageId)
       ? `<button type="button" class="gm-re" data-jump="${esc(parent.messageId)}">↩ ${esc(shortOf(parent.author.name))}</button>`
       : `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>`;
-    const cls = ['msg', 'gmsg', isMine(m) ? 'mine' : '', needReply(m) ? 'need-me' : ''].join(' ');
+    const cls = ['msg', 'gmsg', isMine(m) ? 'mine' : '', needReply(m) ? 'need-me' : '', isKid(m) ? 'kid' : ''].join(' ');
     const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
     const body = m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m);
     return `<article class="${cls}" id="msg-${esc(m.messageId)}">

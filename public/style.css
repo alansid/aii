@@ -2193,3 +2193,16 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .an-sheet .an-name { max-width: none; white-space: normal; }
 .nm-cut { max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .happened .lg-main b { overflow-wrap: anywhere; }
+
+/* C-271 回覆縮排接在原訊息下（最多一層） */
+.msg.kid { margin-left: 44px; position: relative; }
+.messages > .msg.kid { width: calc(100% - 44px); margin-right: 0; }
+.msg.kid::before { content: ''; position: absolute; left: -24px; top: -8px; bottom: 0; width: 14px; border-left: 2px solid var(--border); }
+.cgrp .gmsg.kid { margin-left: 44px; border-top: 0; padding-top: 4px; }
+.cgrp .gmsg.kid::before { left: -22px; top: 0; }
+@media (max-width: 640px) {
+  .msg.kid, .cgrp .gmsg.kid { margin-left: 28px; }
+  .messages > .msg.kid { width: calc(100% - 28px); }
+  .msg.kid::before { left: -16px; }
+  .cgrp .gmsg.kid::before { left: -14px; }
+}
