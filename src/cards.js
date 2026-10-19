@@ -385,7 +385,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       if (!PROJECTS.includes(body.project)) throw invalid(`project 需為：${PROJECTS.join('、')}`);
       if (me.kind === 'ai' && !projectsOf(me).includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，不能把卡片改到那個專案。');
       sets.project = body.project; logs.push(`專案改為 ${body.project}`);
-      sets.proj_no = (await db.get('SELECT COALESCE(MAX(proj_no), 0) + 1 AS n FROM cards WHERE project = ?', body.project)).n; // C-310：在新專案拿新號
+      sets.proj_no = null; // C-310：在新專案拿新號；C-319：存檔後用同一條語句取號（先查再寫會在同時移卡時撞號）
     }
     if (body.type !== undefined && checkType(body.type) !== c.type) {
       if (body.type === '決策' || c.type === '決策') throw new ApiError(400, 'TYPE_LOCKED', '決策卡片的類型不能改，工作或阻塞卡片也不能改成決策。請另外建立一張。');
@@ -442,6 +442,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (Object.keys(sets).length) {
       invalidatePeople(); // 團隊狀態快取一起失效
       await save(c, sets, logs, me, nowIso());
+      if (sets.project !== undefined) await assignProjNo(c.uid);
       if (dropNotes) await db.run('DELETE FROM card_log WHERE card_seq = ? AND via = ?', c.seq, NOTE_LOG);
       const parts = [], to = [];
       if (sets.owner_id) { parts.push(claiming ? `${people.get(sets.owner_id)?.name} 認領` : `負責人改為 ${people.get(sets.owner_id)?.name}`); to.push(sets.owner_id); }

@@ -36,8 +36,11 @@ async function api(p) {
         error: `Token 屬於 ${me.name}（${me.participantId}），但 ${STATE} 記錄的是 ${state.participantId}。請確認 --agent 與 Token 是否對應。` });
     }
     state.participantId = me.participantId; state.name = me.name;
-    if (!state.messagesCursor) { // 首次：只建立基準，不處理歷史
-      state.messagesCursor = (await api('/api/messages?limit=1')).nextCursor;
+    let cursorFrom = 'local';
+    if (!state.messagesCursor) { // 本機沒有游標（換了電腦）：先用工作記憶的游標接著讀，雲端也沒有才是第一次接入
+      const cloud = (await api('/api/me/state')).state?.messagesCursor;
+      if (cloud) { state.messagesCursor = cloud; cursorFrom = 'cloud'; }
+      else { state.messagesCursor = (await api('/api/messages?limit=1')).nextCursor; cursorFrom = 'latest'; } // 只建立基準，不處理歷史
     }
     save();
     const messages = []; let cursor = state.messagesCursor;
@@ -47,7 +50,7 @@ async function api(p) {
     }
     const notif = await api('/api/notifications?status=pending&limit=50');
     out({
-      ok: true, me: me.name, newCursor: cursor,
+      ok: true, me: me.name, cursorFrom, newCursor: cursor,
       newMessages: messages.filter(m => m.author.participantId !== me.participantId).map(m => ({
         messageId: m.messageId, seq: m.sequence, from: m.author.name, text: m.text,
         toMe: m.recipients.some(r => r.participantId === me.participantId), replyTo: m.replyToMessageId,

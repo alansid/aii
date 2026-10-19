@@ -77,6 +77,21 @@ try {
   assert.throws(() => old.exec("UPDATE cards SET proj_no = 1 WHERE seq = 3"), /UNIQUE/, '同專案不能重號');
   old.close();
 
+  // C-319：同時建卡 20 張＋同時把 10 張卡移進同一專案，號碼不重複、也不失敗
+  // 修正前：換專案先查最大號、隔一步才寫回，兩張同時移進來會拿到同一號，撞唯一索引回 500
+  const movers = [];
+  for (let i = 0; i < 10; i++) movers.push(await card(liu.token, '銀行系統', '待移' + i));
+  const burst = await Promise.all([
+    ...Array.from({ length: 20 }, (_, i) => call(liu.token, '/api/cards', 'POST', { requestId: 'burst' + i, project: '平台', title: '同時建' + i })),
+    ...movers.map(m => call(liu.token, `/api/cards/${m.cardId}`, 'PATCH', { project: '平台', version: m.version })),
+  ]);
+  assert.deepEqual(burst.filter(x => x.status >= 300).map(x => `${x.status} ${x.body.error?.code}`), [], '同時建卡／移卡都成功');
+  const platKeys = burst.map(x => x.body.key);
+  assert.equal(new Set(platKeys).size, 30, '30 張號碼都不同：' + platKeys.join(','));
+  assert.ok(platKeys.every(k => /^[A-Z]+-\d+$/.test(k)), '每張都有代號號');
+  const dup = await db.get("SELECT project, proj_no, COUNT(*) AS n FROM cards WHERE proj_no IS NOT NULL GROUP BY project, proj_no HAVING n > 1");
+  assert.ok(!dup, '資料庫沒有重號');
+
   // 網頁：顯示代號號、內文兩種寫法都轉成卡片
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(js, /C-\\d\{3,\}\|\[A-Z\]\{2,5\}-\\d\+/, '訊息內文兩種卡號都認');
