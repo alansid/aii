@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.72.5'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.72.6'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -379,6 +379,7 @@
       <button type="button" role="menuitem" data-av="avatar">更換頭像</button>
       <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
       ${isAdmin() || myLeadProjects().length ? `<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
+      <button type="button" role="menuitem" data-av="wishes">✨ 許願池</button>
       <button type="button" role="menuitem" data-av="settings">個人設定</button>
       <button type="button" role="menuitem" data-av="devices">我的裝置</button>
       <button type="button" role="menuitem" data-av="api">API 資訊與登入碼</button>
@@ -410,6 +411,7 @@
     if (k === 'myai' || k === 'perm') goTop(k);
     else if (k === 'settings') openSettings();
     else if (k === 'avatar') changeMyAvatar();
+    else if (k === 'wishes') openWishes(); // C-290
     else if (k === 'api') openApi();
     else if (k === 'devices') openDevices();
     else if (k === 'logout') logout(true);
@@ -4456,7 +4458,7 @@
     const tb = document.querySelector('.topbar');
     document.documentElement.style.setProperty('--dmp-top', `${tb && tb.offsetParent ? Math.round(tb.getBoundingClientRect().bottom) : 0}px`);
     drawFb();
-    if (fb.tab === 'wish' && !fb.wishes) loadWishes().then(drawFbSimilar);
+    if (fb.tab === 'wish' && !fb.wishes) loadWishes().then(() => { if (fb.tab === 'wish') { fbKeep(); drawFb(); } });
     setTimeout(() => $('#fb-title')?.focus(), 0);
   }
   const fbDevice = () => {
@@ -4486,11 +4488,11 @@
         <p class="muted small">送出後只有平台團隊看得到；不會另外通知你進度。</p></form>`;
     } else {
       box.innerHTML = tabs + `<form class="fb-form" id="fb-wish" novalidate>
+        <button type="button" class="link fb-wishlink" data-wishes>✨ 看許願池${fb.wishes ? `（${fb.wishes.length} 個願望）` : ''} ›</button>
         <label>你想要什麼？<input id="fb-title" maxlength="100" required placeholder="例：卡片可以設提醒時間" value="${esc(d.wish || '')}"></label>
         <div id="fb-similar" aria-live="polite"></div>
         <label>為什麼（選填）<textarea id="fb-why" rows="2" maxlength="1000" placeholder="讓我們知道對你有多重要">${esc(d.why || '')}</textarea></label>
-        <button type="submit" class="btn primary fb-send">許這個新願望</button>
-        <button type="button" class="link small" data-wishes>看全部願望（許願池）›</button></form>`;
+        <button type="submit" class="btn primary fb-send">許這個新願望</button></form>`;
       drawFbSimilar();
     }
   }
@@ -4595,6 +4597,7 @@
     } catch (err) { toast(err.message); }
   }
   // 許願池頁：所有登入的人；依 +1 或最新排序、狀態篩選；平台團隊可以改狀態
+  function openWishes() { if (state.page !== 'wishes') fb.back = { view: state.view, page: state.page }; return goTop('wishes'); } // C-290
   async function renderWishesPage() {
     const box = $('#page-work');
     box.classList.remove('is-board');
@@ -4607,7 +4610,7 @@
     if (state.page !== 'wishes' || !fb.wishes) return;
     const sort = fb.wSort || 'votes', st = fb.wSt || '';
     const list = fb.wishes.filter(w => !st || w.status === st).sort((a, b) => (sort === 'votes' ? b.votes - a.votes : 0) || String(b.createdAt).localeCompare(String(a.createdAt)));
-    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>✨ 許願池</h2><span class="muted small">${fb.wishes.length} 個願望 · 所有登入的人看得到、可以 +1${fb.canEdit ? ' · 你可以改狀態（平台團隊）' : ''}</span></div>
+    box.innerHTML = `<button type="button" class="link wish-back" data-wishes-back>‹ 返回</button><div class="work-head"><div class="work-title"><h2>✨ 許願池</h2><span class="muted small">${fb.wishes.length} 個願望 · 所有登入的人看得到、可以 +1${fb.canEdit ? ' · 你可以改狀態（平台團隊）' : ''}</span></div>
       <button type="button" class="btn primary" data-fb-open="wish">＋ 許個願</button></div>
       <div class="work-filters"><select id="wish-sort" aria-label="排序"><option value="votes"${sort === 'votes' ? ' selected' : ''}>依 +1</option><option value="new"${sort === 'new' ? ' selected' : ''}>最新</option></select>
       <select id="wish-st" aria-label="狀態"><option value="">全部狀態</option>${Object.keys(WISH_CLS).map(s => `<option${st === s ? ' selected' : ''}>${s}</option>`).join('')}</select></div>
@@ -4690,7 +4693,7 @@
     const op = t.closest?.('[data-fb-open]');
     if (op) { fbKeep(); fb.tab = op.dataset.fbOpen; return fbPanel(true); }
     const tab = t.closest?.('[data-fb-tab]');
-    if (tab) { fbKeep(); fb.tab = tab.dataset.fbTab; drawFb(); if (fb.tab === 'wish' && !fb.wishes) { await loadWishes(); drawFbSimilar(); } return $(`[data-fb-tab="${fb.tab}"]`)?.focus(); }
+    if (tab) { fbKeep(); fb.tab = tab.dataset.fbTab; drawFb(); if (fb.tab === 'wish' && !fb.wishes) { await loadWishes(); if (fb.tab === 'wish') { fbKeep(); drawFb(); } } return $(`[data-fb-tab="${fb.tab}"]`)?.focus(); }
     if (t.closest?.('#fb-drop')) return $('#fb-file')?.click();
     const un = t.closest?.('[data-fb-unshot]');
     if (un) { fbKeep(); const [s] = fb.shots.splice(Number(un.dataset.fbUnshot), 1); if (s) URL.revokeObjectURL(s.url); return drawFb(); }
@@ -4698,7 +4701,8 @@
     if (wv) return voteWish(wv.dataset.wishVote);
     const we = t.closest?.('[data-wish-edit]');
     if (we) return editWish(we.dataset.wishEdit);
-    if (t.closest?.('[data-wishes]')) { if (t.closest('#sheet')) closeSheet(false); fbKeep(); fbPanel(false); return goTop('wishes'); }
+    if (t.closest?.('[data-wishes]')) { if (t.closest('#sheet')) closeSheet(false); fbKeep(); fbPanel(false); return openWishes(); }
+    if (t.closest?.('[data-wishes-back]')) { const b = fb.back; fb.back = null; return b && b.page !== 'wishes' ? (b.view && b.view !== state.view ? setProjectView(b.view, b.page) : showPage(b.page)) : setProjectView('hub'); }
     if (t.closest?.('[data-rep-toggle]')) { fb.repOpen = !fb.repOpen; return redrawReports(); }
     if (t.closest?.('[data-rep-done]')) { fb.repDone = !fb.repDone; return redrawReports(); }
     const rs = t.closest?.('[data-rep-shots]'); if (rs) return showShots(rs.dataset.repShots);
