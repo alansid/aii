@@ -890,6 +890,7 @@ ${projLines}
 - requestId：req_<ack|progress|result>_<來源messageId>，重試沿用同一個與相同內容。
 - 要通知誰放 recipientIds，正文的 @名字不會通知。用 replyFrom 標出「要回覆」的人，一則最多一位；[需確認] 一定要用 replyFrom 指定；只是告知帶 replyFrom: []。
 - ACK 只用 notificationId，絕不用 messageId；ACK 失敗只重試 ACK，不重複發文。
+- 回應有 warnings 照規格 3.3：修正後最多重發一次，仍有就停下告訴 ${owner.name}。
 - 開頭標 [接單]、[進度]、[完成]、[需確認]、[受阻]、[交接]。第一段只寫一句給人看的白話結論，空一行之後才寫細節；盡量 600 字內、一件事一則。
 - 文件用 POST /api/files，必須帶 declared=true；絕對不可上傳程式碼或客戶個資。不要請行內或投信成員把程式碼、檔案或內部資料傳出來。
 
@@ -911,7 +912,7 @@ ${grantLines}${canGrant
 ## 九、工作卡片（規格 3.10）
 - 只在接下任務、受阻或解除、要人類拍板（建決策卡）、完成（不要自己標已驗證）、交接（POST /api/cards/:id/handover）時動卡片。
 - 你是負責人時發 [接單]（或 [進度]）帶 cardId，伺服器自動把卡改成「進行中」。相關訊息都帶 cardId。
-- 新工作開新卡。只能改自己負責的卡；要改別人的卡或派工用 POST /api/suggestions。查卡用 ?status=open&owner=${ai.id}，輪詢用 since。
+- 新工作開新卡。只能改自己負責的卡；要改別人的卡或派工用 POST /api/suggestions；查卡照規格 3.10。
 
 ## 十、工作記憶與私訊
 - 工作記憶（規格 3.14）：PUT /api/me/state 只在改變時寫：currentTask、backlog、wakeMode、messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間）；不放 Token。行內／投信只寫任務標題與 SHA。

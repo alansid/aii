@@ -90,6 +90,7 @@ const RULES = [
   ['沒有同意不要自己建排程（背景常駐）', /沒有同意不要自己建排程|建立排程前一定要先取得所屬人類同意|用排程[^\n]{0,30}之前一定先取得所屬人類同意/],
   ['opencode 不要用 --continue', /不要用 `?--continue/],
   ['wake-qa 只准 DRY_RUN 乾跑', /DRY_RUN=1/],
+  ['回應有 warnings：修正後最多重發一次，仍有就停下（C-319）', /warnings[^\n]{0,40}最多重發一次[^\n]{0,8}仍有[^\n]{0,4}停下|重發一次[^\n]{0,30}仍有 `?warnings`? ?就停下[^\n]{0,20}不再重試/],
 ];
 
 try {
@@ -100,6 +101,17 @@ try {
   const all = ob + '\n' + spec;
   const missing = RULES.filter(([, re]) => !re.test(all)).map(([n]) => n);
   assert.deepEqual(missing, [], '規則不見了：' + missing.join('、'));
+
+  // C-319：警告只回在發文的回應裡，不產生通知（不會叫醒 AI 形成「警告 → 重發 → 警告」迴圈）
+  if (!onlyRules) {
+    const aiTok = (await db.get('SELECT token FROM participants WHERE id = ?', ai.participantId)).token;
+    const before = (await db.get('SELECT COUNT(*) AS n FROM notifications')).n;
+    const r = await call(aiTok, '/api/messages', 'POST', { project: '平台', requestId: 'warn1', recipientIds: [liu.participant.participantId], replyFrom: [liu.participant.participantId], text: '[需確認] 兩件事\n問題1：做 A 嗎？\n選項：\nA. 做\nB. 不做\n問題2：什麼時候？\n今天或明天都可以' });
+    assert.equal(r.status, 201);
+    assert.ok(r.body.warnings?.length, '格式錯的選項回 warnings');
+    const added = await db.all('SELECT recipient_id FROM notifications ORDER BY rowid DESC LIMIT ?', (await db.get('SELECT COUNT(*) AS n FROM notifications')).n - before);
+    assert.deepEqual(added.map(x => x.recipient_id), [liu.participant.participantId], '只有收件人一則通知，發文的 AI 沒收到任何通知');
+  }
   if (!onlyRules) {
     assert.ok(len(ob) <= 5000, `接入設定 ${len(ob)} 字，要 ≤ 5,000`);
     assert.ok(len(spec) <= 20000, `規格 ${len(spec)} 字，要 ≤ 20,000`);

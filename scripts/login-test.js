@@ -65,7 +65,7 @@ const tokenOf = url => url.split('/invite/')[1];
     assert.equal(inv.status, 201, JSON.stringify(inv.body));
     assert.match(inv.body.url, /\/invite\/[A-Za-z0-9_-]{40,}$/);
     const left = Date.parse(inv.body.invite.expiresAt) - Date.now();
-    assert.ok(left > 23.9 * 3_600_000 && left <= 24 * 3_600_000, '預設 24 小時有效（C-308）');
+    assert.ok(left > 23.9 * 3_600_000 && left <= 24 * 3_600_000 + 1000, '預設 24 小時有效（C-308），實際剩 ' + left + ' ms');
     assert.equal(inv.body.invite.status, '有效');
     assert.equal((await call(liuDev, '/api/invites', 'POST', { name: '王小明' })).body.error.code, 'INVITE_EXISTS', '同名已有有效邀請');
     assert.equal((await call(liuDev, '/api/invites', 'POST', { name: '劉昱志' })).body.error.code, 'NAME_TAKEN');
@@ -132,7 +132,7 @@ const tokenOf = url => url.split('/invite/')[1];
     const pc = (await call(wangDev, '/api/devices/pair-code', 'POST')).body;
     assert.match(pc.code, /^\d{6}$/);
     const pl = Date.parse(pc.expiresAt) - Date.now();
-    assert.ok(pl > 4 * 60_000 && pl <= 5 * 60_000, '5 分鐘');
+    assert.ok(pl > 4 * 60_000 && pl <= 5 * 60_000 + 1000, '5 分鐘（電腦校時會往回撥幾毫秒，上限多留 1 秒）');
     // 8. 登入頁輸入 6 位數字即登入
     const paired = await call(null, '/api/auth/pair', 'POST', { code: pc.code }, { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0 Safari/537.36 Edg/130.0' });
     assert.equal(paired.status, 200);
