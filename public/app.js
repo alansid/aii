@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.80.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.80.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -1042,12 +1042,21 @@
   const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
   const viewLabel = v => (v === 'hub' ? '總覽' : v === 'cross' ? '跨專案頻道' : projName(v)); // C-298：第一層改叫「總覽」
   // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
-  const askTodo = () => [...askNoteRaw(), ...(work.notes || []).filter(n => n.dm)].map(n => ({ project: n.project ?? null })); // C-268：跟收件匣列表同一個來源；C-270 私訊也算
+  // C-314：「要你處理」只有一個來源。數字（側欄、分頁標題、各專案）和總覽右側清單都從這裡算，不會一邊 4 件、一邊目前沒有
+  // 決策／[需確認]、AI 建議、等你驗收（C-242）、要你回覆（C-259）、私訊（C-270）
+  function todoItems() {
+    const items = [];
+    for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId });
+    for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${g.card?.cardId || ''} 改為「${g.to}」`, key: 's:' + g.suggestionId });
+    for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
+    for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId });
+    for (const n of (work.notes || []).filter(x => x.dm)) items.push({ p: n.project ?? null, kind: '私訊', title: `${n.sender?.name || ''} 回你了`, key: 'n:' + n.notificationId });
+    return items.filter(x => !x.p || myProjects().includes(x.p));
+  }
   function todoByView() {
-    const items = [...(state.team ? myDecisions(state.team) : []), ...(work.sugg || []), ...[...(work.cards?.values() || [])].filter(verifyingMe), // C-242：等你驗收也算
-      ...askTodo()]; // C-259：要你回覆（[需確認] 已算在等你決定，不重複）
-    const n = { hub: items.length, cross: items.filter(x => !x.project).length };
-    for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
+    const items = todoItems();
+    const n = { hub: items.length, cross: items.filter(x => !x.p).length };
+    for (const p of myProjects()) n[p] = items.filter(x => x.p === p).length;
     return n;
   }
   const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', wishes: '許願池', releases: '版本紀錄' }; // C-270：私訊整頁
@@ -2860,16 +2869,11 @@
       </section>
       <aside class="hub-todo" aria-label="要你處理">${hubTodoHtml()}</aside></div>`;
   }
-  function hubTodoItems() {
-    const items = [];
-    for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId });
-    for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${g.card?.cardId || ''} 改為「${g.to}」`, key: 's:' + g.suggestionId });
-    return items.filter(x => !x.p || myProjects().includes(x.p));
-  }
+  const hubTodoItems = () => todoItems(); // C-314：跟數字同一個來源
   function hubTodoHtml(inModal = false) {
     const items = hubTodoItems();
     const groups = [...myProjects(), null].map(p => [p, items.filter(x => x.p === p)]).filter(([, l]) => l.length);
-    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg' };
+    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg', 驗收: 'ver', 回覆: 'ask', 私訊: 'sg' };
     return `${inModal ? '' : `<div class="ht-head"><h3>要你處理</h3>${items.length ? `<span class="ps-count">${items.length}</span>` : ''}<span class="grow"></span><span class="muted small">各專案彙總</span></div>`}
       ${groups.length ? groups.map(([p, l]) => `<div class="ht-group">${esc(p ? projName(p) : '跨專案頻道')}</div>
         ${l.map(x => `<button type="button" class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(p || 'cross')}"><span class="ht-tag ${cls[x.kind]}">${x.kind}</span><span class="ht-title">${esc(x.title)}</span><span class="ht-go" aria-hidden="true">›</span></button>`).join('')}`).join('')
@@ -2883,7 +2887,7 @@
     if (r.closest('.modal')) closeModal();
     const key = r.dataset.hubTodo, id = key.slice(2);
     await setProjectView(r.dataset.hubProj, 'inbox');
-    work.focusItem = { sel: `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
+    work.focusItem = { sel: key[0] === 'n' ? `#fyi-${CSS.escape(id)}` : `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row', v: 'data-ver-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
     if (!applyFocusItem() && key[0] === 'c') openCard(id);
   });
   $('#m-todo').addEventListener('click', () => openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }));
@@ -2946,7 +2950,7 @@
         </div>`; }).join('')}</section>` : '';
     const dmSection = dms.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dms.length}</span><span class="muted small">只有你看得到</span></div>
-        ${dms.map(n => `<div class="sugg-row"><div class="sugg-main"><b>${esc(n.sender.name)} 回你了</b><span class="muted small">${esc(oneLine(String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${agoText(n.createdAt)}</span></div>
+        ${dms.map(n => `<div class="sugg-row" id="fyi-${esc(n.notificationId)}"><div class="sugg-main"><b>${esc(n.sender.name)} 回你了</b><span class="muted small">${esc(oneLine(String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${agoText(n.createdAt)}</span></div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}">打開私訊</button></div></div>`).join('')}</section>` : '';
     return dmSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }

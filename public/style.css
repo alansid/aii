@@ -2595,3 +2595,4 @@ html, body { overflow-x: clip; }
 
 /* C-310：卡號顯示專案代號號，旁邊小字 C-xxx */
 .cid-alt { margin-left: 6px; font-size: 11px; }
+.ht-tag.ver { background: var(--ok-bg); color: var(--ok-text); } /* C-314：等你驗收 */

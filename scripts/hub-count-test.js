@@ -29,9 +29,26 @@ try {
   assert.equal(r.plat, '2', '平台列是自己的件數');
   assert.equal(r.bank, '1', '銀行系統列是自己的件數');
 
+  // C-314：總覽右側「要你處理」清單跟數字同一個來源（修正前只列決策與建議，等你驗收、要你回覆都漏掉，顯示「目前沒有」）
+  await kit.call(tok, '/api/messages', 'POST', { requestId: 'ask1', project: '平台', text: '這個要你回答一下', recipientIds: [L] });
+  await js("location.reload(); true");
+  await until(() => js("document.querySelector('.hub-side [data-hub-todo-open] .hs-n')?.textContent === '4'"), 15000, '要你處理變 4');
+  await sleep(500);
+  const panel = await js(`(() => ({ rows: document.querySelectorAll('.hub-todo .ht-row').length, empty: !!document.querySelector('.hub-todo .ht-empty'),
+    head: document.querySelector('.hub-todo .ht-head .ps-count')?.textContent || null, kinds: [...document.querySelectorAll('.hub-todo .ht-tag')].map(t => t.textContent) }))()`);
+  assert.equal(panel.empty, false, '右側不能寫「目前沒有」');
+  assert.equal(panel.rows, 4, `右側列出 4 件（實際 ${panel.rows}）`);
+  assert.equal(panel.head, '4', '右側標題數字跟側欄一樣');
+  assert.deepEqual(panel.kinds.sort(), ['回覆', '驗收', '驗收', '驗收'].sort(), '三張等你驗收＋一則要你回覆');
+  // 點一項 → 進那個專案的收件匣、捲到那一列
+  await js("[...document.querySelectorAll('.hub-todo .ht-row')].find(b => b.querySelector('.ht-tag').textContent === '驗收' && b.dataset.hubProj === '平台').click(); true");
+  await until(() => js("!!document.querySelector('#page-work [data-ver-row].focus-item')"), 8000, '收件匣那一列被標出來');
+
   // 手機：選單裡的「總覽」也不放數字
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-  await sleep(400);
+  await js("location.href = '/'; true");
+  await until(() => js("document.body.classList.contains('at-hub')"), 15000, '回到總覽');
+  await sleep(600);
   await js("document.querySelector('#menu-btn').click(); true");
   await until(() => js("!!document.querySelector('#sheet:not([hidden]) .ph-card.is-hub')"), 5000, '手機選單');
   assert.equal(await js("document.querySelector('#sheet .ph-card.is-hub .ps-count')?.textContent || null"), null, '手機選單的總覽不放數字');
