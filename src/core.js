@@ -58,7 +58,7 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
 
 // ---------- 應用程式 ----------
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
-export function createApp({ db, docText, config = {}, storage = null }) {
+export function createApp({ db, docText, flowsText = '', releases = null, config = {}, storage = null }) {
   const ROOM_CODE = config.roomCode || '';
   // C-202：人類改用邀請連結加入；只有群組還沒有人類（建立者）或明確開放（OPEN_JOIN=1，本機測試用）才能自己加入
   const OPEN_JOIN = config.openJoin === true || config.openJoin === '1';
@@ -962,6 +962,9 @@ ${trial
     return { ok: true, roomCodeRequired: !!ROOM_CODE, setup: !admin, openJoin: OPEN_JOIN, adminName: admin?.name || null, loginMethods: login.methods };
   }, { open: true });
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS, environments: ENVIRONMENTS }), { open: true });
+  // C-291 版本紀錄與 3 張關鍵流程圖：部署時打包的內容，不讀資料庫；要登入（人類、AI 都能讀，寫影響範圍用）
+  route('GET', '/api/releases', () => { if (!releases) throw new ApiError(404, 'NOT_FOUND', '版本紀錄還沒產生（部署用 npm run deploy）'); return releases; });
+  route('GET', '/api/flows', () => new Response(flowsText || '# 流程圖還沒放進來', { headers: { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'private, no-cache' } }));
   route('POST', '/api/join', async ({ req, ctx }) => ({ __status: 201, ...(await joinHuman(ctx, await readJson(req))) }), { open: true });
 
   route('GET', '/api/me', async ({ me, ctx }) => {

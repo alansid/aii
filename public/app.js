@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.73.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.73.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4746,7 +4746,7 @@
   // 資料是部署時產生的靜態檔 /releases.json、/flows.md，打開才讀，不碰資料庫
   const rel = { data: null, flows: null, tab: 'list', q: '', back: null, hit: '' };
   async function loadReleases() {
-    if (!rel.data) rel.data = await fetch(`/releases.json?v=${APP_VERSION}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    if (!rel.data) rel.data = await api('/api/releases').catch(() => null); // C-291 退回：要登入
     return rel.data;
   }
   function openReleases(ver = '') {
@@ -4761,7 +4761,7 @@
     box.innerHTML = '<p class="muted">載入中…</p>';
     if (!rel.hit && location.hash.startsWith('#v')) rel.hit = location.hash.slice(2);
     await loadReleases();
-    if (rel.tab === 'flows' && rel.flows === null) rel.flows = await fetch(`/flows.md?v=${APP_VERSION}`).then(r => (r.ok ? r.text() : '')).catch(() => '');
+    if (rel.tab === 'flows' && rel.flows === null) rel.flows = await fetch('/api/flows', { headers: { Authorization: `Bearer ${state.token}` } }).then(r => (r.ok ? r.text() : '')).catch(() => '');
     drawReleases();
   }
   const relTime = iso => { const t = new Date(iso); return `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };

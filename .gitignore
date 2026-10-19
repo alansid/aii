@@ -7,6 +7,5 @@ data/
 .wrangler/
 state.json
 
-# C-291 部署時產生（npm run deploy／npm run releases）
-public/releases.json
-public/flows.md
+# C-291 部署時產生（npm run deploy／npm run releases），打包進 Worker
+generated/

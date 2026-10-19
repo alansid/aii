@@ -1,4 +1,5 @@
-// C-291 版本紀錄：從 git log 產生 public/releases.json（版本、上線時間、卡片、commit），並把 docs/flows.md 複製到 public/flows.md。
+// C-291 版本紀錄：從 git log 產生 generated/releases.json（版本、上線時間、卡片、commit），部署時打包進 Worker，要登入才讀得到（GET /api/releases）。
+// 流程圖 docs/flows.md 也打包進 Worker（GET /api/flows）。兩個都不放 public，外人讀不到（C-291 退回）。
 // 用法：
 //   node scripts/releases.mjs            只重新產生
 //   node scripts/releases.mjs --deployed 把 package.json 目前版本的上線時間記成現在（部署時用：npm run deploy）
@@ -43,6 +44,7 @@ const items = [...byVer.values()].map(r => ({
   causes: notes.incidents.filter(i => i.causeVersion === r.version).map(i => ({ fix: i.fix, fixVersion: i.fixVersion, note: i.note })),
   fixes: notes.incidents.filter(i => i.fixVersion === r.version).map(i => ({ cause: i.cause, causeVersion: i.causeVersion, note: i.note, flow: i.flow })),
 })).sort((a, b) => b.at.localeCompare(a.at));
-fs.writeFileSync(new URL('public/releases.json', root), JSON.stringify({ generatedAt: new Date().toISOString(), current: version, incidents: notes.incidents, items }) + '\n');
-fs.copyFileSync(new URL('docs/flows.md', root), new URL('public/flows.md', root));
-console.log(`releases.json：${items.length} 個版本（目前 v${version}）；flows.md 已複製`);
+fs.mkdirSync(new URL('generated/', root), { recursive: true });
+fs.writeFileSync(new URL('generated/releases.json', root), JSON.stringify({ generatedAt: new Date().toISOString(), current: version, incidents: notes.incidents, items }) + '\n');
+for (const f of ['public/releases.json', 'public/flows.md']) fs.rmSync(new URL(f, root), { force: true }); // 舊版放在 public，外人讀得到，拿掉
+console.log(`generated/releases.json：${items.length} 個版本（目前 v${version}）`);

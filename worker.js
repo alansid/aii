@@ -3,6 +3,8 @@ import { createApp } from './src/core.js';
 import { wrapD1 } from './src/db-d1.js';
 import { dbStorage } from './src/storage-db.js';
 import docText from './docs/ai-integration.md';
+import flowsText from './docs/flows.md'; // C-291：要登入才讀得到
+import releases from './generated/releases.json'; // C-291：npm run deploy 會先產生
 
 let handle;
 let currentCtx = null; // 背景送門鈴要用這次請求的 waitUntil
@@ -13,6 +15,8 @@ const app = env => {
     db,
     storage: dbStorage(db), // 檔案存 D1，不需要 R2
     docText,
+    flowsText,
+    releases,
     config: {
       roomCode: env.ROOM_CODE,
       openJoin: env.OPEN_JOIN,

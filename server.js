@@ -17,6 +17,8 @@ const handle = createApp({
   db,
   storage: dbStorage(db),
   docText: fs.readFileSync(path.join(ROOT, 'docs', 'ai-integration.md'), 'utf8'),
+  flowsText: fs.readFileSync(path.join(ROOT, 'docs', 'flows.md'), 'utf8'), // C-291
+  releases: (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'generated', 'releases.json'), 'utf8')); } catch { return null; } })(), // npm run releases 產生
   config: {
     roomCode: process.env.ROOM_CODE,
     openJoin: process.env.OPEN_JOIN ?? '1', // 本機預設開放自己加入（測試與種子資料用）；正式環境（Workers）預設關閉
