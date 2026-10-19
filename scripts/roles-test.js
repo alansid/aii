@@ -148,8 +148,10 @@ const call = async (token, p, method = 'GET', body) => {
     assert.equal(liuTry2.status.cardCount, 1, 'C-235：張數只算試用');
 
     // C-221：新專案一開始的成員＝建立者＋「目前的」跨專案角色（關掉之後就不會自動加入）
-    const po = (await call(null, '/api/join', 'POST', { name: '產品負責人', role: 'PO' })).body; // 角色 PO 預設是跨專案角色
+    const po = (await call(null, '/api/join', 'POST', { name: '產品負責人', role: 'PO' })).body; // C-293：新成員角色是 PO 也不自動跨專案
     await call(liu.token, `/api/participants/${id(po)}/projects`, 'PUT', { projects: ['平台', '銀行系統'] });
+    assert.ok(!(await call(liu.token, '/api/projects')).body.crossRoleIds.includes(id(po)), 'C-293：新成員角色是 PO 也不自動跨專案');
+    await M(liu.token, [{ id: id(po), crossRole: true }]); // 管理員手動開
     const pA = (await call(liu.token, '/api/projects', 'POST', { name: '新專案甲' })).body.id;
     assert.ok((await people()).get(id(po)).projects.includes(pA), 'C-221：跨專案角色自動加入新專案');
     await M(liu.token, [{ id: id(po), crossRole: false, projects: ['平台'] }]);

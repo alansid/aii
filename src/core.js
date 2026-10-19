@@ -1058,14 +1058,24 @@ ${trial
   }
   // 跨專案角色：固定屬於所有專案，不能移出。預設是 PO、SM（含人類 PO）；C-182 起管理員可在「成員與權限」開關，
   // 覆寫存在 app_settings 的 cross_roles（{ add: [...], remove: [...] }），不用改資料表結構
-  const defaultCross = p => ['PO', 'SM'].includes(p.role_key) || ['PO', 'SM'].includes(String(p.role || '').trim().toUpperCase());
-  let crossOv = { add: new Set(), remove: new Set() }, crossAt = 0;
+  // C-293：新成員一律不自動跨專案（不看 PO／SM 角色），只能管理員手動開。
+  // 原本「角色是 PO／SM 就跨」的規則在第一次載入時寫成固定名單（frozen），現有的人照舊
+  const legacyCross = p => ['PO', 'SM'].includes(p.role_key) || ['PO', 'SM'].includes(String(p.role || '').trim().toUpperCase());
+  const defaultCross = () => false;
+  let crossOv = { add: new Set(), remove: new Set(), frozen: null }, crossAt = 0;
   async function loadCrossRoles(force = false) {
     if (!force && Date.now() - crossAt < 10_000) return crossOv;
     const r = await db.get("SELECT value FROM app_settings WHERE key = 'cross_roles'").catch(() => null);
     let v = {};
     try { v = JSON.parse(r?.value || '{}'); } catch {}
-    crossOv = { add: new Set(v.add || []), remove: new Set(v.remove || []) }; crossAt = Date.now();
+    if (!v.frozen) {
+      const remove = new Set(v.remove || []), add = new Set(v.add || []);
+      for (const p of await db.all("SELECT * FROM participants WHERE status = 'active' AND kind != 'system'")) if (legacyCross(p) && !remove.has(p.id)) add.add(p.id);
+      v = { add: [...add], remove: [], frozen: nowIso() };
+      await db.run("INSERT INTO app_settings (key, value) VALUES ('cross_roles', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(v));
+      invalidatePeople();
+    }
+    crossOv = { add: new Set(v.add || []), remove: new Set(v.remove || []), frozen: v.frozen }; crossAt = Date.now();
     return crossOv;
   }
   // C-183：專案 leader（每個專案可多位、只能人類），存在 app_settings 的 project_leaders（{ 專案id: [成員id] }）
@@ -1332,7 +1342,7 @@ ${trial
     if (!Array.isArray(body.changes)) throw invalid('changes 需為陣列');
     const person = id => { const p = people.get(String(id)); if (!p || p.status !== 'active' || p.kind === 'system') throw new ApiError(404, 'NOT_FOUND', `找不到成員 ${id}`); return p; };
     const forbid = msg => new ApiError(403, 'NOT_PROJECT_LEADER', msg);
-    const ov = { add: new Set(crossOv.add), remove: new Set(crossOv.remove) };
+    const ov = { add: new Set(crossOv.add), remove: new Set(crossOv.remove), frozen: crossOv.frozen };
     const crossChanges = [];
     for (const ch of body.changes) {
       if (typeof ch.crossRole !== 'boolean') continue;
@@ -1414,7 +1424,7 @@ ${trial
     if (!dryRun) {
       const at = nowIso(), stmts = [];
       if (crossChanges.length) {
-        stmts.push(["INSERT INTO app_settings (key, value) VALUES ('cross_roles', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify({ add: [...ov.add], remove: [...ov.remove] })]]);
+        stmts.push(["INSERT INTO app_settings (key, value) VALUES ('cross_roles', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify({ add: [...ov.add], remove: [...ov.remove], frozen: ov.frozen || nowIso() })]]); // C-293 frozen 要留著，不然會重新套舊規則
         stmts.push(...crossChanges.flatMap(c => PROJECTS.map(pj => projEvent(pj, me.id, `${me.name} ${c.crossRole ? '設' : '取消'} ${c.name} 為跨專案角色`, at))));
       }
       if (leaderChanges.length) {
