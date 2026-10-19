@@ -60,12 +60,12 @@ const tokenOf = url => url.split('/invite/')[1];
     assert.equal((await call(ai.token, '/api/me')).status, 200);
     assert.equal((await call(null, '/api/auth/code', 'POST', { code: ai.token })).body.error.code, 'AI_TOKEN', 'AI Token 不能登入網頁');
 
-    // 1. 只有管理員能邀請：名字、角色、專案 → 一次性連結，15 分鐘
+    // 1. 只有管理員能邀請：名字、角色、專案 → 一次性連結；C-308 起預設 24 小時
     const inv = await call(liuDev, '/api/invites', 'POST', { name: '王小明', role: 'UX', projects: ['平台'] });
     assert.equal(inv.status, 201, JSON.stringify(inv.body));
     assert.match(inv.body.url, /\/invite\/[A-Za-z0-9_-]{40,}$/);
     const left = Date.parse(inv.body.invite.expiresAt) - Date.now();
-    assert.ok(left > 14 * 60_000 && left <= 15 * 60_000, '15 分鐘有效');
+    assert.ok(left > 23.9 * 3_600_000 && left <= 24 * 3_600_000, '預設 24 小時有效（C-308）');
     assert.equal(inv.body.invite.status, '有效');
     assert.equal((await call(liuDev, '/api/invites', 'POST', { name: '王小明' })).body.error.code, 'INVITE_EXISTS', '同名已有有效邀請');
     assert.equal((await call(liuDev, '/api/invites', 'POST', { name: '劉昱志' })).body.error.code, 'NAME_TAKEN');

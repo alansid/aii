@@ -2584,3 +2584,11 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 html, body { overflow-x: clip; }
 .app { overflow: clip; }
 .sidebar { overflow: clip; }
+
+/* C-307：選單第一行（頭像、名字、角色）整列可點，開個人設定 › 個人資料 */
+.av-menu button.av-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; min-height: 56px; padding: 8px 12px; }
+.av-head-go { color: var(--muted); font-size: 18px; }
+
+/* C-308：邀請有效時間 */
+.inv-ttl-opts { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.inv-ttl-warn { margin: 4px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--mine-bg); border: 1px solid var(--mine-border); font-size: 13px; }

@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.78.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.79.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -277,7 +277,7 @@
       const left = end - Date.now();
       if (!$('#inv-cd')) return clearInterval(inviteTimer);
       if (left <= 0) { clearInterval(inviteTimer); return inviteGone(d.adminName || d.inviterName); }
-      $('#inv-cd').textContent = mmss(left);
+      $('#inv-cd').textContent = invLeft(left); // C-308：可能是幾小時或幾天
     };
     clearInterval(inviteTimer); inviteTimer = setInterval(tick, 1000); tick();
     $('#inv-form').addEventListener('submit', async e => {
@@ -349,11 +349,16 @@
     clearInterval(inviteTimer);
     ss.del(INVITE_KEY);
     $('#invite-card').innerHTML = `<h1 data-group-name>${esc(BASE_TITLE)}</h1>
-      <p class="inv-gone">這個邀請連結已失效，請${esc(adminName || '管理員')}重新傳一個給你。</p>
+      <p class="inv-gone">這個邀請連結已過期或已作廢（也可能已經用過了）。請找${esc(adminName || '管理員')}重新產生一個給你。</p>
       <p><a href="/" class="link" id="inv-pair">已經加入過？用原本的裝置配對</a></p>`;
     $('#inv-pair').onclick = e => { e.preventDefault(); history.replaceState(null, '', '/'); showJoin().then(() => $('#pair-form .pair-input').focus()); };
   }
   const mmss = ms => { const t = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+  // C-308：邀請有效時間可選；剩多久（倒數）與清單用的短格式
+  const INV_TTLS = [['15m', '15 分鐘'], ['1h', '1 小時'], ['24h', '24 小時'], ['7d', '7 天']];
+  const INV_RISK = '時間越長、外流風險越大，用完或不需要就作廢。';
+  const invLeft = ms => { const m = Math.ceil(ms / 60000); return ms < 3_600_000 ? mmss(ms) : m < 48 * 60 ? `${Math.floor(m / 60)} 小時 ${m % 60} 分` : `${Math.floor(m / 1440)} 天 ${Math.floor((m % 1440) / 60)} 小時`; };
+  const invLeftShort = ms => { const m = Math.max(1, Math.ceil(ms / 60000)); return m < 60 ? `${m} 分` : m < 48 * 60 ? `${Math.floor(m / 60)} 小時` : `${Math.floor(m / 1440)} 天`; };
 
   async function logout(confirmFirst = true) {
     if (confirmFirst && !await confirmDialog({ title: '登出這台裝置？', confirmText: '登出', message: '登出後，這台裝置要重新配對（在其他已登入的裝置點頭像 ▸「我的裝置」▸「＋配對新裝置」）或用登入碼才能再登入。其他裝置不受影響。' })) return;
@@ -368,11 +373,12 @@
   document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
 
   function drawMe() {
-    const meCard = `<button type="button" class="me-avatar-btn" data-change-avatar title="更換頭像" aria-label="更換頭像">${avatar(state.me)}<span class="pen" aria-hidden="true">✎</span></button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · 本人</span></div>`;
+    const meCard = `<button type="button" class="me-avatar-btn" data-open-profile title="個人資料" aria-label="個人資料（更換頭像）">${avatar(state.me)}</button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · 本人</span></div>`;
     $('#sheet-me').innerHTML = meCard;
   }
 
   document.addEventListener('click', e => { if (e.target.closest('[data-change-avatar]')) { closeSheet(false); changeMyAvatar(); } });
+  document.addEventListener('click', e => { if (e.target.closest('[data-open-profile]')) { closeSheet(false); openSettings({ tab: 'me' }); } }); // C-307：頭像那列 → 個人設定 › 個人資料
 
   // ---------- C-182 右上頭像選單（每個畫面都有）：我的 AI、成員與權限（管理員）、個人設定、API 資訊與登入碼、登出 ----------
   const isAdmin = () => !!state.projMeta.adminId && state.projMeta.adminId === state.me?.participantId;
@@ -387,8 +393,7 @@
   function drawAvatarMenu() {
     if (!state.me) return;
     document.querySelectorAll('.av-btn:not(.me-more)').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
-    $('#av-menu').innerHTML = `<div class="av-head">${avatar(state.me)}<span class="av-head-txt"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()) || '未設定角色', isAdmin() ? '管理員' : '', '本人'].filter(Boolean).join(' · '))}</span></span></div>
-      <button type="button" role="menuitem" data-av="avatar"><span class="av-ico" aria-hidden="true">🙂</span>更換頭像</button>
+    $('#av-menu').innerHTML = `<button type="button" role="menuitem" class="av-head" data-av="profile" title="個人資料（更換頭像）">${avatar(state.me)}<span class="av-head-txt"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()) || '未設定角色', isAdmin() ? '管理員' : '', '本人'].filter(Boolean).join(' · '))}</span></span><span class="av-head-go" aria-hidden="true">›</span></button>
       <button type="button" role="menuitem" data-av="settings"><span class="av-ico" aria-hidden="true">⚙️</span>個人設定<span class="muted small">裝置、登入碼</span></button>
       <button type="button" role="menuitem" data-av="myai"><span class="av-ico" aria-hidden="true">🤖</span>我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
       ${isAdmin() || myLeadProjects().length ? `<div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">管理</div><button type="button" role="menuitem" data-av="perm"><span class="av-ico" aria-hidden="true">👥</span>成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
@@ -422,7 +427,7 @@
     const k = it.dataset.av;
     if (k === 'myai' || k === 'perm') goTop(k);
     else if (k === 'settings') openSettings();
-    else if (k === 'avatar') changeMyAvatar();
+    else if (k === 'profile') openSettings({ tab: 'me' }); // C-307：更換頭像只在個人設定 › 個人資料
     else if (k === 'wishes') openWishes(); // C-290
     else if (k === 'releases') openReleases(); // C-291
     else if (k === 'api') openApi();
@@ -6255,8 +6260,8 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     const ivR = t.closest('[data-pm-inv-regen]'), ivC = t.closest('[data-pm-inv-cancel]'), rs = t.closest('[data-pm-reset]');
     if (ivR) { try { showInviteLink(await api(`/api/invites/${encodeURIComponent(ivR.dataset.pmInvRegen)}/regenerate`, { method: 'POST' })); loadInvites(); } catch (err) { toast(err.message); } return; }
     if (ivC) {
-      if (!await confirmDialog({ title: '取消這個邀請？', confirmText: '取消邀請', danger: true, message: '連結會立刻失效。' })) return;
-      try { await api(`/api/invites/${encodeURIComponent(ivC.dataset.pmInvCancel)}/cancel`, { method: 'POST' }); toast('已取消邀請'); loadInvites(); } catch (err) { toast(err.message); }
+      if (!await confirmDialog({ title: '作廢這個邀請？', confirmText: '作廢', danger: true, message: '連結會立刻失效。' })) return;
+      try { await api(`/api/invites/${encodeURIComponent(ivC.dataset.pmInvCancel)}/cancel`, { method: 'POST' }); toast('已作廢邀請'); loadInvites(); } catch (err) { toast(err.message); }
       return;
     }
     if (rs) return resetLogin(state.participants.get(rs.dataset.pmReset));
@@ -6723,7 +6728,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
   }
   const fmtDate = iso => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
-  // ---------- C-202 邀請（只有管理員）：名字、角色、專案 → 一次性連結＋QR，15 分鐘 ----------
+  // ---------- C-202 邀請（只有管理員）：名字、角色、專案 → 一次性連結＋QR；C-308 有效時間可選（預設 24 小時） ----------
   let invTimer = null;
   function openInvite() {
     const body = openModal('＋邀請', `<form id="inv-new" class="stack">
@@ -6731,10 +6736,15 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
         <fieldset class="field inv-projs"><legend class="field-label">專案與角色</legend>
           ${PROJECTS.map(pj => `<div class="inv-proj-row"><label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label><label class="chk inv-ro"><input type="checkbox" data-inv-ro="${esc(pj)}" disabled> 👁 唯讀</label>${roleSelectHtml('', `data-inv-role="${esc(pj)}" disabled`, { pj, ai: false, label: `在${projName(pj)}的角色` })}</div>`).join('')}
           <span class="muted small">每個專案各自一個角色；不勾＝還沒有專案，之後再指派</span></fieldset>
+        <fieldset class="field inv-ttl"><legend class="field-label">有效時間</legend>
+          <div class="inv-ttl-opts">${INV_TTLS.map(([k, t]) => `<label class="chk"><input type="radio" name="ttl" value="${k}"${k === '24h' ? ' checked' : ''}> ${t}${k === '24h' ? '（預設）' : ''}</label>`).join('')}</div>
+          <span class="muted small">只能用一次；對方用掉或你作廢就失效。</span>
+          <p class="inv-ttl-warn" id="inv-ttl-warn" role="status" hidden>⚠ ${INV_RISK}</p></fieldset>
         <p class="error" id="inv-new-err" role="alert"></p>
       </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="inv-new">產生邀請連結</button>' });
     // 勾了專案才能選那個專案的角色
     body.querySelector('#inv-new').addEventListener('change', async e => {
+      if (e.target.name === 'ttl') { body.querySelector('#inv-ttl-warn').hidden = e.target.value !== '7d'; return; } // C-308
       const cb = e.target.closest('input[name="projects"]');
       if (cb) { const s = body.querySelector(`[data-inv-role="${CSS.escape(cb.value)}"]`); s.disabled = !cb.checked; const ro = body.querySelector(`[data-inv-ro="${CSS.escape(cb.value)}"]`); if (ro) { ro.disabled = !cb.checked; if (!cb.checked) ro.checked = false; } return; }
       const s = e.target.closest('[data-inv-role]');
@@ -6751,7 +6761,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       const roles = Object.fromEntries(projects.map(pj => [pj, body.querySelector(`[data-inv-role="${CSS.escape(pj)}"]`)?.value || '']).filter(([, v]) => v && v !== '__other'));
       try {
         const readOnly = projects.filter(pj => body.querySelector(`[data-inv-ro="${CSS.escape(pj)}"]`)?.checked); // C-294
-        const out = await api('/api/invites', { method: 'POST', body: { name: f.get('name').trim(), projects, roles, readOnly } });
+        const out = await api('/api/invites', { method: 'POST', body: { name: f.get('name').trim(), projects, roles, readOnly, ttl: f.get('ttl') || '24h' } });
         showInviteLink(out);
         if (state.page === 'perm') loadInvites();
       } catch (err) { body.querySelector('#inv-new-err').textContent = err.message; }
@@ -6765,8 +6775,9 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       <div class="copy-row"><code class="val inv-url" id="inv-url">${esc(out.url)}</code><button class="btn small" type="button" data-inv="copy">複製</button></div>
       <div id="inv-qr" class="qr"></div>
       <p class="inv-count" id="inv-count"><span>剩 <b id="inv-cd"></b> 失效</span></p>
-      <div class="row inv-acts"><button class="btn" type="button" data-inv="regen">重新產生</button><button class="btn danger" type="button" data-inv="cancel">取消邀請</button></div>
-      <p class="muted small">重新產生：舊連結立刻失效，重新計時 15 分鐘。</p>`, { size: 'narrow' });
+      <div class="row inv-acts"><button class="btn" type="button" data-inv="regen">重新產生</button><button class="btn danger" type="button" data-inv="cancel">作廢</button></div>
+      ${iv.ttl === '7d' ? `<p class="inv-ttl-warn">⚠ 有效 7 天：${INV_RISK}</p>` : ''}
+      <p class="muted small">重新產生：舊連結立刻失效，用同樣的有效時間（${esc(INV_TTLS.find(t => t[0] === iv.ttl)?.[1] || '24 小時')}）重新計時。</p>`, { size: 'narrow' });
     try {
       if (!window.QRCode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js');
       new window.QRCode(body.querySelector('#inv-qr'), { text: out.url, width: 200, height: 200 });
@@ -6783,7 +6794,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
         body.querySelector('[data-inv="regen"]').textContent = '重發';
         return;
       }
-      cd.textContent = mmss(left);
+      cd.textContent = invLeft(left);
     };
     clearInterval(invTimer); invTimer = setInterval(tick, 1000); tick();
     body.addEventListener('click', async e => {
@@ -6792,8 +6803,8 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       else if (k === 'regen') {
         try { showInviteLink(await api(`/api/invites/${encodeURIComponent(iv.id)}/regenerate`, { method: 'POST' }), title); toast('已重新產生，舊連結已失效'); if (state.page === 'perm') loadInvites(); } catch (err) { toast(err.message); }
       } else if (k === 'cancel') {
-        if (!await confirmDialog({ title: '取消這個邀請？', confirmText: '取消邀請', danger: true, message: `給 ${esc(iv.name)} 的連結會立刻失效。` })) return;
-        try { await api(`/api/invites/${encodeURIComponent(iv.id)}/cancel`, { method: 'POST' }); clearInterval(invTimer); closeModal(); toast('已取消邀請'); if (state.page === 'perm') loadInvites(); } catch (err) { toast(err.message); }
+        if (!await confirmDialog({ title: '作廢這個邀請？', confirmText: '作廢', danger: true, message: `給 ${esc(iv.name)} 的連結會立刻失效。` })) return;
+        try { await api(`/api/invites/${encodeURIComponent(iv.id)}/cancel`, { method: 'POST' }); clearInterval(invTimer); closeModal(); toast('已作廢邀請'); if (state.page === 'perm') loadInvites(); } catch (err) { toast(err.message); }
       }
     });
   }
@@ -6806,19 +6817,19 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
   function permInvitesHtml() {
     if (!perm.invites) { loadInvites(); return '<p class="muted pm-pad">讀取中…</p>'; }
     const cls = { 有效: 'green', 已使用: 'blue', 已過期: 'grey', 已取消: 'grey' };
-    const st = iv => iv.status === '有效' ? `有效 · 剩 ${Math.max(1, Math.ceil((Date.parse(iv.expiresAt) - Date.now()) / 60000))} 分`
-      : iv.status === '已使用' ? `已使用 · ${fmtDate(iv.usedAt).split(' ')[0]}` : iv.status;
+    const st = iv => iv.status === '有效' ? `有效 · 剩 ${invLeftShort(Date.parse(iv.expiresAt) - Date.now())}${iv.ttl === '7d' ? '（7 天）' : ''}` // C-308
+      : iv.status === '已使用' ? `已使用 · ${iv.usedByName ? iv.usedByName + ' · ' : ''}${fmtDate(iv.usedAt).split(' ')[0]}` : iv.status === '已取消' ? '已作廢' : iv.status;
     const projText = iv => iv.projects.map(x => projName(x) + (iv.roles?.[x] ? ` · ${iv.roles[x]}` : '')).join('、') + (!iv.roles && iv.role ? ` · ${iv.role}` : '') || (iv.kind === 'reset' ? '—' : '還沒有專案');
-    const acts = iv => iv.status === '有效' ? `<button type="button" class="btn small" data-pm-inv-regen="${esc(iv.id)}">重新產生</button><button type="button" class="btn small" data-pm-inv-cancel="${esc(iv.id)}">取消</button>`
+    const acts = iv => iv.status === '有效' ? `<button type="button" class="btn small" data-pm-inv-regen="${esc(iv.id)}">重新產生</button><button type="button" class="btn small" data-pm-inv-cancel="${esc(iv.id)}">作廢</button>`
       : iv.status === '已使用' ? '' : `<button type="button" class="btn small primary" data-pm-inv-regen="${esc(iv.id)}">重發</button>`;
-    return `<div class="pm-projs"><div class="pm-card"><div class="pm-card-head"><strong>最近 7 天的邀請</strong><span class="muted small">連結 15 分鐘有效、只能用一次；過期可以「重發」（同樣內容、新連結）</span><span class="grow"></span><button type="button" class="link small" data-pm-inv-reload>重新整理</button><button type="button" class="btn primary small" data-pm-invite>＋ 邀請新的人</button></div>
+    return `<div class="pm-projs"><div class="pm-card"><div class="pm-card-head"><strong>最近 7 天的邀請</strong><span class="muted small">連結只能用一次，有效時間在產生時選（預設 24 小時）；過期可以「重發」，不需要就「作廢」</span><span class="grow"></span><button type="button" class="link small" data-pm-inv-reload>重新整理</button><button type="button" class="btn primary small" data-pm-invite>＋ 邀請新的人</button></div>
       ${perm.invites.length ? `<table class="pm-table pm-itable"><thead><tr><th scope="col">名字</th><th scope="col" class="c-proj">專案與角色</th><th scope="col" class="c-st">狀態</th><th scope="col" class="c-iact"><span class="sr-only">動作</span></th></tr></thead><tbody>
         ${perm.invites.map(iv => `<tr class="pm-irow"><td class="c-name"><b>${esc(iv.name)}</b>${iv.kind === 'reset' ? '<span class="pill-tag yellow">重設登入</span>' : ''}</td><td class="c-proj">${esc(projText(iv))}</td><td class="c-st"><span class="inv-st ${cls[iv.status]}">${esc(st(iv))}</span></td><td class="c-iact">${acts(iv)}</td></tr>`).join('')}</tbody></table>`
         : '<p class="muted small pm-pad">最近 7 天沒有邀請。按「＋ 邀請新的人」邀請新成員。</p>'}</div></div>`;
   }
   async function resetLogin(p) {
     if (!await confirmDialog({ title: `重設 ${esc(p.name)} 的登入？`, confirmText: '重設登入', danger: true,
-      message: `會<b>登出 ${esc(p.name)} 所有裝置</b>、作廢他的舊登入碼、清掉他的帳號密碼，並產生一個新的邀請連結（15 分鐘）讓他重新登入。他的 AI 不受影響。` })) return;
+      message: `會<b>登出 ${esc(p.name)} 所有裝置</b>、作廢他的舊登入碼、清掉他的帳號密碼，並產生一個新的邀請連結（24 小時內有效、只能用一次）讓他重新登入。他的 AI 不受影響。` })) return;
     try { showInviteLink(await api(`/api/participants/${encodeURIComponent(p.participantId)}/reset-login`, { method: 'POST' })); if (perm.invites) perm.invites = null; } catch (err) { toast(err.message); }
   }
 

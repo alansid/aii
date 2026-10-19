@@ -6,7 +6,9 @@
 // C-223：再加帳號密碼（人類自己設）與主機救援連結（只救管理員，只能在主機用 npm run admin-rescue 產生）。
 import { hashPassword, verifyPassword, normUsername, validUsername, USERNAME_RULE, PASSWORD_MIN, PASSWORD_MAX } from './password.js';
 
-const INVITE_TTL_MS = 15 * 60_000;     // 邀請連結 15 分鐘
+// C-308：邀請連結有效時間可選（預設 24 小時）；照舊只能用一次
+export const INVITE_TTLS = { '15m': 15 * 60_000, '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000 };
+const INVITE_TTL_DEFAULT = '24h';
 const PAIR_TTL_MS = 5 * 60_000;        // 配對碼 5 分鐘
 const INVITE_LIST_MS = 7 * 86_400_000; // 邀請清單顯示最近 7 天
 const DEVICE_PREFIX = 'dv_';
@@ -183,6 +185,7 @@ export function registerLogin(d) {
   const inviteView = (iv, people) => ({
     id: iv.id, kind: iv.participant_id ? 'reset' : 'new', name: iv.name, role: roleText(iv.role), roles: rolesOf(iv.role), readOnly: roOf(iv.role), projects: listOf(iv.projects),
     status: inviteStatus(iv), createdAt: iso(iv.created_at), expiresAt: iso(iv.expires_at), usedAt: iso(iv.used_at),
+    ttl: Object.keys(INVITE_TTLS).find(k => INVITE_TTLS[k] === iv.expires_at - iv.created_at) || null, // C-308
     usedByName: iv.used_by ? people.get(iv.used_by)?.name ?? null : null, createdByName: people.get(iv.created_by)?.name ?? null,
   });
   const inviteUrl = (base, token) => `${base}/invite/${token}`;
@@ -203,9 +206,15 @@ export function registerLogin(d) {
     const iv = await db.get('SELECT * FROM invites WHERE token_hash = ?', await sha256(token));
     return iv && inviteStatus(iv) === '有效' ? iv : null;
   }
-  async function newInviteToken(ivId) {
+  // ttl 沒帶＝預設；帶了要是 15m／1h／24h／7d
+  function readTtl(raw, fallback = INVITE_TTLS[INVITE_TTL_DEFAULT]) {
+    if (raw === undefined || raw === null || raw === '') return fallback;
+    if (!Object.hasOwn(INVITE_TTLS, raw)) throw invalid(`ttl 只能是 ${Object.keys(INVITE_TTLS).join('、')}`);
+    return INVITE_TTLS[raw];
+  }
+  async function newInviteToken(ivId, ttlMs) {
     const token = newToken(), now = Date.now();
-    await db.run('UPDATE invites SET token_hash = ?, created_at = ?, expires_at = ?, revoked_at = NULL WHERE id = ?', await sha256(token), now, now + INVITE_TTL_MS, ivId);
+    await db.run('UPDATE invites SET token_hash = ?, created_at = ?, expires_at = ?, revoked_at = NULL WHERE id = ?', await sha256(token), now, now + ttlMs, ivId);
     return token;
   }
   async function inviteOut(ctx, base, id, token) {
@@ -223,6 +232,7 @@ export function registerLogin(d) {
     const dup = await db.get('SELECT id FROM invites WHERE name = ? COLLATE NOCASE AND participant_id IS NULL AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?', name, now);
     if (dup) throw new ApiError(409, 'INVITE_EXISTS', `已經有給「${name}」的有效邀請，可以在「邀請」清單重新產生`);
     const projects = readInviteProjects(body.projects);
+    const ttlMs = readTtl(body.ttl); // C-308
     // C-219：roles＝{ 專案: 角色 }（勾的每個專案各一個）；舊的 role 字串照舊收
     let role;
     if (body.roles && typeof body.roles === 'object' && !Array.isArray(body.roles)) {
@@ -241,7 +251,7 @@ export function registerLogin(d) {
     }
     const id = randId('inv'), token = newToken();
     await db.run('INSERT INTO invites (id, token_hash, name, role, projects, participant_id, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?)',
-      id, await sha256(token), name, role, projects.join(','), null, me.id, now, now + INVITE_TTL_MS);
+      id, await sha256(token), name, role, projects.join(','), null, me.id, now, now + ttlMs);
     return { __status: 201, ...(await inviteOut(ctx, base, id, token)) };
   });
   route('GET', '/api/invites', async ({ me, ctx }) => {
@@ -256,15 +266,17 @@ export function registerLogin(d) {
     if (!iv) throw new ApiError(404, 'NOT_FOUND', '找不到這個邀請');
     return iv;
   }
-  // 重新產生／重發：同樣內容換新連結，舊連結立刻失效，重新計時 15 分鐘
-  route('POST', '/api/invites/:id/regenerate', async ({ me, ctx, params, base }) => {
+  // 重新產生／重發：同樣內容換新連結，舊連結立刻失效，重新計時（沒帶 ttl 就沿用原本的有效時間）
+  route('POST', '/api/invites/:id/regenerate', async ({ me, ctx, params, base, req }) => {
     const iv = await myInvite(ctx, me, params.id);
+    const prevTtl = Object.values(INVITE_TTLS).find(v => v === iv.expires_at - iv.created_at) || INVITE_TTLS[INVITE_TTL_DEFAULT];
+    const ttlMs = readTtl((await readJson(req).catch(() => ({}))).ttl, prevTtl);
     if (iv.used_at) throw new ApiError(400, 'INVITE_USED', `${iv.name} 已經用這個邀請加入，不需要重發`);
     if (!iv.participant_id) {
       const taken = await db.get('SELECT id FROM participants WHERE name = ?', iv.name);
       if (taken) throw new ApiError(409, 'NAME_TAKEN', `「${iv.name}」已經是成員了，不需要邀請`);
     }
-    return inviteOut(ctx, base, iv.id, await newInviteToken(iv.id));
+    return inviteOut(ctx, base, iv.id, await newInviteToken(iv.id, ttlMs));
   });
   route('POST', '/api/invites/:id/cancel', async ({ me, ctx, params }) => {
     const iv = await myInvite(ctx, me, params.id);
@@ -287,12 +299,13 @@ export function registerLogin(d) {
   }, { open: true });
 
   // 管理員「重設登入」：作廢舊登入碼、登出該人所有裝置，產生給他的新邀請連結
-  route('POST', '/api/participants/:id/reset-login', async ({ me, ctx, params, base }) => {
+  route('POST', '/api/participants/:id/reset-login', async ({ me, ctx, params, base, req }) => {
     requireHuman(me);
     await requireAdmin(ctx, me, '重設成員登入');
     const t = (await peopleMap(ctx)).get(params.id);
     if (!t || t.kind !== 'human' || t.status !== 'active') throw new ApiError(404, 'NOT_FOUND', '找不到這位人類成員');
     if (t.id === me.id) throw new ApiError(400, 'RESET_SELF', '要換自己的登入碼，請到「API 資訊與登入碼」按「換一組登入碼」');
+    const ttlMs = readTtl((await readJson(req).catch(() => ({}))).ttl); // C-308
     const now = Date.now(), id = randId('inv'), token = newToken();
     invalidatePeople();
     await db.batch([
@@ -302,7 +315,7 @@ export function registerLogin(d) {
       ['DELETE FROM credentials WHERE participant_id = ?', [t.id]], // C-223：密碼一起清掉，用新邀請連結重設
       ['UPDATE invites SET revoked_at = ? WHERE participant_id = ? AND used_at IS NULL AND revoked_at IS NULL', [now, t.id]],
       ['INSERT INTO invites (id, token_hash, name, role, projects, participant_id, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        [id, await sha256(token), t.name, t.role || '', String(t.projects || ''), t.id, me.id, now, now + INVITE_TTL_MS]],
+        [id, await sha256(token), t.name, t.role || '', String(t.projects || ''), t.id, me.id, now, now + ttlMs]],
     ]);
     return inviteOut({}, base, id, token);
   });

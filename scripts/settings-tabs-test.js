@@ -86,8 +86,20 @@ try {
   await js("document.querySelector('.confirm-root [data-ok]').click(); true"); await sleep(150);
   assert.equal(await js("document.querySelector('#pwd-set-form').newPassword.value"), '', '丟掉沒存的密碼');
 
-  // 手機：分頁在上方、可左右滑；左右鍵也能切
+  // C-307：選單拿掉「更換頭像」；第一行（頭像、名字、角色）點了開 個人設定 › 個人資料
   await close();
+  await js("document.querySelector('.topbar .av-btn').click(); true");
+  await until(() => js("!!document.querySelector('#av-menu [data-av=\"settings\"]')"), 5000, '頭像選單');
+  assert.equal(await js("document.querySelectorAll('#av-menu [data-av=\"avatar\"]').length"), 0, '選單沒有「更換頭像」');
+  assert.ok(!/更換頭像/.test(await js("[...document.querySelectorAll('#av-menu [role=menuitem]')].map(b => b.textContent).join('|')")), '選單項目沒有「更換頭像」字樣');
+  assert.equal(await js("document.querySelector('#av-menu [role=menuitem]').dataset.av"), 'profile', '第一行是頭像那列');
+  await js("document.querySelector('#av-menu [data-av=\"profile\"]').click(); true");
+  await until(() => js("!!document.querySelector('.modal.set-modal [role=tab]')"), 5000, '個人資料');
+  await sleep(150);
+  assert.deepEqual((await st()).sel, ['me'], '點頭像那列 → 個人資料');
+  await close();
+
+  // 手機：分頁在上方、可左右滑；左右鍵也能切
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(300);
   await js("document.querySelector('.m-av').click(); true");
