@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.74.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.74.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -3579,30 +3579,38 @@
   const quickState = id => { if (!quickMap.has(id)) quickMap.set(id, { sels: {}, text: '', busy: false, error: '' }); return quickMap.get(id); };
   const OPT_LETTER = /^\s*(?:[（(]([A-F])[）)]|([A-F])\s*[.、:：）)])\s*(\S.*)$/;
   const OPT_CIRCLE = /^\s*([①②③④⑤⑥])\s*(\S.*)$/;
-  // C-148：只有「選項：」那一行之後緊接的 2～6 行 A.～F.／①～⑥ 才是選項；其他地方的 ①②③、1. 2. 都只是文字。
-  // 每題用「問題N：」開頭（只有一題可省略），回傳 [{ no, title, opts: [{ key, label }] }]
+  // C-148／C-297：[需確認] 的選項解析，跟伺服器 src/questions.js 同一份規則（questions-test 會比對）
+  // 看過「選項：」或「問題N：」之後，緊接 2～6 行 A.～F.／①～⑥ 就是選項；回傳 [{ no, title, opts: [{ key, label }], named }]
   const OPT_HEAD = /^\s*選項\s*[:：]\s*$/;
   const Q_HEAD = /^\s*問題\s*(\d+)\s*[:：]\s*(.*)$/;
   function parseQuestions(text) {
     const lines = String(text).split('\n'), out = [];
-    let lastQ = null, lastEnd = -1;
+    let lastQ = null, lastEnd = -1, cue = null; // cue：上一組選項之後看過的提示（'opt'＝選項：、'q'＝問題N：）
     for (let i = 0; i < lines.length; i++) {
       const qh = Q_HEAD.exec(lines[i]);
-      if (qh) { lastQ = { no: Number(qh[1]), title: qh[2].trim(), at: i }; continue; }
-      if (!OPT_HEAD.test(lines[i])) continue;
+      if (qh) { lastQ = { no: Number(qh[1]), title: qh[2].trim(), at: i }; if (cue !== 'opt') cue = 'q'; continue; }
+      if (OPT_HEAD.test(lines[i])) { cue = 'opt'; continue; }
+      if (!cue) continue;
       const opts = [];
-      let j = i + 1;
+      let j = i;
       for (; j < lines.length && opts.length < 7; j++) {
         const a = OPT_LETTER.exec(lines[j]), c = OPT_CIRCLE.exec(lines[j]);
         if (a) opts.push({ key: a[1] || a[2], label: a[3].trim() });
         else if (c) opts.push({ key: c[1], label: c[2].trim() });
         else break;
       }
+      if (!opts.length) continue;
+      if (cue === 'q') { // 只有「問題N：」提示：這題後面（下一個「問題N：」之前）還有「選項：」就跳過這組
+        let k = j, later = false;
+        for (; k < lines.length && !Q_HEAD.test(lines[k]); k++) if (OPT_HEAD.test(lines[k])) { later = true; break; }
+        if (later) { i = j - 1; continue; }
+      }
       const keys = opts.map(o => o.key);
       if (opts.length >= 2 && opts.length <= 6 && new Set(keys).size === keys.length) {
         const q = lastQ && lastQ.at > lastEnd ? lastQ : null;
         out.push({ no: q ? q.no : out.length + 1, title: q ? q.title : '', opts, named: !!q });
         lastEnd = j - 1;
+        cue = null;
       }
       i = j - 1;
     }

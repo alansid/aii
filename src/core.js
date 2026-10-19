@@ -7,6 +7,7 @@
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
 import { registerCards, teamCards, workFrom, autoArchive } from './cards.js';
 import { registerLogin } from './login.js';
+import { optionWarnings } from './questions.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 30_000;           // 人類：網頁每幾秒就會回報
@@ -462,6 +463,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       // 人類回覆某則訊息＝處理了它：把他在那則訊息上的待處理通知標為已讀（AI 照規則自己 ACK，不替 AI 自動 ACK）
       await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND message_id = ? AND status = 'pending'", createdAt, me.id, replyTo.id);
     }
+    if (me.kind === 'ai') warnings.push(...optionWarnings(text)); // C-297：[需確認] 的選項沒變成按鈕就提醒發文的 AI
     return { message: await serializeMessage(ctx, await db.get('SELECT * FROM messages WHERE id = ?', id)), duplicate: false, warnings };
   }
 
