@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS messages (
   payload_hash TEXT,
   file_id TEXT,                            -- 附帶的上傳文件
   reply_from TEXT,                         -- C-259：要回覆的人（JSON 陣列，收件人子集合）；NULL＝沒標
+  project TEXT,                            -- 所屬專案（C-302：原本只靠 migration 0012 補，新站會少）
   created_at TEXT NOT NULL,
   UNIQUE (author_id, request_id)
 );
@@ -134,6 +135,7 @@ CREATE TABLE IF NOT EXISTS avatars (
 -- 查詢效能索引（降低 D1 讀取量）
 CREATE INDEX IF NOT EXISTS idx_notif_status_created ON notifications (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages (reply_to);
+CREATE INDEX IF NOT EXISTS idx_messages_project_seq ON messages (project, seq);
 
 -- 「等你決定」清單：人類按「已處理」的紀錄
 CREATE TABLE IF NOT EXISTS decision_resolutions (
@@ -163,6 +165,7 @@ CREATE TABLE IF NOT EXISTS cards (
   options TEXT NOT NULL DEFAULT '',         -- 選項，JSON 陣列
   impact TEXT NOT NULL DEFAULT '', after_next TEXT NOT NULL DEFAULT '',
   decision_result TEXT, decision_by TEXT, decision_at TEXT, decision_note TEXT NOT NULL DEFAULT '',
+  project TEXT NOT NULL DEFAULT '平台',    -- 所屬專案（C-302：原本只靠 migration 0012 補；寫入時一定帶）
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
