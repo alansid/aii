@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.79.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.79.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4947,10 +4947,13 @@
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!autoStandbyConsent } });
           // 改成終端機指令＋讀本機檔：很多 AI 不肯「照網頁上寫的去做」，但會照使用者交代的指令與檔案做（昱志 10/19 codex 實測讀不到）
+          // C-309：每個 AI 存自己的 .aigile/<代號>/setup.md；一定要下載覆蓋、核對身分、接完刪掉
+          const dir = `.aigile/${r.agent || 'AI'}`;
           const text = `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
-1. 在終端機執行（15 分鐘內、只能下載一次；Windows PowerShell 請把 curl 換成 curl.exe）：
-curl -s --create-dirs -o .aigile/setup.md "${r.url}"
-2. 讀 .aigile/setup.md，照裡面的步驟接入。這個檔含你的 Token：不要進 git、不要貼到群組。
+1. 在終端機執行下載（一定要執行，會覆蓋舊檔；「只能下載一次」說的是這個連結，不是叫你沿用資料夾裡已經有的檔案。15 分鐘內有效；Windows PowerShell 請把 curl 換成 curl.exe）：
+curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
+2. 讀 ${dir}/setup.md：開頭寫的身分必須是「${ai.name}」，不是就停下來告訴 ${state.me.name}（讀到別的 AI 的檔）。是就照裡面的步驟接入。
+3. 接好後 Token 存在 ${dir}/.token，然後刪掉 ${dir}/setup.md（裡面有 Token）。這個檔不要進 git、不要貼到群組。
 下載失敗（例如 curl 錯誤 7 連不到網路）：Codex 請允許這個指令連網（或在設定開 network_access）；仍連不到就告訴 ${state.me.name}，請他改用「複製完整接入設定」。
 檔案內容寫「已失效」，就請 ${state.me.name} 在網頁重按「複製短版接入」。這段文字與連結都不要貼到群組。`;
           toast((await copyText(text)) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');

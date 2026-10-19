@@ -764,7 +764,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const hidden = members.length - inMine.length;
     const roster = groups.filter(([, l]) => l.length).map(([t, l]) => (groups.length > 1 ? `【${t}】\n` : '') + l.map(line).join('\n')).join('\n')
       + (hidden ? `\n- 其他專案的成員（${hidden} 位）不在名冊上；要找他們請發跨專案頻道（project: "all"）。` : '');
-    const agent = ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI';
+    const agent = agentDir(ai);
     const insideEnv = ['行內', '投信'].includes(ai.env);
     const trial = ROLES.find(r => r.key === ai.role_key)?.resident === false; // C-171 試用者：不常駐、不開 watcher
     const po = members.find(p => p.kind === 'ai' && p.role_key === 'PO');
@@ -789,6 +789,8 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       : hasGrant ? `- ${owner.name} 已長期授權（${grants.until ? `到 ${twDate(grants.until)} 為止，到期自動失效` : '不限期，可隨時收回'}）：\n${grants.items.map(i => `  - ${i.label}${i.note ? `（${i.note}）` : ''}`).join('\n')}\n- 最新授權以 GET /api/me 的 grants 為準：要做上面的事之前，先確認 grants 裡還有這一項、而且沒過期；到期或沒列在這裡的，照下面規則每次先在本機問。\n`
       : `- 目前沒有長期授權。${owner.name} 之後若在網頁設定，會出現在 GET /api/me 的 grants，以那裡為準。\n`;
     return `# ${gname} 接入設定：${ai.name}
+
+> 身分核對（C-309）：這份設定是給「${ai.name}」（${ai.id}）的。如果你是照短版接入下載的，而 ${owner.name} 交代你的名字不是「${ai.name}」，就是讀到別的 AI 的檔：停下來告訴 ${owner.name}，不要照做。
 
 你即將以 AI 成員身分加入「${gname}」協作群組。群組裡有人類成員與各自的 AI 助手，大家用訊息分工、交接與回報。請完整讀完本設定，先依第零節判斷是重新接上還是第一次，並在每一步誠實回報結果。
 ${trial ? `
@@ -827,6 +829,7 @@ ${trial ? `
 
 ## 三、初次接入（只做一次）
 - 先在目前的工作資料夾自己建 .aigile/${agent}/（第一次接入時沒有 .aigile 是正常的，不要因此停下來回報受阻），Token 存成 .aigile/${agent}/.token，並照第二節處理 .gitignore。
+- 用短版接入下載的 .aigile/${agent}/setup.md 含 Token：存好 .token 後就刪掉它（C-309），不要留著給下一個 AI 讀到。
 1. 確認能力：先確認你具備呼叫 HTTP API 的工具。沒有的話，直接告訴 ${owner.name} 並提供手動操作方式，絕對不可假稱已連線。
 2. 讀規格：GET ${base}/api/docs/ai-integration，完整讀完再繼續。
 3. 核對身分：GET /api/me，確認 participantId、名稱與所屬人類正確。
@@ -2500,6 +2503,8 @@ ${trial
     const consent = ['1', 'true'].includes(url.searchParams.get('autoStandby'));
     return { text: await onboardingText(base, await myAi(me, params.id), { consent }) };
   });
+  // AI 在本機的資料夾名（.aigile/<代號>/）：角色代碼，自訂角色用 AI
+  const agentDir = ai => (ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI');
   // C-283 短版接入：一次性連結（15 分鐘、只能讀一次；重產讓舊的失效）。只存雜湊，不快取、不記內容
   const OLINK_TTL = 15 * 60_000;
   route('POST', '/api/my-ais/:id/onboarding-link', async ({ me, params, base, req }) => {
@@ -2510,7 +2515,7 @@ ${trial
     const body = await readJson(req).catch(() => ({}));
     const secret = newToken(), exp = Date.now() + OLINK_TTL;
     await setJson('olink:' + ai.id, { h: await sha256(secret), exp, consent: body.autoStandby === true });
-    return { url: `${base}/api/setup/${ai.id}.${secret}`, expiresAt: iso(exp) };
+    return { url: `${base}/api/setup/${ai.id}.${secret}`, expiresAt: iso(exp), agent: agentDir(ai) }; // C-309：短版存 .aigile/<代號>/setup.md
   });
   route('GET', '/api/setup/:key', async ({ params, base }) => {
     const gone = () => new Response('這個接入連結已失效（15 分鐘內、只能讀一次）。請告訴所屬人類，請他在網頁「我的 AI」重按「複製短版接入」。', { status: 410, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
