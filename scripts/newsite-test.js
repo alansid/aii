@@ -32,8 +32,25 @@ try {
   // 回報、看得到、許願可以整理
   r = await call(liu.token, '/api/reports', 'POST', { title: '新站回報看得到嗎' });
   assert.equal(r.status, 201);
+  // C-303：送出後告訴他去哪裡看（修正前沒有 inbox）
+  assert.deepEqual(r.body.inbox, { project: ops.id, projectName: '平台維運', canSee: true }, '回報收件位置');
+
+  // C-303：站上沒有 PO AI、管理員自己回報 → 通知收件專案的 leader（修正前沒人被通知）
+  const lee = (await call(null, '/api/join', 'POST', { name: '李組長', role: 'PG' })).body;
+  const leeId = lee.participant.participantId;
+  await call(liu.token, `/api/participants/${leeId}/projects`, 'PUT', { projects: [ops.id] });
+  await call(liu.token, '/api/members/matrix', 'PUT', { changes: [{ id: leeId, leaderOf: [ops.id] }] });
+  r = await call(liu.token, '/api/reports', 'POST', { title: '管理員回報要通知 leader' });
+  assert.equal(r.body.notified, true, '有通知到人');
+  let inbox = (await call(lee.token, '/api/notifications?status=pending')).body.items;
+  assert.ok(inbox.some(n => /管理員回報要通知 leader/.test(n.preview) && /平台維運/.test(n.preview)), 'leader 收到回報通知，且寫收件專案名稱');
+  // leader 回報 → 通知管理員
+  r = await call(lee.token, '/api/reports', 'POST', { title: 'leader 回報通知管理員' });
+  inbox = (await call(liu.token, '/api/notifications?status=pending')).body.items;
+  assert.ok(inbox.some(n => /leader 回報通知管理員/.test(n.preview)), '管理員收到');
+  assert.ok(!(await call(lee.token, '/api/notifications?status=pending')).body.items.some(n => /leader 回報通知管理員/.test(n.preview)), '不通知自己');
   r = await call(liu.token, '/api/reports');
-  assert.equal(r.status, 200, '管理員看得到回報'); assert.equal(r.body.items[0].title, '新站回報看得到嗎');
+  assert.equal(r.status, 200, '管理員看得到回報'); assert.ok(r.body.items.some(x => x.title === '新站回報看得到嗎'));
   assert.equal((await call(liu.token, '/api/wishes')).body.canEdit, true, '可以整理願望');
 
   // 管理員改收件專案：只有那個專案的人看得到

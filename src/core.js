@@ -1780,7 +1780,10 @@ ${trial
     await loadFbProject();
     const people = await peopleMap(ctx);
     let po = [...people.values()].filter(p => p.status === 'active' && p.kind === 'ai' && p.role_key === 'PO' && projectsOf(p).includes(FB_PROJECT) && p.id !== author.id);
-    if (!po.length) { const admin = adminOf(people); po = admin && admin.id !== author.id ? [admin] : []; }
+    if (!po.length) { // C-303：站上沒有整理回報的 PO AI（例如新站）→ 通知收件專案的 leader 與管理員（不含自己）
+      const lead = (await loadLeaders())[FB_PROJECT] || [], admin = adminOf(people);
+      po = [...new Set([...lead, admin?.id].filter(Boolean))].map(id => people.get(id)).filter(p => p && p.status === 'active' && p.id !== author.id);
+    }
     if (!po.length) return null;
     const id = randId('msg'), at = nowIso(), ask = po.length === 1 ? JSON.stringify([po[0].id]) : null;
     const stmts = [['INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project, reply_from) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [id, author.id, text.slice(0, MAX_TEXT), null, requestId, null, null, null, at, FB_PROJECT, ask]]];
@@ -1823,8 +1826,9 @@ ${trial
     const ctxJson = JSON.stringify(readContext(body.context)), at = nowIso();
     const seq = Number((await db.get('INSERT INTO reports (reporter_id, reporter_project, title, detail, context, created_at, updated_at) VALUES (?,?,?,?,?,?,?) RETURNING seq', me.id, pj, title, detail, ctxJson, at, at)).seq);
     const where = [pj ? nameOf(pj) : '', readContext(body.context).page || ''].filter(Boolean).join(' › ');
-    await notifyPo(ctx, me, `[回報] ${rNo(seq)} ${title}（${me.name}${where ? ' · ' + where : ''}）\n請到平台「工作」的回報區整理：標嚴重度、轉工作卡、合併或先不處理。GET /api/reports/${rNo(seq)}`, 'report_' + seq).catch(() => {});
-    return { __status: 201, reportId: rNo(seq), seq };
+    const msgId = await notifyPo(ctx, me, `[回報] ${rNo(seq)} ${title}（${me.name}${where ? ' · ' + where : ''}）\n請到「${nameOf(FB_PROJECT)}」的「工作」回報區整理：標嚴重度、轉工作卡、合併或先不處理。GET /api/reports/${rNo(seq)}`, 'report_' + seq).catch(() => null);
+    // C-303：告訴回報的人去哪裡看、有沒有通知到人
+    return { __status: 201, reportId: rNo(seq), seq, inbox: { project: FB_PROJECT, projectName: nameOf(FB_PROJECT), canSee: fbTeam(me) }, notified: !!msgId };
   });
   // 截圖：回報的人送出後 30 分鐘內上傳，每張 1 MB 內，最多 3 張；行內／投信要帶聲明
   route('POST', '/api/reports/:id/shots', async ({ me, req, params, url }) => {

@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.75.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.75.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4590,7 +4590,8 @@
       fb.shots.forEach(s => URL.revokeObjectURL(s.url));
       Object.assign(fb, { shots: [], draft: {} });
       drawFb();
-      toast(`已送出 ${r.reportId}，謝謝！${failed ? `（${failed} 張截圖沒傳上去）` : ''}平台團隊會整理。`);
+      const ib = r.inbox || {}; // C-303：送出後告訴他去哪裡看
+      toast(`已收到 ${r.reportId}，謝謝！${failed ? `（${failed} 張截圖沒傳上去）` : ''}${ib.canSee ? `在「${ib.projectName} › 工作 › 回報」可看到。` : `「${ib.projectName || '平台'}」的成員會整理。`}`);
     } catch (err) { toast(err.message); } finally { const b = $('#fb-report .fb-send'); if (b) b.disabled = false; }
   }
   async function sendWish() {
