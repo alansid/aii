@@ -90,6 +90,10 @@ try {
   const joined = (await call(null, '/api/auth/invite', 'POST', { token: tok })).body;
   assert.ok(joined.token, '用邀請加入');
   assert.deepEqual((await call(joined.token, '/api/me')).body.readOnlyIn, ['平台'], '加入就是唯讀');
+  // 唯讀畫面只藏寫入的按鈕；「↩ 名字」是跳到原訊息的連結，要看得到（UX 驗收提醒）
+  const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  assert.ok(/\.ro-here \.composer/.test(css) && /\.ro-here \.cg-reply/.test(css), '唯讀藏輸入框與回覆');
+  assert.ok(!/\.ro-here \.gm-re\b/.test(css), '「↩ 名字」連結不藏');
   console.log('readonly-test：全部通過');
 } catch (e) {
   console.error('readonly-test 失敗：', e.message);

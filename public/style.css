@@ -2443,7 +2443,7 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 /* C-294 唯讀成員 */
 .ro-note { margin: 8px 16px; padding: 10px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: .9rem; }
 .ro-note[hidden] { display: none; }
-.ro-here .composer, .ro-here .reply-btn, .ro-here .cg-reply, .ro-here .gm-re, .ro-here .drawer .inl, .ro-here #card-new, .ro-here .drawer .now-acts, .ro-here .drawer .more-acts, .ro-here .drawer [data-act="handover"], .ro-here [data-ask-ai] { display: none !important; }
+.ro-here .composer, .ro-here .reply-btn, .ro-here .cg-reply, .ro-here .drawer .inl, .ro-here #card-new, .ro-here .drawer .now-acts, .ro-here .drawer .more-acts, .ro-here .drawer [data-act="handover"], .ro-here [data-ask-ai] { display: none !important; }
 .pm-ro-btn { margin-left: 6px; min-height: 28px; padding: 0 8px; border: 1px dashed var(--border); border-radius: 12px; background: transparent; color: var(--muted); font: inherit; font-size: .75rem; cursor: pointer; }
 .pm-ro-btn.on { border-style: solid; background: var(--surface-2); color: var(--text); font-weight: 600; }
 .ro-tag { margin-left: 6px; }
