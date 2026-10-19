@@ -115,6 +115,11 @@ try {
   await db.run('UPDATE report_shots SET created_at = ?', Date.now() - 31 * 86400_000);
   assert.equal((await app.runScheduled()).shotsCleaned, 3, '30 天的截圖刪掉');
   assert.equal((await call(liu.token, '/api/reports/R-1')).body.shots.length, 0);
+  // C-315：右上按鈕字改成「🐞 回報」，面板兩分頁照舊
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const fbBtn = html.slice(html.indexOf('class="dm-btn fb-btn"'), html.indexOf('</button>', html.indexOf('class="dm-btn fb-btn"')));
+  assert.ok(fbBtn.includes('<span class="dm-btn-t" aria-hidden="true">回報</span>'), '右上按鈕字是「回報」（原本「回報／許願」）');
+  assert.match(html, /<aside id="fb-panel"/, '面板照舊');
   console.log('feedback-test：全部通過');
 } catch (e) {
   console.error('feedback-test 失敗：', e.message);
