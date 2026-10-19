@@ -117,6 +117,13 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   async function loadProjects(force = false) {
     if (!force && Date.now() - projectsAt < 60_000 && projectRows.length) return; // C-245：專案很少改，原 10 秒一天讀 8 千多次；改專案時會清除
     projectRows = await db.all('SELECT * FROM projects ORDER BY created_at, id');
+    if (!projectRows.length) { // C-300：新站第一次啟動，自動建「平台維運」當回報收件專案（之後管理員可改）
+      const id = randId('prj'), at = nowIso();
+      await db.batch([['INSERT OR IGNORE INTO projects (id, name, archived, created_by, created_at) VALUES (?,?,0,?,?)', [id, '平台維運', 'system', at]],
+        ["INSERT INTO app_settings (key, value) VALUES ('feedback_project', ?) ON CONFLICT(key) DO NOTHING", [id]],
+        ['INSERT INTO project_events (project_id, at, actor_id, text) VALUES (?,?,?,?)', [id, at, 'system', '新站第一次啟動，系統自動建立（回報收件專案）']]]);
+      projectRows = await db.all('SELECT * FROM projects ORDER BY created_at, id');
+    }
     PROJECTS.length = 0;
     PROJECTS.push(...projectRows.filter(r => !r.archived).map(r => r.id));
     projectsAt = Date.now();
@@ -1247,7 +1254,7 @@ ${trial
     const leaders = Object.fromEntries(PROJECTS.map(pj => [pj, (leadersMap[pj] || []).filter(id => people.get(id)?.status === 'active')]));
     await loadReadOnly();
     const readOnly = Object.fromEntries(PROJECTS.map(pj => [pj, (roMap[pj] || []).filter(id => people.get(id)?.status === 'active')])); // C-294
-    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, readOnly, ...extra };
+    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, readOnly, feedbackProject: await loadFbProject(), ...extra };
   }
 
   // 改成員所屬專案（單人或批次）。移出某專案時，他在該專案負責的未結案卡片退回「待處理」、改為未指派。
@@ -1595,6 +1602,17 @@ ${trial
     for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'slug:%'").catch(() => [])) set[r.key.slice(5)] = r.value;
     return Object.fromEntries(projectRows.map(r => [r.id, set[r.id] || SLUG_DEFAULT[r.id] || r.id]));
   }
+  // C-300：回報收件專案（回報 R-xx、許願整理、回報區都在這個專案）
+  route('PUT', '/api/settings/feedback-project', async ({ ctx, me, req }) => {
+    await requireAdmin(ctx, me, '設定回報收件專案');
+    await loadProjects(true);
+    const pj = String((await readJson(req)).project || '');
+    if (!PROJECTS.includes(pj)) throw invalid('project 需為目前的專案代號');
+    const at = nowIso();
+    await db.batch([["INSERT INTO app_settings (key, value) VALUES ('feedback_project', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [pj]], projEvent(pj, me.id, `${me.name} 設為回報收件專案`, at)]);
+    await loadFbProject(true);
+    return projectsResponse(ctx);
+  });
   route('PUT', '/api/projects/:id/slug', async ({ ctx, me, req, params }) => {
     await requireAdmin(ctx, me, '改專案的網址英文名');
     await loadProjects(true);
@@ -1718,7 +1736,16 @@ ${trial
 
   // ---------- C-281 回報問題＋許願池 ----------
   // 問題回報 R-xx 只給平台團隊（平台專案成員）；願望所有登入者可看可 +1。不加輪詢：打開時才讀。
-  const FB_PROJECT = '平台';
+  // C-300：回報收件專案由管理員設定（app_settings 的 feedback_project）；沒設：原本的站用「平台」、新站用「平台維運」
+  let FB_PROJECT = '平台', fbAt = 0;
+  async function loadFbProject(force = false) {
+    if (!force && Date.now() - fbAt < 60_000 && PROJECTS.includes(FB_PROJECT)) return FB_PROJECT;
+    await loadProjects();
+    const set = (await db.get("SELECT value FROM app_settings WHERE key = 'feedback_project'").catch(() => null))?.value;
+    FB_PROJECT = PROJECTS.includes(set) ? set : PROJECTS.includes('平台') ? '平台' : (projectRows.find(r => r.name === '平台維運' && !r.archived)?.id || PROJECTS[0] || '平台');
+    fbAt = Date.now();
+    return FB_PROJECT;
+  }
   const FB_DAILY_MAX = 20;                 // 每人每天回報＋許願最多 20 則
   const SHOT_MAX = 1024 * 1024, SHOT_DAYS = 30, SHOTS_PER_REPORT = 3;
   const REPORT_STATUS = ['未整理', '已轉工作卡', '已合併', '先不處理'];
@@ -1728,7 +1755,7 @@ ${trial
   const rSeq = v => { const m = /^R-(\d+)$/i.exec(String(v)); return m ? Number(m[1]) : Number(v) || 0; };
   const cardSeq = id => { const m = /^C-(\d+)$/.exec(String(id || '')); return m ? Number(m[1]) - 100 : null; };
   const fbTeam = me => projectsOf(me).includes(FB_PROJECT);
-  const requireFbTeam = me => { if (!fbTeam(me)) throw new ApiError(403, 'FORBIDDEN', '問題回報只有平台團隊看得到。'); };
+  const requireFbTeam = async me => { await loadFbProject(); if (!fbTeam(me)) throw new ApiError(403, 'FORBIDDEN', `問題回報只有「${nameOf(FB_PROJECT)}」的成員看得到（回報收件專案）。`); };
   async function fbQuota(me) {
     const since = new Date(Date.now() - 24 * 3600_000).toISOString();
     const n = (await db.get('SELECT (SELECT COUNT(*) FROM reports WHERE reporter_id = ? AND created_at > ?) + (SELECT COUNT(*) FROM wishes WHERE author_id = ? AND created_at > ?) AS n', me.id, since, me.id, since)).n;
@@ -1750,6 +1777,7 @@ ${trial
   const cardDone = st => st === '已完成' || st === '已封存';
   // 叫醒平台 PO（AI）：在平台專案發一則提及 PO 的訊息（作者＝回報的人；他不在平台也看不到這則）
   async function notifyPo(ctx, author, text, requestId) {
+    await loadFbProject();
     const people = await peopleMap(ctx);
     let po = [...people.values()].filter(p => p.status === 'active' && p.kind === 'ai' && p.role_key === 'PO' && projectsOf(p).includes(FB_PROJECT) && p.id !== author.id);
     if (!po.length) { const admin = adminOf(people); po = admin && admin.id !== author.id ? [admin] : []; }
@@ -1816,27 +1844,27 @@ ${trial
     return { __status: 201, id, size: bytes.length };
   });
   route('GET', '/api/reports', async ({ ctx, me, url }) => {
-    requireFbTeam(me);
+    await requireFbTeam(me);
     const st = url.searchParams.get('status');
     const rows = await db.all(`SELECT * FROM reports ${st ? 'WHERE status = ?' : ''} ORDER BY seq DESC LIMIT 200`, ...(st ? [st] : []));
     const items = await reportViews(ctx, rows);
     return { items, open: items.filter(x => x.status === '未整理').length };
   });
   route('GET', '/api/reports/:id', async ({ ctx, me, params }) => {
-    requireFbTeam(me);
+    await requireFbTeam(me);
     const r = await db.get('SELECT * FROM reports WHERE seq = ?', rSeq(params.id));
     if (!r) throw new ApiError(404, 'NOT_FOUND', '找不到這則回報');
     return (await reportViews(ctx, [r]))[0];
   });
   route('GET', '/api/reports/:id/shots/:shot', async ({ me, params }) => {
-    requireFbTeam(me);
+    await requireFbTeam(me);
     const s = await db.get('SELECT mime, data FROM report_shots WHERE id = ? AND report_seq = ?', params.shot, rSeq(params.id));
     if (!s || !s.data) throw new ApiError(404, 'NOT_FOUND', '截圖不存在或已過 30 天刪除');
     return new Response(s.data instanceof Uint8Array ? s.data : new Uint8Array(s.data), { headers: { 'Content-Type': s.mime, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' } });
   });
   // 平台團隊整理：嚴重度、狀態、轉成的工作卡、合併到哪則、備註
   route('PATCH', '/api/reports/:id', async ({ ctx, me, req, params }) => {
-    requireFbTeam(me);
+    await requireFbTeam(me);
     const r = await db.get('SELECT * FROM reports WHERE seq = ?', rSeq(params.id));
     if (!r) throw new ApiError(404, 'NOT_FOUND', '找不到這則回報');
     const body = await readJson(req), next = { status: r.status, severity: r.severity, card_id: r.card_id, merged_into: r.merged_into, note: r.note };
@@ -1872,6 +1900,7 @@ ${trial
   const wSeq = v => { const m = /^W-(\d+)$/i.exec(String(v)); return m ? Number(m[1]) : Number(v) || 0; };
   route('GET', '/api/wishes', async ({ me }) => {
     const rows = await db.all('SELECT * FROM wishes ORDER BY votes DESC, seq DESC LIMIT 300');
+    await loadFbProject();
     return { items: await wishViews(me, rows), canEdit: fbTeam(me) };
   });
   route('POST', '/api/wishes', async ({ me, req }) => {
@@ -1897,7 +1926,7 @@ ${trial
   route('DELETE', '/api/wishes/:id/vote', ({ me, params }) => { requireHuman(me); return vote(me, params.id, false); });
   // 平台團隊改狀態：收到／評估中／排入（帶 cardId）／先不做（帶原因）；已上線跟著工作卡完成
   route('PATCH', '/api/wishes/:id', async ({ me, req, params }) => {
-    requireFbTeam(me);
+    await requireFbTeam(me);
     const w = await db.get('SELECT * FROM wishes WHERE seq = ?', wSeq(params.id));
     if (!w) throw new ApiError(404, 'NOT_FOUND', '找不到這個願望');
     const body = await readJson(req);

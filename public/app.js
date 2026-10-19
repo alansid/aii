@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.74.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.75.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -988,7 +988,7 @@
   async function loadProjectList() {
     const d = await api('/api/projects');
     state.projectList = d.items;
-    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {} }; // C-294
+    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {}, feedbackProject: d.feedbackProject || '平台' }; // C-294、C-300
     document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
     if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
     PROJECTS.length = 0;
@@ -4655,7 +4655,8 @@
     });
   }
   // 平台工作頁的回報區（只有平台團隊；打開工作頁才讀）
-  const fbTeamView = () => projectView() === '平台' && (state.me?.projects || myProjects()).includes('平台') && state.page === 'work';
+  const fbPj = () => state.projMeta.feedbackProject || '平台'; // C-300：回報收件專案（管理員可改）
+  const fbTeamView = () => projectView() === fbPj() && myProjects().includes(fbPj()) && state.page === 'work';
   async function loadReports() {
     fb.repAt = Date.now();
     try { const d = await api('/api/reports'); fb.reports = d.items; if (fbTeamView()) { const el = $('#rep-strip'); if (el) el.outerHTML = reportsHtml(); } } catch {}
@@ -4694,7 +4695,7 @@
     if (!await confirmDialog({ title: `${id} 轉成工作卡？`, confirmText: '建立工作卡', message: `在平台建一張「${esc(id)} ${esc(r.title)}」工作卡（待整理），回報會連到這張卡；卡完成時回報顯示「已修好」。` })) return;
     try {
       const c = r.context, reason = [`來自回報 ${id}（${r.reporter.name}${r.reporterProject ? '，' + r.reporterProject.name : ''}）`, r.detail, [c.page, c.device, c.version && 'v' + c.version, c.errorCode && '錯誤 ' + c.errorCode].filter(Boolean).join(' · ')].filter(Boolean).join('\n').slice(0, 500);
-      const card = await api('/api/cards', { method: 'POST', body: { requestId: newRequestId(), project: '平台', type: '工作', title: `${id} ${r.title}`.slice(0, 100), reason } });
+      const card = await api('/api/cards', { method: 'POST', body: { requestId: newRequestId(), project: fbPj(), type: '工作', title: `${id} ${r.title}`.slice(0, 100), reason } });
       await patchReport(id, { cardId: card.cardId });
       await loadCards().catch(() => {});
       toast(`已建 ${card.cardId}，${id} 連到這張卡`);
@@ -5988,6 +5989,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       return `<tr class="pm-prow${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}"><td class="c-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}</td><td class="c-code" data-label="API 代號" title="${esc(p.id)}">${esc(p.id)}</td><td class="c-num" data-label="成員">${p.memberCount}</td><td class="c-num2" data-label="未結案卡">${p.openCards}</td><td class="c-repo" data-label="程式庫">${repo}</td><td class="c-more">${last}</td></tr>${log}`;
     }).join('');
     return `<div class="pm-projs">
+      <div class="pm-card pm-fb-proj"><label for="pm-fb-proj">回報收件專案</label><select id="pm-fb-proj">${PROJECTS.map(x => `<option value="${esc(x)}"${x === fbPj() ? ' selected' : ''}>${esc(projName(x))}</option>`).join('')}</select><button type="button" class="btn small primary" data-pp="fbproj">儲存</button><span class="muted small">右上「🐞 回報」送進這個專案的「工作 › 回報」；許願的整理也在這裡。</span></div>
       <div class="pm-card pm-group-name"><label for="pm-group-name">群組名稱</label><input id="pm-group-name" maxlength="30" value="${esc(BASE_TITLE)}" aria-describedby="pm-gn-hint"><button type="button" class="btn small primary" data-pp="groupname">儲存</button><span class="muted small" id="pm-gn-hint">顯示在登入頁、左上角、分頁標題與 AI 接入設定。</span></div>
       <div class="pm-card"><div class="pm-card-head"><strong>專案 · ${active.length}</strong><span class="grow"></span><button type="button" class="btn primary small" data-pm-newproj>＋ 新增專案</button></div>
         <table class="pm-table pm-ptable"><thead><tr><th scope="col">專案</th><th scope="col" class="c-code">API 代號</th><th scope="col" class="c-num">成員</th><th scope="col" class="c-num2">未結案卡</th><th scope="col" class="c-repo">程式庫</th><th scope="col" class="c-more"><span class="sr-only">動作</span></th></tr></thead>
@@ -6268,6 +6270,11 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
         const name = await promptName('改專案名稱', projName(id));
         if (!name || name === projName(id)) return;
         await api(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } });
+      } else if (a === 'fbproj') { // C-300
+        const pj = $('#pm-fb-proj')?.value;
+        if (!pj || pj === fbPj()) return;
+        await api('/api/settings/feedback-project', { method: 'PUT', body: { project: pj } });
+        toast(`回報改送到「${projName(pj)}」`);
       } else if (a === 'slug') { // C-285
         const cur = state.projectList.find(p => p.id === id)?.slug || id;
         const slug = await promptName('網址英文名', cur, { label: '英文小寫、數字或 -（例：platform）', max: 40, hint: `網址會變成 /p/${'<英文名>'}/messages；API 與 AI 接入設定的專案代號不變（${id}），舊網址照樣能開。` });

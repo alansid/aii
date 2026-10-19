@@ -768,7 +768,7 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     const uid = randId('card');
     await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at, project)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, f.type, f.title, f.reason ?? '', f.ownerId ?? null, status, f.next ?? '', f.blocker ?? '', f.waitForId ?? null,
-      f.criteria ?? '', r.from_id, `sug_${r.id}`, at, at, f.project || '平台');
+      f.criteria ?? '', r.from_id, `sug_${r.id}`, at, at, f.project || PROJECTS[0]); // C-300：不寫死「平台」
     const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
     await db.batch([
       ...logStmt(c.seq, me, [`採用 ${aiName} 的建議建立卡片（類型：${f.type}）`], at),

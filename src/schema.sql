@@ -215,8 +215,7 @@ CREATE TABLE IF NOT EXISTS projects (
   created_by TEXT,
   created_at TEXT NOT NULL
 );
-INSERT OR IGNORE INTO projects (id, name, archived, created_at) VALUES ('平台', '平台', 0, '2026-01-01T00:00:00.000Z');
-INSERT OR IGNORE INTO projects (id, name, archived, created_at) VALUES ('銀行系統', '銀行系統', 0, '2026-01-01T00:00:00.000Z');
+-- C-300：新站不再自帶「平台」「銀行系統」；第一次啟動時自動建「平台維運」（回報收件專案）
 -- 專案異動紀錄（C-146 B）：建立、改名、封存、還原、成員加入／移除
 CREATE TABLE IF NOT EXISTS project_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

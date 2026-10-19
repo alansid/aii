@@ -3,11 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export function openNodeDb(file) {
+export function openNodeDb(file, { legacyProjects = true } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec(fs.readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
+  // 本機開發與測試沿用原本兩個專案（C-300 起新資料庫不自帶）；legacyProjects: false＝模擬全新的站
+  if (legacyProjects) db.exec("INSERT OR IGNORE INTO projects (id, name, archived, created_at) VALUES ('平台', '平台', 0, '2026-01-01T00:00:00.000Z'); INSERT OR IGNORE INTO projects (id, name, archived, created_at) VALUES ('銀行系統', '銀行系統', 0, '2026-01-01T00:00:00.000Z');");
   migrate(db);
 
   return {
