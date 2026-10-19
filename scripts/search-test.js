@@ -58,23 +58,36 @@ try {
   // 專案篩選
   assert.ok((await call(liu.token, `/api/search/messages?q=${q('藍莓')}&project=${q('平台')}`)).body.items.every(m => m.project === '平台'), '可限定專案');
 
-  // C-312：讀取上限。每類最多 20 筆；卡片搜尋至少 2 字；每人每分鐘最多 10 次（一次 Enter＝卡片＋訊息兩支）
+  // C-312：讀取上限。每類最多 20 筆；至少 2 字；每人每分鐘最多 10 次（人類、AI 都算；網頁一次 Enter 走 /api/search 算 1 次）
   const chen = (await call(null, '/api/join', 'POST', { name: '陳昭宇', role: 'PG' })).body;
   await call(liu.token, `/api/participants/${chen.participant.participantId}/projects`, 'PUT', { projects: ['平台'] });
   for (let i = 1; i <= 25; i++) await call(liu.token, '/api/cards', 'POST', { requestId: 'k' + i, project: '平台', title: `草莓任務 ${i}` });
   for (let i = 1; i <= 25; i++) await msg(liu.token, '平台', `草莓訊息 ${i}`);
-  const hit = async () => [await call(chen.token, `/api/cards?q=${q('草莓')}&limit=100`), await call(chen.token, `/api/search/messages?q=${q('草莓')}&limit=50`)];
-  let [c1, m1] = await hit();
-  assert.equal(c1.status, 200); assert.ok(c1.body.items.length <= 20, `卡片最多 20 筆（${c1.body.items.length}）`);
-  assert.equal(m1.status, 200); assert.ok(m1.body.items.length <= 20, `訊息最多 20 筆（${m1.body.items.length}）`);
+  // 網頁合併搜尋：卡片＋訊息各最多 20 筆，算 1 次
+  r = await call(chen.token, `/api/search?q=${q('草莓')}`);
+  assert.equal(r.status, 200); assert.ok(r.body.cards.length <= 20 && r.body.cards.length > 0, `卡片最多 20 筆（${r.body.cards.length}）`);
+  assert.ok(r.body.messages.length <= 20 && r.body.messages.length > 0, `訊息最多 20 筆（${r.body.messages.length}）`);
+  assert.ok((await call(chen.token, `/api/cards?q=${q('草莓')}&limit=100`)).body.items.length <= 20, '直接查卡片也最多 20 筆');
   assert.equal((await call(chen.token, `/api/cards?q=${q('草')}`)).status, 400, '卡片搜尋至少 2 字');
-  for (let i = 2; i <= 10; i++) { const [c, m] = await hit(); assert.equal(c.status + m.status, 400, `第 ${i} 次還可以`); }
-  [c1, m1] = await hit();
-  assert.equal(c1.status, 429, '第 11 次擋下'); assert.equal(c1.body.error.code, 'SEARCH_LIMIT');
-  assert.match(c1.body.error.message, /每人每分鐘最多 10 次/);
-  assert.equal(m1.status, 429, '訊息搜尋也擋');
-  assert.equal((await call(liu.token, `/api/search/messages?q=${q('草莓')}`)).status, 200, '別人不受影響');
-  assert.equal((await call(chen.token, '/api/cards?limit=5')).status, 200, '一般卡片列表不受影響');
+  assert.equal((await call(chen.token, `/api/search?q=${q('草')}`)).status, 400, '合併搜尋至少 2 字');
+  for (let i = 3; i <= 10; i++) assert.equal((await call(chen.token, `/api/search?q=${q('草莓')}`)).status, 200, `第 ${i} 次還可以（前面已用 2 次；不到 2 字的不算）`);
+  r = await call(chen.token, `/api/search?q=${q('草莓')}`);
+  assert.equal(r.status, 429, '第 11 次擋下'); assert.equal(r.body.error.code, 'SEARCH_LIMIT');
+  assert.match(r.body.error.message, /每人每分鐘最多 10 次，請 \d+ 秒後再試/);
+  assert.equal((await call(chen.token, `/api/cards?q=${q('草莓')}`)).status, 429, '直接查卡片也擋');
+  assert.equal((await call(liu.token, `/api/search?q=${q('草莓')}`)).status, 200, '別人不受影響');
+  assert.equal((await call(chen.token, '/api/cards?limit=5')).status, 200, '一般卡片列表（沒有關鍵字）不受影響');
+
+  // UX 退回的重現：AI 的 Token 直接打 /api/search/messages，1 分鐘內第 11 次要 429；
+  // 而且雲端有好幾份程式：兩份 app 共用同一個資料庫輪流接，也要算在一起
+  const uxAi = (await call(liu.token, '/api/my-ais', 'POST', { projects: ['平台'], roleKey: 'UX', role: 'UX', name: '體驗助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
+  const uxTok = (await db.get('SELECT token FROM participants WHERE id = ?', uxAi.participantId)).token;
+  const app2 = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000', teamCacheMs: '0' } });
+  const via = async (which, path) => { const rr = await which(new Request('http://localhost' + path, { headers: { Authorization: `Bearer ${uxTok}` } }), 'http://localhost'); return { status: rr.status, body: await rr.json().catch(() => ({})) }; };
+  for (let i = 1; i <= 10; i++) assert.equal((await via(i % 2 ? app : app2, `/api/search/messages?q=${q('草莓')}`)).status, 200, `AI 第 ${i} 次可以`);
+  r = await via(app2, `/api/search/messages?q=${q('草莓')}`);
+  assert.equal(r.status, 429, 'AI 第 11 次擋下（修正前兩份程式各算各的、又是 20 次才擋）');
+  assert.equal(r.body.error.code, 'SEARCH_LIMIT');
   console.log('search-test：全部通過');
 } catch (e) {
   console.error('search-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('search-test.js')) || '').trim());

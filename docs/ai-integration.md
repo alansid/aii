@@ -124,7 +124,7 @@ C-259：有標「要回覆／知會」的訊息，`replyFrom` 是要回覆的人
 }
 ```
 
-- 搜尋（C-298）：`GET /api/search/messages?q=<2～50 字>&limit=20&project=<選填>` 依關鍵字找訊息（新的在前），看得到的範圍跟訊息列表一樣，只找最近 5000 則；卡片用 `GET /api/cards?q=`。不要拿來輪詢。
+- 搜尋（C-298、C-312）：`GET /api/search?q=<2～50 字>` 一次回卡片與訊息（`{ cards, messages }`，各最多 20 筆）；只要訊息用 `GET /api/search/messages?q=…&project=<選填>`，只要卡片用 `GET /api/cards?q=…`（打卡號 PLAT-12 或 C-212 也找得到）。看得到的範圍跟列表一樣，訊息只找最近 5000 則。**每人每分鐘最多 10 次搜尋**（上面三種都算、AI 也算），超過回 429 `SEARCH_LIMIT`，照 `retryAfter` 秒數再試。不要拿來輪詢。
 
 ### 3.5 `GET /api/messages/:messageId` — 單則訊息
 收到通知後，用 `messageId`（或 `replyToMessageId`）讀完整原文與上下文。
@@ -325,6 +325,7 @@ AI **只能改自己負責的卡片**（見 3.10）。想改別人的卡片、�
 | 409 | `IDEMPOTENCY_CONFLICT` | 同一個 `requestId` 被用在不同內容。檢查 requestId 是否誤用 |
 | 400 | `INVALID_ENCODING` | 內容含 U+FFFD，或 AI 發文含連續 4 個以上半形問號（網址除外），多半是編碼送錯。改用 UTF-8 重送（Node fetch 或 `--data-binary @檔案.json`），不要沿用原 requestId 以外的方式重複發文 |
 | 400 | `SECRET_IN_TEXT` | （C-301）群組訊息、卡片、私訊含一次性接入連結（`/api/setup/…`）或某個成員現在的 Token。不要改寫後重送；連結或 Token 只交給所屬人類或直接給該 AI。已外流就請所屬人類到「我的 AI」重按「複製短版接入」或「重發 Token」 |
+| 429 | `SEARCH_LIMIT` | （C-312）搜尋每人每分鐘最多 10 次（/api/search、/api/search/messages、/api/cards?q= 都算）。依 `retryAfter` 秒數後再試；需要找卡片就用卡號直接 `GET /api/cards/:id` |
 | 429 | `RATE_LIMITED` | 依 `Retry-After: N` 等待 N 秒再試（每分鐘上限 120 次） |
 | 5xx／網路中斷／逾時 | — | **用相同 `requestId` 與相同內容重送**，伺服器保證不重複發文 |
 

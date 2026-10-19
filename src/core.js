@@ -2438,18 +2438,38 @@ ${trial
 
   route('GET', '/api/messages', ({ ctx, url, me }) => listMessages(ctx, url, me));
   // C-312：搜尋讀取上限：每人每分鐘 10 次（網頁按一次 Enter 會查卡片＋訊息兩支，所以算 20 次呼叫）；每台程式各自計
-  const SEARCH_PER_MIN = 10, searchHits = new Map();
-  function searchQuota(me) {
-    const now = Date.now(), hits = (searchHits.get(me.id) || []).filter(t => now - t < 60_000);
-    if (hits.length >= SEARCH_PER_MIN * 2) throw new ApiError(429, 'SEARCH_LIMIT', `搜尋太頻繁：每人每分鐘最多 ${SEARCH_PER_MIN} 次，請 ${Math.ceil((hits[0] + 60_000 - now) / 1000)} 秒後再試。`, { retryAfter: Math.ceil((hits[0] + 60_000 - now) / 1000) });
-    hits.push(now); searchHits.set(me.id, hits);
-    if (searchHits.size > 5000) searchHits.clear();
+  // C-312 退回後：次數存在資料庫（app_settings 的 sq:<成員>，每次搜尋讀 1 列、寫 1 列），雲端好幾份程式共用同一個計數；人類與 AI 都算
+  // 網頁一次 Enter 走 /api/search（卡片＋訊息算 1 次）；直接呼叫 /api/search/messages 或 /api/cards?q= 各算 1 次
+  const SEARCH_PER_MIN = 10;
+  async function searchQuota(me) {
+    const now = Date.now(), key = 'sq:' + me.id;
+    let r = await getJson(key).catch(() => null);
+    if (!r || now - r.start >= 60_000) r = { start: now, n: 0 };
+    if (r.n >= SEARCH_PER_MIN) {
+      const wait = Math.max(1, Math.ceil((r.start + 60_000 - now) / 1000));
+      throw new ApiError(429, 'SEARCH_LIMIT', `搜尋太頻繁：每人每分鐘最多 ${SEARCH_PER_MIN} 次，請 ${wait} 秒後再試。`, { retryAfter: wait });
+    }
+    r.n++;
+    await setJson(key, r);
   }
   // C-298：頂欄搜尋訊息（按 Enter 才查一次）。看得到的範圍跟訊息列表一樣；只查最近 5000 則，控制資料庫讀取量
-  route('GET', '/api/search/messages', async ({ ctx, url, me }) => {
+  // C-312：網頁頂欄搜尋一次查卡片＋訊息，只算 1 次
+  route('GET', '/api/search', async ({ ctx, url, me }) => {
     const kw = (url.searchParams.get('q') || '').trim();
     if (kw.length < 2 || kw.length > 50) throw invalid('q 需為 2～50 字');
-    searchQuota(me); // C-312
+    await searchQuota(me);
+    const sub = path => new URL(`http://local${path}?q=${encodeURIComponent(kw)}&limit=20`);
+    const [cards, messages] = await Promise.all([
+      cardsApi.listCards({ ctx, me, url: sub('/api/cards') }, { quota: false }),
+      searchMessages(ctx, me, sub('/api/search/messages'), { quota: false }),
+    ]);
+    return { cards: cards.items, messages: messages.items };
+  });
+  route('GET', '/api/search/messages', ({ ctx, url, me }) => searchMessages(ctx, me, url));
+  async function searchMessages(ctx, me, url, { quota = true } = {}) {
+    const kw = (url.searchParams.get('q') || '').trim();
+    if (kw.length < 2 || kw.length > 50) throw invalid('q 需為 2～50 字');
+    if (quota) await searchQuota(me); // C-312
     const limit = Math.min(parseLimit(url, 20, 50), 20); // C-312：最多 20 筆
     const pf = projectFilter(url.searchParams.get('project'), me), scope = await messageScope(me);
     const where = (pf ? ` AND ${pf.sql}` : '') + (scope ? ` AND ${scope.sql}` : ''), args = [...(pf ? pf.args : []), ...(scope ? scope.args : [])];
@@ -2457,7 +2477,7 @@ ${trial
     const like = '%' + kw.replace(/[%_\\]/g, m => '\\' + m) + '%';
     const rows = await db.all(`SELECT * FROM messages WHERE seq > ? AND text LIKE ? ESCAPE '\\'${where} ORDER BY seq DESC LIMIT ?`, top - 5000, like, ...args, limit + 1);
     return { items: await serializeMessages(ctx, rows.slice(0, limit)), hasMore: rows.length > limit, scanned: Math.min(top, 5000) };
-  });
+  }
   route('GET', '/api/messages/:id/around', async ({ ctx, me, params, url }) => {
     const m = await db.get('SELECT * FROM messages WHERE id = ?', params.id);
     if (!m || !(await canSeeMessage(me, m))) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
@@ -2944,7 +2964,7 @@ ${trial
       if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
     }
   }
-  registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
+  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
   // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
   async function scopeTeamMembers(me, members) {

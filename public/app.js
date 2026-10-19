@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.80.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.80.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -6461,11 +6461,9 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const top = $('.topbar [data-search-form] input'); if (top) top.value = q;
     const body = openModal('搜尋', `${searchForm(q)}<div id="search-res" class="search-res" aria-live="polite"><p class="muted">搜尋中…</p></div>`);
     const ql = q.toLowerCase();
-    const [cards, msgs, people] = await Promise.allSettled([
-      api(`/api/cards?q=${encodeURIComponent(q)}&limit=10`),
-      api(`/api/search/messages?q=${encodeURIComponent(q)}&limit=20`),
-      loadParticipants(),
-    ]);
+    const [found, people] = await Promise.allSettled([api(`/api/search?q=${encodeURIComponent(q)}`), loadParticipants()]); // C-312：一次 Enter 只算 1 次
+    const cards = found.status === 'fulfilled' ? { status: 'fulfilled', value: { items: found.value.cards } } : found;
+    const msgs = found.status === 'fulfilled' ? { status: 'fulfilled', value: { items: found.value.messages } } : found;
     const res = body.querySelector('#search-res'); if (!res) return;
     const cs = cards.status === 'fulfilled' ? cards.value.items || [] : null;
     const ms = msgs.status === 'fulfilled' ? msgs.value.items || [] : null;

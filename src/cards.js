@@ -217,7 +217,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   }
   const withStale = (v, c, stale) => (stale.get(c.seq)?.lastUpdatedAt === c.updated_at ? { ...v, staleHint: stale.get(c.seq) } : v);
 
-  route('GET', '/api/cards', async ({ ctx, me, url }) => {
+  // C-312：卡片列表（合併搜尋 /api/search 也用；quota: false 由呼叫端算次數）
+  async function listCards({ ctx, me, url }, { quota = true } = {}) {
     await maybeArchive();
     const q = url.searchParams, limit = (q.get('q') || '').trim() ? Math.min(parseLimit(url, 100, 200), 20) : parseLimit(url, 100, 200); // C-312：有關鍵字最多 20 筆
     const offset = Math.max(0, Math.min(Number.parseInt(q.get('offset') || '0', 10) || 0, 100_000)); // C-161：已封存分頁
@@ -234,9 +235,9 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (pf) { where.push(pf.sql); args.push(...pf.args); }
     if (isolatedFrom(me)) { const mine = projectsOf(me); where.push(mine.length ? `project IN (${mine.map(() => '?').join(',')})` : '1 = 0'); args.push(...mine); }
     const kw = (q.get('q') || '').trim();
-    if (kw && me.kind === 'human') { // C-312：網頁頂欄搜尋卡片：至少 2 字、算進每人每分鐘上限、最多 20 筆
+    if (kw) { // C-312：關鍵字搜尋卡片（人類、AI 都算）：至少 2 字、算進每人每分鐘 10 次、最多 20 筆
       if ([...kw].length < 2) throw invalid('搜尋至少 2 個字');
-      searchQuota(me);
+      if (quota) await searchQuota(me);
     }
     // C-310：打卡號（PLAT-12 或 C-212）也找得到那張
     const kwSeq = !kw ? null : (await cardSeqByKey(kw)) ?? (/^C-\d+$/i.test(kw) ? Number(kw.slice(2)) - 100 : null);
@@ -263,7 +264,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const noteMap = withNotes && out.length ? new Map() : null;
     if (noteMap) for (const l of await db.all('SELECT card_seq, at, by_id, text FROM card_log WHERE via = ? AND card_seq IN (SELECT value FROM json_each(?)) ORDER BY id', NOTE_LOG, JSON.stringify(out.map(c => c.seq)))) { if (!noteMap.has(l.card_seq)) noteMap.set(l.card_seq, []); noteMap.get(l.card_seq).push(noteView(people, l)); }
     return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
-  });
+  }
+  route('GET', '/api/cards', args => listCards(args));
 
   route('GET', '/api/cards/:id', async ({ ctx, me, params }) => {
     await maybeArchive();
@@ -827,4 +829,5 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     await claim(r, me, nowIso(), null, 'skipped');
     return sugView(await loadSug(params.id), await peopleMap(ctx));
   });
+  return { listCards };
 }
