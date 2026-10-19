@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   UNIQUE (recipient_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_notif_recipient ON notifications (recipient_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_participants_seen ON participants (last_seen_at); -- C-316：在線狀態只讀最近有活動的人
 -- 上傳文件（需求 v1.1，方案 B）：中繼資料
 CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY,

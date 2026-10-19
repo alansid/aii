@@ -17,7 +17,7 @@ const MAX_TEXT = 2000;
 const MAX_SETTING = 1000;
 const SYSTEM_NAME = '平台通知';
 const BRIEF_CHARS = 80;
-const TEAM_CACHE_MS_DEFAULT = 60_000; // 團隊狀態快取時間 // brief=1 時，與我無關的訊息只回這麼多字
+const TEAM_CACHE_MS_DEFAULT = 180_000; // 團隊狀態快取時間（C-316：60 → 180 秒；寫入時照舊清掉） // brief=1 時，與我無關的訊息只回這麼多字
 
 // ---------- 工具 ----------
 const B62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -85,20 +85,39 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const MAX_TOTAL = (Number(config.fileMaxTotalMb) || 0) * 1048576 || MAX_TOTAL_BYTES; // 測試用可調低
   const rate = new Map();
 
-  // 成員快取：同一請求共用，跨請求最多沿用 30 秒；成員資料有寫入時清除（C-245：原 10 秒，一天讀 4 千次）
-  let peopleCache = { at: 0, map: null };
-  const invalidatePeople = () => { peopleCache = { at: 0, map: null }; teamCache = { at: 0, data: null }; };
+  // 成員快取（C-316）：成員資料有寫入才整張重讀——寫入的請求結束時把 app_settings 的 people_ver 換新，
+  // 每份程式每 30 秒只讀這 1 列版本；版本沒變就只補「最近有活動的人」的在線時間（有 last_seen_at 索引，只讀幾列）。
+  // 保險：最多 10 分鐘還是整張重讀一次。原本每 30 秒整張讀，一天 4,775 次、13 萬列
+  const PEOPLE_CHECK_MS = Number(config.peopleCheckMs) || 30_000, PEOPLE_MAX_MS = 10 * 60_000; // 測試可調短
+  let peopleCache = { at: 0, map: null }, peopleDirty = false;
+  const invalidatePeople = () => { peopleCache = { at: 0, map: null }; teamCache = { at: 0, data: null }; peopleDirty = true; };
+  const peopleVer = async () => (await db.get("SELECT value FROM app_settings WHERE key = 'people_ver'").catch(() => null))?.value || '';
+  async function bumpPeopleVer() { peopleDirty = false; await db.run("INSERT INTO app_settings (key, value) VALUES ('people_ver', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(Date.now()) + Math.random().toString(36).slice(2, 6)).catch(() => {}); }
   const loadPeople = async ctx => {
-    peopleCache = { at: Date.now(), map: new Map((await db.all('SELECT * FROM participants')).map(p => [p.id, p])) };
+    const now = Date.now();
+    const [ver, rows] = await Promise.all([peopleVer(), db.all('SELECT * FROM participants')]);
+    peopleCache = { at: now, loadedAt: now, seenAt: now, ver, map: new Map(rows.map(p => [p.id, p])) };
     ctx.people = peopleCache.map;
     ctx.peopleFresh = true;
   };
+  async function refreshPresence() { // 只讀上次之後有活動的人（idx_participants_seen）
+    const since = peopleCache.seenAt - 5_000, now = Date.now();
+    for (const r of await db.all('SELECT id, last_seen_at, standby_at FROM participants WHERE last_seen_at > ?', since)) {
+      const p = peopleCache.map.get(r.id);
+      if (p) { p.last_seen_at = Math.max(p.last_seen_at || 0, r.last_seen_at || 0); p.standby_at = Math.max(p.standby_at || 0, r.standby_at || 0); }
+    }
+    peopleCache.seenAt = now;
+  }
   // needIds：這次要查的成員。C-248：Cloudflare 同時跑好幾份程式，各有自己的快取；
   // 別份剛新增的成員，這份的快取裡還沒有 → 缺人就重抓一次（每個請求最多一次）
   async function peopleMap(ctx, needIds) {
     if (!ctx.people) {
-      if (!peopleCache.map || Date.now() - peopleCache.at > 30_000) await loadPeople(ctx);
-      else ctx.people = peopleCache.map;
+      const now = Date.now();
+      if (!peopleCache.map || now - peopleCache.loadedAt > PEOPLE_MAX_MS) await loadPeople(ctx);
+      else if (now - peopleCache.at > PEOPLE_CHECK_MS) {
+        if ((await peopleVer()) !== peopleCache.ver) await loadPeople(ctx);
+        else { peopleCache.at = now; await refreshPresence(); ctx.people = peopleCache.map; }
+      } else ctx.people = peopleCache.map;
     }
     if (needIds && !ctx.peopleFresh) {
       for (const id of needIds) if (id && !ctx.people.has(id)) { await loadPeople(ctx); break; }
@@ -606,7 +625,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     // order=desc（網頁收件匣用）：先給最新的；預設由舊到新（AI 依序處理）
     const desc = url.searchParams.get('order') === 'desc';
     const sql = status === 'pending'
-      ? `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join} ORDER BY ${desc ? 'n.created_at DESC, n.id DESC' : 'n.created_at, n.id'} LIMIT ?`
+      ? `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join} ORDER BY ${desc ? 'n.created_at DESC, n.rowid DESC' : 'n.created_at, n.rowid'} LIMIT ?` // C-316：rowid 讓索引順序可用，讀到 LIMIT 就停
       : `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'acked'${join} ORDER BY n.acked_at DESC LIMIT ?`;
     let rows = await db.all(sql, me.id, ...(scope ? scope.args : []), limit + 1);
     const hasMore = rows.length > limit;
@@ -3069,7 +3088,8 @@ ${trial
         const ctx = {};
         await loadProjects();
         const me = r.open ? null : await authenticate(req, url);
-        const out = await r.handler({ req, url, params, me, ctx, base });
+        let out;
+        try { out = await r.handler({ req, url, params, me, ctx, base }); } finally { if (peopleDirty) await bumpPeopleVer(); } // C-316
         if (out instanceof Response) return out;
         const status = out.__status || 200;
         delete out.__status;

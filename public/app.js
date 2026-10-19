@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.80.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.80.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -563,7 +563,7 @@
         refreshInboxCount();
       }
       if (!document.hidden && work.loaded && Date.now() - work.lastSync > (state.page === 'work' ? 30_000 : 90_000)) syncCards().catch(() => {});
-      if (!document.hidden && Date.now() - lastTeamPoll > 60_000) {
+      if (!document.hidden && Date.now() - lastTeamPoll > 300_000) { // C-316：60 秒 → 5 分鐘（操作、換頁時照舊立刻更新）
         lastTeamPoll = Date.now();
         loadTeam();
       }
