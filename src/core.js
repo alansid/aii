@@ -851,15 +851,16 @@ ${trial
   : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}
 - 簽到不等於已待命：要看到 watcher 日誌出現連線或巡檢紀錄，而且 aigile-wait.mjs 已在執行，才算啟動成功，不可假稱。啟動後把 wakeMode 寫進工作記憶（第十二節）。
 - watcher 設定（需要 Node 22 以上，內建 WebSocket）：
-  1. 下載 ${base}/watcher.mjs 存成 .aigile/watcher/watcher.mjs，核對 SHA-256 = ${WATCHER_SHA256}，並先讀過內容；不符就停止並告訴 ${owner.name}。
+  1. 下載 ${base}/watcher.mjs 存成 .aigile/watcher/watcher.mjs，核對 SHA-256 = ${WATCHER_SHA256}，並先讀過內容；重新下載一次仍不符才停止並告訴 ${owner.name}。
      同一台電腦共用一份（C-292）：.aigile/watcher/watcher.mjs、aigile-wait.mjs 已經在、而且 SHA-256 相符就直接沿用，不重下載、不另存；每個 AI 只各有自己的 watcher.env、watcher.pid、日誌（.aigile/${agent}/）。
+     已經在但 SHA-256 不符（多半是舊版）：不要停下來回報，先停掉你自己用舊檔在跑的 watcher 與等待腳本（第 6 步），重新下載一次覆蓋再核對；相符就照常啟動，並告訴 ${owner.name}「共用的 watcher 已更新，同一台電腦其他 AI 的 watcher 要重啟才會用新版」。重下仍不符才停止並回報。aigile-wait.mjs 一樣處理。
   2. 建立 ${envFile}，連線設定只放這個檔，不貼群組、不進 git（.gitignore 依第二節處理）：
 \`\`\`
 ${watcherEnv}
 \`\`\`
   3. 啟動前先看 .aigile/${agent}/watcher.pid：檔案在、而且裡面的程序編號還在執行 → 已經有 watcher 在跑，不要再開（兩個 watcher 會重複叫醒）；沒有檔案或程序已不在 → 才啟動。watcher 啟動時會自己把程序編號寫進 watcher.pid（PID_FILE），不用自己找。
   4. 在含 .aigile 的資料夾背景啟動，輸出寫進日誌：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '\n     （平台目前未設定即時通道，watcher 只會每 15 分鐘巡檢一次。）'}
-  5. 等待（C-246）：下載 ${base}/aigile-wait.mjs 存成 .aigile/watcher/aigile-wait.mjs，核對 SHA-256 = ${WAIT_SHA256}，先讀過內容。處理完手上的事就執行：node .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110（需要環境變數 AIGILE_BASE=${base}；Token 預設讀 .aigile/${agent}/.token）。
+  5. 等待（C-246）：下載 ${base}/aigile-wait.mjs 存成 .aigile/watcher/aigile-wait.mjs，核對 SHA-256 = ${WAIT_SHA256}，先讀過內容（不符同第 1 步：重下一次，仍不符才回報）。處理完手上的事就執行：node .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110（需要環境變數 AIGILE_BASE=${base}；Token 預設讀 .aigile/${agent}/.token）。
      Claude Code：用「背景執行」跑、逾時設最長，結束時你會被通知；不要用 Monitor 盯日誌、不要寫 sleep 迴圈（每次醒來都耗用量）。
      依最後一行：PENDING <N> → 跑一輪（見下方），做完再執行一次；TIMEOUT → 直接再執行一次；RECOVERED → 跑一輪確認後再執行；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}。中間出現 WARN（watcher 不在）也要回報。
   6. 停止：結束 watcher 程序與等待腳本；watcher 正常結束會自己刪 watcher.pid，被強制結束時要手動刪掉 watcher.pid。

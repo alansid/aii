@@ -94,6 +94,9 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     const obPg = await ob(liu.token, pg.participantId);
     const obBank = await ob(liu.token, bank.participantId);
     const obKai = await ob(kang.token, kai.participantId);
+    // C-292 補：本機留著舊 watcher（雜湊不符）要先停、重下一次再核對，不是直接停下回報
+    assert.match(obPg, /已經在但 SHA-256 不符.*先停掉你自己用舊檔在跑的 watcher.*重新下載一次覆蓋再核對.*重下仍不符才停止並回報/, '接入設定：舊 watcher 先重下');
+    assert.ok(!/不符就停止並告訴/.test(obPg), '不再「一不符就停」');
     // 改成環境行內 → 立刻變空
     await call(liu.token, `/api/my-ais/${pg.participantId}`, 'PATCH', { environment: '行內' });
     assert.deepEqual((await call(pg.token, '/api/me')).body.grants.items, [], '改成行內就失效');
