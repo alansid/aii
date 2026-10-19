@@ -9,3 +9,6 @@ state.json
 
 # C-291 部署時產生（npm run deploy／npm run releases），打包進 Worker
 generated/
+
+# C-296 POC 帳號的 Cloudflare Token（昱志自己存，不進 git）
+.cloudflare-poc.env

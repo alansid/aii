@@ -1,0 +1,43 @@
+# C-296 POC 獨立部署：另一個 Cloudflare 帳號、另一個 D1，資料與用量跟正式平台分開。
+# 用 node scripts/poc.mjs（會讀 .cloudflare-poc.env 的 Token），不要直接 wrangler deploy。
+name = "aigile-poc"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# C-240：智慧放置——資料庫（D1）在亞太，請求卻常在西雅圖等節點執行，每查一次都要跨太平洋；
+# 開了之後 Cloudflare 會把 Worker 放到靠近資料庫的地方跑。效果不好就刪掉這兩行再部署。
+[placement]
+mode = "smart"
+
+# C-248：開 Workers Logs，500 的原因事後查得到（儀表板 Workers → aigile-switch → Logs，保留 3 天）。
+# 只留程式自己印的紀錄（console.error），不記每一次請求：量小、免費額度內，也不會把網址參數存進日誌
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# 網頁頁面先經過 Worker（換上群組名與連結預覽）；有副檔名的靜態檔照舊直接送
+run_worker_first = ["/*", "!/*.js", "!/*.mjs", "!/*.css", "!/*.svg", "!/*.png", "!/*.ico", "!/*.md", "!/*.json", "!/*.txt"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aigile-poc"
+database_id = "TO_BE_CREATED"
+
+# 上傳文件（方案 B）：檔案存 D1；每 10 分鐘清除超過保存期限的檔案
+[triggers]
+crons = ["*/10 * * * *"]
+
+# 選用：設定後，人類加入群組需輸入此代碼。正式環境建議改用 `wrangler secret put ROOM_CODE`
+# [vars]
+# AI_TOKEN_TTL_HOURS = "168"

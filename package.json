@@ -57,6 +57,7 @@
     "test:releases": "node scripts/releases-test.js",
     "test:cross": "node scripts/cross-test.js",
     "test:readonly": "node scripts/readonly-test.js",
-    "test:bell": "node scripts/bell-test.js"
+    "test:bell": "node scripts/bell-test.js",
+    "poc": "node scripts/poc.mjs"
   }
 }
