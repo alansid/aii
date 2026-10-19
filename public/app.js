@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.75.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.76.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -379,14 +379,13 @@
     if (!state.me) return;
     document.querySelectorAll('.av-btn:not(.me-more)').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
     $('#av-menu').innerHTML = `<div class="av-head">${avatar(state.me)}<span class="av-head-txt"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()) || '未設定角色', isAdmin() ? '管理員' : '', '本人'].filter(Boolean).join(' · '))}</span></span></div>
-      <button type="button" role="menuitem" data-av="avatar">更換頭像</button>
-      <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
-      ${isAdmin() || myLeadProjects().length ? `<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
-      <button type="button" role="menuitem" data-av="wishes">✨ 許願池</button>
-      <button type="button" role="menuitem" data-av="releases">版本紀錄<span class="muted small">v${APP_VERSION}</span></button>
-      <button type="button" role="menuitem" data-av="settings">個人設定</button>
-      <button type="button" role="menuitem" data-av="devices">我的裝置</button>
-      <button type="button" role="menuitem" data-av="api">API 資訊與登入碼</button>
+      <button type="button" role="menuitem" data-av="avatar"><span class="av-ico" aria-hidden="true">🙂</span>更換頭像</button>
+      <button type="button" role="menuitem" data-av="settings"><span class="av-ico" aria-hidden="true">⚙️</span>個人設定<span class="muted small">裝置、登入碼</span></button>
+      <button type="button" role="menuitem" data-av="myai"><span class="av-ico" aria-hidden="true">🤖</span>我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
+      ${isAdmin() || myLeadProjects().length ? `<div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">管理</div><button type="button" role="menuitem" data-av="perm"><span class="av-ico" aria-hidden="true">👥</span>成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
+      <div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">平台</div>
+      <button type="button" role="menuitem" data-av="wishes"><span class="av-ico" aria-hidden="true">✨</span>許願池</button>
+      <button type="button" role="menuitem" data-av="releases"><span class="av-ico" aria-hidden="true">📜</span>版本紀錄<span class="muted small">v${APP_VERSION}</span></button>
       <div class="av-sep" role="separator"></div>
       <button type="button" role="menuitem" class="av-out" data-av="logout">登出</button>`;
   }
@@ -1019,7 +1018,7 @@
   const msgInView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); };
   const cardInView = c => { const v = projectView(); return v === 'hub' || (v !== 'cross' && c.project === v); };
   const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
-  const viewLabel = v => (v === 'hub' ? '我的專案' : v === 'cross' ? '跨專案頻道' : projName(v));
+  const viewLabel = v => (v === 'hub' ? '總覽' : v === 'cross' ? '跨專案頻道' : projName(v)); // C-298：第一層改叫「總覽」
   // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
   const askTodo = () => [...askNoteRaw(), ...(work.notes || []).filter(n => n.dm)].map(n => ({ project: n.project ?? null })); // C-268：跟收件匣列表同一個來源；C-270 私訊也算
   function todoByView() {
@@ -1044,11 +1043,24 @@
     const opts = [...myProjects(), 'cross'];
     const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你做的 ${counts[k]} 件">${counts[k]}</span>` : '');
     document.querySelectorAll('.proj-switch').forEach((el, i) => {
-      // C-204：第一層時卡片可點，從「成員與權限」「我的 AI」回「我的專案」頁（與麵包屑一致）
+      // C-298：總覽時側欄直接列專案（側欄那份；手機選單照舊用卡片）
+      if (v === 'hub' && !el.classList.contains('sheet-proj')) {
+        const n = k => counts[k] ? `<span class="hs-n" aria-label="要你做的 ${counts[k]} 件">${counts[k] > 99 ? '99+' : counts[k]}</span>` : '';
+        const cur = state.page === 'hub';
+        el.innerHTML = `<nav class="hub-side" aria-label="總覽">
+          <button type="button" class="hs-item${cur ? ' on' : ''}" data-proj="hub"${cur ? ' aria-current="page"' : ''}><span class="hs-ico" aria-hidden="true">🏠</span><span class="hs-name">總覽</span>${n('hub')}</button>
+          <button type="button" class="hs-item" data-hub-todo-open><span class="hs-ico" aria-hidden="true">📥</span><span class="hs-name">要你處理</span>${n('hub')}</button>
+          <div class="hs-head">我的專案</div>
+          ${myProjects().map(p => `<button type="button" class="hs-item" data-proj="${esc(p)}" title="${esc(projName(p))}">${projIcon(p, 22)}<span class="hs-name">${esc(projName(p))}</span>${n(p)}</button>`).join('') || '<p class="muted small hs-empty">還沒有加入任何專案</p>'}
+          <button type="button" class="hs-item hs-muted" data-proj="cross">${projIcon('cross', 22)}<span class="hs-name">跨專案頻道</span>${n('cross')}</button>
+          ${isAdmin() ? '<button type="button" class="hs-item hs-add" data-hub-newproj><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">新增專案</span></button>' : ''}
+        </nav>`;
+        return;
+      }
       if (v === 'hub') { el.innerHTML = `<button type="button" class="ph-card is-hub" data-proj="hub" aria-label="我的專案，${myProjects().length} 個專案＋跨專案頻道"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span>${badge('hub')}</button>`; return; }
       const sub = v === 'cross' ? '所有專案都看得到' : `成員 ${projMembers(v)}`;
       el.innerHTML = `
-        <div class="ph-card">${projIcon(v)}<span class="ph-name">${hasHub() ? '<button type="button" class="ph-back in-card" data-proj="hub">‹ 我的專案</button>' : ''}<b>${esc(viewLabel(v))}</b>${hasHub() ? '' : `<span class="small">${esc(sub)}</span>`}</span>
+        <div class="ph-card">${projIcon(v)}<span class="ph-name">${hasHub() ? '<button type="button" class="ph-back in-card" data-proj="hub">‹ 總覽</button>' : ''}<b>${esc(viewLabel(v))}</b>${hasHub() ? '' : `<span class="small">${esc(sub)}</span>`}</span>
           ${hasHub() ? `<button type="button" class="ps-btn ph-swap" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}" aria-label="切換專案" title="切換專案">⇅</button>
           <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${badge(k)}</li>`).join('')}</ul>` : ''}</div>`;
     });
@@ -1072,11 +1084,11 @@
   function drawChrome() {
     drawRoleBanner();
     const v = projectView(), page = PAGE_NAME[state.page] || '訊息', top = !!TOP_PAGES[state.page];
-    const home = !hasHub() ? '' : v === 'hub' && !top ? '<b aria-current="page">我的專案</b>' : '<button type="button" class="crumb-link" data-proj="hub">我的專案</button>';
+    const home = !hasHub() ? '' : v === 'hub' && !top ? '<b aria-current="page">總覽</b>' : '<button type="button" class="crumb-link" data-proj="hub">總覽</button>';
     const parts = top ? [home, `<b aria-current="page">${page}</b>`] : v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
     $('#crumbs').innerHTML = parts.filter(Boolean).join('<span class="crumb-sep" aria-hidden="true">▸</span>');
     $('#m-back').hidden = !hasHub() || (v === 'hub' && !top);
-    $('#m-title').textContent = top ? page : v === 'hub' ? '我的專案' : `${viewLabel(v)} · ${page}`;
+    $('#m-title').textContent = top ? page : v === 'hub' ? '總覽' : `${viewLabel(v)} · ${page}`;
     const counts = todoByView(), here = counts[v] || 0; // 收件匣徽章＝所在專案的件數，切專案就跟著變
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !here; b.textContent = here > 99 ? '99+' : here; });
     const todo = $('#m-todo'), n = counts.hub, nb = todo.querySelector('.m-todo-n');
@@ -2779,12 +2791,14 @@
   const lastMsgOf = p => { for (let i = state.messages.length - 1; i >= 0; i--) if ((state.messages[i].project || null) === p) return state.messages[i]; return null; };
   const whenText = iso => { const d = new Date(iso); return d.toDateString() === new Date().toDateString() ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : hm(iso); };
   const oneLine = (t, n) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n) + '…' : x; };
+  const greeting = () => { const h = new Date().getHours(); return h >= 5 && h < 11 ? '早安' : h >= 11 && h < 18 ? '午安' : '晚安'; };
+  const shortName = n => { const s = [...String(n)]; return s.length === 3 ? s.slice(1).join('') : n; }; // 劉昱志 → 昱志
   function hubHtml() {
     const counts = todoByView();
     const cards = myProjects().map(p => {
       const n = projStats(p), m = lastMsgOf(p);
-      const st = (label, v, cls) => `<span class="hs${v && cls ? ' ' + cls : ''}">${label}<b>${v}</b></span>`;
-      return `<button type="button" class="hub-card" data-proj="${esc(p)}" aria-label="進入 ${esc(projName(p))}">
+      const st = (label, v, cls) => `<span class="hs${v && cls ? ' ' + cls : ''}${v ? '' : ' zero'}">${label}<b>${v}</b></span>`;
+      return `<button type="button" class="hub-card" style="--pc:${projColor(p)}" data-proj="${esc(p)}" aria-label="進入 ${esc(projName(p))}">
         <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}${leadersOf(p).length ? ` · ★ leader：${esc(leadersOf(p).map(id => state.participants.get(id)?.name).filter(Boolean).join('、'))}` : ''}</span></span>${counts[p] ? `<span class="hc-todo">要你做 ${counts[p]}</span>` : ''}</span>
         <span class="hc-stats">${st('今日完成', n.done)}${st('進行中', n.doing)}${st('受阻', n.blocked, 'bad')}${st('待驗收', n.verify, 'warn')}</span>
         <span class="hc-last">${m ? `最新：${esc(m.author.name)}「${esc(oneLine(m.text, 50))}」` : '最近 12 小時沒有新訊息'}</span>
@@ -2792,7 +2806,7 @@
     }).join('');
     const cm = lastMsgOf(null);
     return `<div class="hub"><section class="hub-main">
-        <div class="work-head"><div class="work-title"><h2>我的專案</h2><span class="muted small">${esc(new Date().toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span></div></div>
+        <div class="work-head"><div class="work-title"><h2>${esc(greeting())}，${esc(shortName(state.me?.name || ''))}</h2><span class="muted small">${esc(new Date().toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}${counts.hub ? ` · ${counts.hub} 件要你處理` : ' · 沒有要你處理的事'}</span></div></div>
         <div class="hub-grid">${cards || '<p class="muted hub-empty">你還沒有加入任何專案，請群組管理員把你加入專案；在那之前可以先到跨專案頻道。</p>'}</div>
         <button type="button" class="hub-card hub-cross" data-proj="cross" aria-label="進入跨專案頻道">${projIcon('cross', 44)}<span class="hc-name"><b>跨專案頻道</b><span class="small">規則公告、跨團隊協調。${cm ? `最新：${esc(cm.author.name)} ${whenText(cm.createdAt)}「${esc(oneLine(cm.text, 40))}」` : '最近 12 小時沒有新訊息'}</span></span><span class="hc-go">進入 ›</span></button>
       </section>
@@ -2825,6 +2839,14 @@
     if (!applyFocusItem() && key[0] === 'c') openCard(id);
   });
   $('#m-todo').addEventListener('click', () => openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }));
+  // C-298：總覽側欄「要你處理」捲到右邊清單（窄畫面沒有右欄就開視窗）；「＋ 新增專案」
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('[data-hub-todo-open]')) {
+      const go = () => { const t = document.querySelector('.hub-todo'); if (t && t.offsetParent) { t.scrollIntoView({ behavior: 'smooth', block: 'start' }); t.classList.add('flash'); setTimeout(() => t.classList.remove('flash'), 1400); } else openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }); };
+      return state.page === 'hub' ? go() : Promise.resolve(setProjectView('hub')).then(() => setTimeout(go, 50));
+    }
+    if (e.target.closest?.('[data-hub-newproj]')) return openNewProject();
+  });
   function inboxHtml() {
     const all = [...work.cards.values()].filter(cardInView);
     const open = todoByView()[projectView()] || 0;
@@ -6358,6 +6380,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     const body = openModal(onlyPj ? '跟哪個 AI 討論新角色？' : '請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: onlyPj ? `在「${projName(onlyPj)}」的私訊跟它討論，它會送角色提案卡` : '會打開跟它的私訊，幫你先打好開頭' });
     body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });
   }
+  document.addEventListener('click', e => { const b = e.target.closest?.('[data-set-open]'); if (!b) return; closeModal(); return b.dataset.setOpen === 'devices' ? openDevices() : openApi(); }); // C-298：從個人設定進
   function openSettings(opts = {}) {
     const theme = store.get(THEME_KEY) || 'system';
     const body = openModal('個人設定', `
@@ -6370,6 +6393,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
         <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
         <button class="btn small" type="button" data-change-avatar>更換</button>
       </div>
+      <div class="field set-links"><span class="field-label">登入與裝置</span><div class="row"><button type="button" class="btn small" data-set-open="devices">📱 我的裝置…</button><button type="button" class="btn small" data-set-open="api">🔑 API 資訊與登入碼…</button></div></div>
       <div class="field"><span class="field-label">所屬專案</span>
         <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員與權限」調整，這裡只能看。</p>
         <div class="proj-rows">${projMineHtml()}</div>
