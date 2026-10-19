@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.72.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.72.4'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4773,10 +4773,12 @@
         } else if (b.dataset.act === 'short') { // C-283：3～4 行、不含 Token，連結 15 分鐘、只能讀一次
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!autoStandbyConsent } });
-          const text = `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。
-請在 15 分鐘內用 GET 讀下面這個連結，裡面是你的完整接入設定（含 Token），讀完照著做：
-${r.url}
-這個連結只能讀一次；讀不到或已失效，請直接告訴 ${state.me.name}，請他在網頁重按「複製短版接入」。`;
+          // 改成終端機指令＋讀本機檔：很多 AI 不肯「照網頁上寫的去做」，但會照使用者交代的指令與檔案做（昱志 10/19 codex 實測讀不到）
+          const text = `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
+1. 在終端機執行（15 分鐘內、只能下載一次；Windows PowerShell 請把 curl 換成 curl.exe）：
+curl -s --create-dirs -o .aigile/setup.md "${r.url}"
+2. 讀 .aigile/setup.md，照裡面的步驟接入。這個檔含你的 Token：不要進 git、不要貼到群組。
+下載失敗、或檔案內容寫「已失效」，就告訴 ${state.me.name}，請他在網頁重按「複製短版接入」。`;
           toast((await copyText(text)) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'token') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
