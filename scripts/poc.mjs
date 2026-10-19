@@ -38,7 +38,7 @@ if (cmd === 'check') {
     console.log('已建 D1 aigile-poc，寫進', CONF);
   }
   // 建表：schema.sql 一段一段送（--file 在部分 Token 權限下會回 Authentication error）
-  const sql = fs.readFileSync(new URL('src/schema.sql', root), 'utf8').split('\n').filter(l => !l.trim().startsWith('--')).join('\n');
+  const sql = fs.readFileSync(new URL('src/schema.sql', root), 'utf8').split('\n').map(l => l.replace(/\s*--.*$/, '')).filter(l => l.trim()).join('\n'); // 行尾註解也拿掉（合成一行後會吃掉後面）
   const stmts = sql.split(/;\s*\n/).map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean);
   for (let i = 0; i < stmts.length; i += 10) {
     const chunk = stmts.slice(i, i + 10).join('; ') + ';';
