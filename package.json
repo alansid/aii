@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.79.1",
+  "version": "0.79.2",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -68,6 +68,7 @@
     "test:settings-tabs": "node scripts/settings-tabs-test.js",
     "test:layout-clip": "node scripts/layout-clip-test.js",
     "test:invite-ttl": "node scripts/invite-ttl-test.js",
-    "test:setup-link": "node scripts/setup-link-test.js"
+    "test:setup-link": "node scripts/setup-link-test.js",
+    "test:hub-count": "node scripts/hub-count-test.js"
   }
 }

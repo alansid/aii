@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.79.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.79.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -1063,7 +1063,7 @@
         const n = k => counts[k] ? `<span class="hs-n" aria-label="要你做的 ${counts[k]} 件">${counts[k] > 99 ? '99+' : counts[k]}</span>` : '';
         const cur = state.page === 'hub';
         el.innerHTML = `<nav class="hub-side" aria-label="總覽">
-          <button type="button" class="hs-item${cur ? ' on' : ''}" data-proj="hub"${cur ? ' aria-current="page"' : ''}><span class="hs-ico" aria-hidden="true">🏠</span><span class="hs-name">總覽</span>${n('hub')}</button>
+          <button type="button" class="hs-item${cur ? ' on' : ''}" data-proj="hub"${cur ? ' aria-current="page"' : ''}><span class="hs-ico" aria-hidden="true">🏠</span><span class="hs-name">總覽</span></button>
           <button type="button" class="hs-item" data-hub-todo-open><span class="hs-ico" aria-hidden="true">📥</span><span class="hs-name">要你處理</span>${n('hub')}</button>
           <div class="hs-head">我的專案</div>
           ${myProjects().map(p => `<button type="button" class="hs-item" data-proj="${esc(p)}" title="${esc(projName(p))}">${projIcon(p, 22)}<span class="hs-name">${esc(projName(p))}</span>${n(p)}</button>`).join('') || '<p class="muted small hs-empty">還沒有加入任何專案</p>'}
@@ -1072,12 +1072,12 @@
         </nav>`;
         return;
       }
-      if (v === 'hub') { el.innerHTML = `<button type="button" class="ph-card is-hub" data-proj="hub" aria-label="我的專案，${myProjects().length} 個專案＋跨專案頻道"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span>${badge('hub')}</button>`; return; }
+      if (v === 'hub') { el.innerHTML = `<button type="button" class="ph-card is-hub" data-proj="hub" aria-label="我的專案，${myProjects().length} 個專案＋跨專案頻道"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span></button>`; return; } // C-313：總覽不放數字（件數在「要你處理」）
       const sub = v === 'cross' ? '所有專案都看得到' : `成員 ${projMembers(v)}`;
       el.innerHTML = `
         <div class="ph-card">${projIcon(v)}<span class="ph-name">${hasHub() ? '<button type="button" class="ph-back in-card" data-proj="hub">‹ 總覽</button>' : ''}<b>${esc(viewLabel(v))}</b>${hasHub() ? '' : `<span class="small">${esc(sub)}</span>`}</span>
           ${hasHub() ? `<button type="button" class="ps-btn ph-swap" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}" aria-label="切換專案" title="切換專案">⇅</button>
-          <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${badge(k)}</li>`).join('')}</ul>` : ''}</div>`;
+          <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${k === 'hub' ? '' : badge(k)}</li>`).join('')}</ul>` : ''}</div>`;
     });
     drawChrome();
   }
