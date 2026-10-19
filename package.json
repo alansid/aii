@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.77.1",
+  "version": "0.78.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -64,6 +64,7 @@
     "test:schema": "node scripts/schema-test.js",
     "test:secret": "node scripts/secret-test.js",
     "test:search": "node scripts/search-test.js",
-    "test:inbox-verify": "node scripts/inbox-verify-test.js"
+    "test:inbox-verify": "node scripts/inbox-verify-test.js",
+    "test:settings-tabs": "node scripts/settings-tabs-test.js"
   }
 }

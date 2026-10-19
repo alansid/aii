@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.77.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.78.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -6473,9 +6473,19 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     }
   });
   document.addEventListener('click', e => { const b = e.target.closest?.('[data-set-open]'); if (!b) return; closeModal(); return b.dataset.setOpen === 'devices' ? openDevices() : openApi(); }); // C-298：從個人設定進
+  const SET_TABS = [['look', '🎨', '外觀'], ['me', '👤', '個人資料'], ['proj', '📁', '我的專案'], ['acct', '🔐', '帳號與登入']]; // C-305
+  const SET_TAB_KEY = 'aigile-switch-set-tab';
   function openSettings(opts = {}) {
     const theme = store.get(THEME_KEY) || 'system';
-    const body = openModal('個人設定', `
+    // C-305：個人設定分四頁（電腦左邊分頁、手機上方可滑）；記住上次分頁，捷徑直接開對應分頁
+    const cur = SET_TABS.some(t => t[0] === opts.tab) ? opts.tab : opts.focusRoles ? 'proj' : (SET_TABS.some(t => t[0] === store.get(SET_TAB_KEY)) ? store.get(SET_TAB_KEY) : 'look');
+    const pane = (k, html) => `<section class="set-pane" role="tabpanel" id="sp-${k}" aria-labelledby="st-${k}" tabindex="0"${k === cur ? '' : ' hidden'}>${html}</section>`;
+    const body = openModal('個人設定', `<div class="set-tabs-wrap">
+      <div class="set-tabs" role="tablist" aria-label="個人設定分頁" aria-orientation="vertical">
+        ${SET_TABS.map(([k, ic, t], i) => `<button type="button" role="tab" id="st-${k}" data-set-tab="${k}" aria-controls="sp-${k}" aria-selected="${k === cur}" tabindex="${k === cur ? 0 : -1}" aria-label="${t}，分頁 ${i + 1}／${SET_TABS.length}"><span class="set-tab-ico" aria-hidden="true">${ic}</span>${t}</button>`).join('')}
+      </div>
+      <div class="set-panes">
+      ${pane('look', `
       <div class="field"><span class="field-label" id="theme-label">外觀</span>
         <div class="seg-scope full" role="group" aria-labelledby="theme-label">
           ${[['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']].map(([k, t]) => `<button type="button" data-theme-opt="${k}" aria-pressed="${theme === k}">${t}</button>`).join('')}
@@ -6485,12 +6495,21 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
           ${STYLE_OPTS.map(([k, t, d]) => `<button type="button" class="style-opt" data-style-opt="${k}" aria-pressed="${(state.me?.prefs?.style || 'a') === k}"><span class="style-sw sw-${k}" aria-hidden="true"><i></i><i></i><i></i></span><b>${t}</b><span class="muted small">${d}</span></button>`).join('')}
         </div>
         <span class="muted small">記在你的帳號，換裝置也一樣；淺色、深色都能用。</span></div>
+      <div class="switch-row">
+        <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
+        <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
+      </div>`)}
+      ${pane('me', `
       <div class="avatar-row">
         <span class="av-56" id="set-avatar">${avatar(state.me)}</span>
         <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
-        <button class="btn small" type="button" data-change-avatar>更換</button>
       </div>
-      <div class="field set-links"><span class="field-label">登入與裝置</span><div class="row"><button type="button" class="btn small" data-set-open="devices">📱 我的裝置…</button><button type="button" class="btn small" data-set-open="api">🔑 API 資訊與登入碼…</button></div></div>
+      <div class="row set-av-acts">
+        <button class="btn small primary" type="button" data-change-avatar>更換</button>
+        ${myAisForAvatar().length ? '<button class="btn small" type="button" data-set-av="ask">🖼 請我的 AI 幫我做</button>' : ''}
+        <button class="btn small" type="button" data-set-av="revert">↩ 換回上一張</button>
+      </div>`)}
+      ${pane('proj', `
       <div class="field"><span class="field-label">所屬專案</span>
         <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員與權限」調整，這裡只能看。</p>
         <div class="proj-rows">${projMineHtml()}</div>
@@ -6498,7 +6517,8 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       ${state.me.memberType === 'human' && myProjects().length ? `<div class="field my-roles" id="my-roles"><span class="field-label">我的角色</span>
         <p class="muted small">每個專案各一個，只能改自己的；跨專案角色在成員與權限。</p>
         ${myProjects().map(pj => `<div class="my-role-row"><b class="my-role-name" title="${esc(projName(pj))}">${esc(projName(pj))}</b>${roleSelectHtml(state.me.projectRoles?.[pj] || '', `data-myrole="${esc(pj)}"`, { pj, label: `我在${projName(pj)}的角色` })}</div>`).join('')}
-        <div class="my-role-foot"><button type="button" class="btn primary small" id="my-roles-save">儲存角色</button></div></div>` : ''}
+        <div class="my-role-foot"><button type="button" class="btn primary small" id="my-roles-save">儲存角色</button></div></div>` : ''}`)}
+      ${pane('acct', `
       <div class="field pwd-set" id="pwd-set"><span class="field-label" id="pwd-set-h">帳號密碼</span>
         <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">讀取中…</span></div>
         <form id="pwd-set-form" class="stack" aria-labelledby="pwd-set-h" hidden>
@@ -6511,15 +6531,57 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
           <p class="muted small" id="pwd-forgot"></p>
         </form>
       </div>
-      <div class="switch-row">
-        <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
-        <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
-      </div>
+      <div class="field set-links"><span class="field-label">登入與裝置</span><div class="row"><button type="button" class="btn small" data-set-open="devices">📱 我的裝置…</button><button type="button" class="btn small" data-set-open="api">🔑 API 資訊與登入碼…</button></div></div>
       <div class="danger-zone">
         <b>離開群組</b>
         <p class="muted small">會停用你和你名下的所有 AI，其他成員將看不到你們，Token 全部失效。</p>
         <button class="btn small danger-outline" type="button" id="set-leave">離開群組</button>
-      </div>`);
+      </div>`)}
+      </div></div>`, { size: 'set-modal' });
+    // 分頁切換：有沒存的修改（角色、帳號密碼）先問；上下（手機左右）鍵切換
+    const savedRole = pj => state.me.projectRoles?.[pj] || '';
+    const rolesDirty = () => [...body.querySelectorAll('[data-myrole]')].some(s => (s.value === '__other' ? '' : s.value) !== savedRole(s.dataset.myrole));
+    const pwdForm = body.querySelector('#pwd-set-form');
+    const pwdDirty = () => !!pwdForm && !pwdForm.hidden && (['current', 'newPassword', 'again'].some(k => pwdForm[k].value) || pwdForm.username.value.trim() !== (pwdForm.dataset.saved ?? pwdForm.username.value.trim()));
+    const dirtyIn = k => (k === 'proj' && rolesDirty()) || (k === 'acct' && pwdDirty());
+    const discard = k => {
+      if (k === 'proj') body.querySelectorAll('[data-myrole]').forEach(s => { s.value = savedRole(s.dataset.myrole); s.dataset.v = s.value; s.classList.toggle('empty', !s.value); });
+      if (k === 'acct' && pwdForm) { ['current', 'newPassword', 'again'].forEach(n => { pwdForm[n].value = ''; }); pwdForm.username.value = pwdForm.dataset.saved ?? ''; body.querySelector('#pwd-set-err').textContent = ''; }
+    };
+    let curTab = cur;
+    async function showSetTab(k, focus = false) {
+      if (k === curTab) return;
+      if (dirtyIn(curTab)) {
+        const what = curTab === 'proj' ? '我的角色' : '帳號密碼';
+        if (!await confirmDialog({ title: '要先儲存嗎？', message: `「${what}」有還沒儲存的修改，換頁就不會保留。`, confirmText: '不儲存，換頁', cancelText: '留下來儲存' })) {
+          body.querySelector(`#st-${curTab}`)?.focus();
+          return;
+        }
+        discard(curTab);
+      }
+      curTab = k; store.set(SET_TAB_KEY, k);
+      body.querySelectorAll('[data-set-tab]').forEach(b => { const on = b.dataset.setTab === k; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+      body.querySelectorAll('.set-pane').forEach(p => { p.hidden = p.id !== 'sp-' + k; });
+      body.querySelector('.set-panes').scrollTop = 0;
+      const tb = body.querySelector(`#st-${k}`);
+      tb?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      if (focus) tb?.focus();
+    }
+    const tabList = body.querySelector('.set-tabs');
+    tabList.addEventListener('click', e => { const b = e.target.closest('[data-set-tab]'); if (b) showSetTab(b.dataset.setTab); });
+    tabList.addEventListener('keydown', e => {
+      const keys = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1, Home: 'first', End: 'last' };
+      if (!(e.key in keys)) return;
+      e.preventDefault();
+      const i = SET_TABS.findIndex(t => t[0] === curTab), d = keys[e.key];
+      const j = d === 'first' ? 0 : d === 'last' ? SET_TABS.length - 1 : (i + d + SET_TABS.length) % SET_TABS.length;
+      showSetTab(SET_TABS[j][0], true);
+    });
+    setTimeout(() => body.querySelector(`#st-${cur}`)?.focus(), 0);
+    body.querySelector('[data-set-av="ask"]')?.addEventListener('click', () => askAvatar(myAisForAvatar(), '幫我做一個頭像：'));
+    body.querySelector('[data-set-av="revert"]')?.addEventListener('click', async () => {
+      try { await afterAvatar(await api('/api/me/avatar/revert', { method: 'POST' })); toast('已換回上一張頭像'); const a = body.querySelector('#set-avatar'); if (a) a.innerHTML = avatar(state.me); } catch (err) { toast(err.message); }
+    });
     // C-219：我的角色
     body.querySelectorAll('[data-myrole]').forEach(sel => sel.addEventListener('change', async () => {
       const pj = sel.dataset.myrole, prev = sel.dataset.v ?? (state.me.projectRoles?.[pj] || '');
@@ -6582,6 +6644,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       if (saved) status.insertAdjacentHTML('beforeend', `<p class="ok-text small pwd-saved">${saved}</p>`);
       form.hidden = false;
       form.username.value = cur.username || form.username.value;
+      form.dataset.saved = cur.username || ''; // C-305：換分頁時判斷有沒有沒存的修改
       body.querySelector('#pwd-cur-l').hidden = !cur.set;
       body.querySelector('#pwd-new-hint').textContent = cur.set ? '至少 8 碼；只改帳號可以留白' : '至少 8 碼';
       form.newPassword.required = !cur.set;

@@ -2556,3 +2556,26 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 /* C-304：收件匣驗收／退回後該列原地淡出 */
 .sugg-row.ver-row { transition: opacity .25s; }
 .sugg-row.ver-row.fading { opacity: 0; }
+
+/* C-305：個人設定分四頁（電腦左邊分頁、手機上方可滑；彈窗高度固定，內容多才在右邊捲） */
+.modal.set-modal { width: min(760px, 100%); }
+.modal.set-modal .modal-body { padding: 0; overflow: hidden; display: flex; flex: none; height: min(560px, calc(100vh - 120px)); }
+.set-tabs-wrap { flex: 1; min-width: 0; display: grid; grid-template-columns: 176px minmax(0, 1fr); min-height: 0; }
+.set-tabs { display: flex; flex-direction: column; gap: 2px; padding: 10px; background: var(--surface-2); border-right: 1px solid var(--border); overflow-y: auto; }
+.set-tabs [role="tab"] { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px; border-radius: 8px; cursor: pointer; font-size: 14px; color: var(--text); white-space: nowrap; }
+.set-tabs [role="tab"]:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.set-tabs [role="tab"][aria-selected="true"] { background: var(--human-bg); color: var(--human-text); font-weight: 600; }
+.set-tabs [role="tab"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.set-tab-ico { width: 20px; text-align: center; flex: none; }
+.set-panes { min-height: 0; overflow-y: auto; padding: 16px 20px 20px; }
+.set-pane { display: grid; gap: 14px; align-content: start; }
+.set-pane:focus-visible { outline: none; }
+.set-av-acts { gap: 8px; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .modal.set-modal .modal-body { height: min(620px, calc(100dvh - 110px)); }
+  .set-tabs-wrap { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .set-tabs { flex-direction: row; gap: 6px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; background: var(--surface); }
+  .set-tabs::-webkit-scrollbar { display: none; }
+  .set-tabs [role="tab"] { min-height: 36px; padding: 0 12px; border-radius: 18px; background: var(--surface-2); font-size: 13px; }
+  .set-panes { padding: 12px 14px 16px; }
+}
