@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.72.6'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.73.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -380,6 +380,7 @@
       <button type="button" role="menuitem" data-av="myai">我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
       ${isAdmin() || myLeadProjects().length ? `<button type="button" role="menuitem" data-av="perm">成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
       <button type="button" role="menuitem" data-av="wishes">✨ 許願池</button>
+      <button type="button" role="menuitem" data-av="releases">版本紀錄<span class="muted small">v${APP_VERSION}</span></button>
       <button type="button" role="menuitem" data-av="settings">個人設定</button>
       <button type="button" role="menuitem" data-av="devices">我的裝置</button>
       <button type="button" role="menuitem" data-av="api">API 資訊與登入碼</button>
@@ -412,6 +413,7 @@
     else if (k === 'settings') openSettings();
     else if (k === 'avatar') changeMyAvatar();
     else if (k === 'wishes') openWishes(); // C-290
+    else if (k === 'releases') openReleases(); // C-291
     else if (k === 'api') openApi();
     else if (k === 'devices') openDevices();
     else if (k === 'logout') logout(true);
@@ -1024,9 +1026,9 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', wishes: '許願池' }; // C-270：私訊整頁
-  const TOP_PAGES = { myai: '/my-ai', perm: '/members', wishes: '/wishes' }; // C-182：第一層頁面（不分專案）；C-281 許願池
-  const isTop = p => p === 'myai' || p === 'wishes' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
+  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', wishes: '許願池', releases: '版本紀錄' }; // C-270：私訊整頁
+  const TOP_PAGES = { myai: '/my-ai', perm: '/members', wishes: '/wishes', releases: '/releases' }; // C-182：第一層頁面（不分專案）；C-281 許願池；C-291 版本紀錄
+  const isTop = p => p === 'myai' || p === 'wishes' || p === 'releases' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
   const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
   const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc([...projName(p)][0] || '?')}</span>`;
@@ -1109,6 +1111,7 @@
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
     if (seg[0] === 'members') return { view: null, page: 'perm' };
     if (seg[0] === 'wishes') return { view: null, page: 'wishes' };
+    if (seg[0] === 'releases') return { view: null, page: 'releases' };
     return { view: null, page: null };
   }
   function routePath() {
@@ -2526,6 +2529,8 @@
       return renderMyAiPage();
     } else if (state.page === 'wishes') {
       return renderWishesPage();
+    } else if (state.page === 'releases') {
+      return renderReleasesPage();
     } else if (state.page === 'perm') {
       return renderPermPage();
     } else if (state.page === 'inbox') {
@@ -3301,6 +3306,7 @@
             <span class="cst-pill" data-st="${esc(d.status)}">${esc(verifyingMe(d) ? '等你驗收' : d.status)}</span><span class="muted small">負責：${esc(d.owner?.name || '未指派')}${prevHandName(d) ? ` · ${esc(shortOf(prevHandName(d)))} 交來` : ''}</span>`}
             ${d.type === NOTE && canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
           </div>
+          ${d.type === NOTE ? '' : `<div class="rel-line" data-rel-card="${esc(d.cardId)}"></div>`}
           ${d.type === NOTE ? '' : nowActsHtml(d) + moreActsHtml(d, mine)}
           ${d.status === '已封存' ? (() => {
             const sys = (d.log || []).find(l => /^系統自動封存/.test(l.text));
@@ -4647,7 +4653,7 @@
     const open = fb.reports.filter(r => r.status === '未整理'), done = fb.reports.filter(r => r.status !== '未整理');
     const ctx = r => [r.reporter.name, r.reporterProject?.name && r.context.page ? r.context.page : r.reporterProject?.name || r.context.page, r.context.device, r.context.version && `v${r.context.version}`, r.context.errorCode && `錯誤 ${r.context.errorCode}`, r.shots.length && `📎${r.shots.length}`].filter(Boolean).map(esc).join(' · ');
     const row = r => `<div class="rep-row" data-rep="${esc(r.reportId)}"><div class="rep-main"><span class="sev ${SEV_CLS[r.severity] || 'sev-no'}">${esc(r.severity || '未標')}</span> <b>${esc(r.reportId)} ${esc(r.title)}</b>${r.status !== '未整理' ? ` <span class="wst s4">${esc(r.status === '已轉工作卡' || r.status === '已修好' ? `${r.status} ${r.cardId}` : r.status === '已合併' ? `合併到 ${r.mergedInto}` : r.status)}</span>` : ''}
-      <div class="muted small">${ctx(r)} · ${esc(fmtTime(r.createdAt))}</div>${r.detail ? `<div class="small rep-detail">${esc(r.detail)}</div>` : ''}</div>
+      <div class="muted small">${ctx(r)} · ${esc(fmtTime(r.createdAt))}${r.context.version ? ` · <button type="button" class="link small" data-rel-ver="${esc(r.context.version)}">看 v${esc(r.context.version)} 改了什麼</button>` : ''}</div>${r.detail ? `<div class="small rep-detail">${esc(r.detail)}</div>` : ''}</div>
       <div class="rep-acts">${r.shots.length ? `<button type="button" class="link small" data-rep-shots="${esc(r.reportId)}">看截圖</button>` : ''}${r.status === '未整理' ? `<select data-rep-sev="${esc(r.reportId)}" aria-label="${esc(r.reportId)} 嚴重度">${['', '嚴重', '一般', '小'].map(s => `<option value="${s}"${r.severity === s ? ' selected' : ''}>${s || '標嚴重度'}</option>`).join('')}</select>
         <button type="button" class="link small" data-rep-card="${esc(r.reportId)}">轉工作卡</button><button type="button" class="link small" data-rep-merge="${esc(r.reportId)}">合併到…</button><button type="button" class="link small" data-rep-skip="${esc(r.reportId)}">先不處理</button>` : `<button type="button" class="link small" data-rep-reopen="${esc(r.reportId)}">改回未整理</button>`}</div></div>`;
     return `<section id="rep-strip" class="rep-strip"><div class="rep-head"><button type="button" class="link rep-toggle" data-rep-toggle aria-expanded="${fb.repOpen}"><b>🐞 回報 · 未整理 ${open.length}</b></button><span class="muted small">只有平台團隊看得到；回報的人不會收到進度通知</span></div>
@@ -4735,6 +4741,90 @@
     if (e.key !== 'Escape' || !fbIsOpen() || !e.target.closest?.('#fb-panel') || document.querySelector('#modal-root .modal, .confirm-root')) return;
     e.preventDefault(); fbPanel(false); document.querySelector('[data-fb-toggle]:not([hidden])')?.focus();
   });
+
+  // ---------- C-291 版本紀錄（版本、上線時間、卡片、commit）與 3 張流程圖 ----------
+  // 資料是部署時產生的靜態檔 /releases.json、/flows.md，打開才讀，不碰資料庫
+  const rel = { data: null, flows: null, tab: 'list', q: '', back: null, hit: '' };
+  async function loadReleases() {
+    if (!rel.data) rel.data = await fetch(`/releases.json?v=${APP_VERSION}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    return rel.data;
+  }
+  function openReleases(ver = '') {
+    if (state.page !== 'releases') rel.back = { view: state.view, page: state.page };
+    rel.hit = ver ? String(ver).replace(/^v/, '') : '';
+    if (ver) { rel.tab = 'list'; rel.q = ''; }
+    return state.page === 'releases' ? drawReleases() : goTop('releases');
+  }
+  async function renderReleasesPage() {
+    const box = $('#page-work');
+    box.classList.remove('is-board');
+    box.innerHTML = '<p class="muted">載入中…</p>';
+    if (!rel.hit && location.hash.startsWith('#v')) rel.hit = location.hash.slice(2);
+    await loadReleases();
+    if (rel.tab === 'flows' && rel.flows === null) rel.flows = await fetch(`/flows.md?v=${APP_VERSION}`).then(r => (r.ok ? r.text() : '')).catch(() => '');
+    drawReleases();
+  }
+  const relTime = iso => { const t = new Date(iso); return `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
+  // 很小的 Markdown 顯示：標題、清單、程式碼區塊、表格、粗體、行內程式碼
+  function mdHtml(md) {
+    const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+    const out = []; let code = null, list = false, table = null;
+    const flush = () => { if (list) { out.push('</ul>'); list = false; } if (table) { out.push(`<div class="md-table"><table>${table.map((r, i) => `<tr>${r.map(c => (i ? `<td>${inline(c)}</td>` : `<th>${inline(c)}</th>`)).join('')}</tr>`).join('')}</table></div>`); table = null; } };
+    for (const line of String(md).split('\n')) {
+      if (line.startsWith('```')) { if (code) { out.push(`<pre class="md-pre">${esc(code.join('\n'))}</pre>`); code = null; } else { flush(); code = []; } continue; }
+      if (code) { code.push(line); continue; }
+      if (/^\|/.test(line)) { if (/^\|[-| ]+\|$/.test(line)) continue; (table = table || []).push(line.slice(1, -1).split('|').map(c => c.trim())); continue; }
+      if (/^\s*- /.test(line)) { if (!list) { flush(); out.push('<ul>'); list = true; } out.push(`<li>${inline(line.replace(/^\s*- /, ''))}</li>`); continue; }
+      flush();
+      const h = /^(#{1,3}) (.*)$/.exec(line);
+      if (h) out.push(`<h${h[1].length + 1} id="${esc(h[2].replace(/\s+/g, ''))}">${inline(h[2])}</h${h[1].length + 1}>`);
+      else if (line.trim() === '---') out.push('<hr>');
+      else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+    }
+    flush();
+    return out.join('');
+  }
+  function drawReleases() {
+    const box = $('#page-work');
+    if (state.page !== 'releases') return;
+    const d = rel.data;
+    const tabs = `<div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>`;
+    const head = `<button type="button" class="link wish-back" data-rel-back>‹ 返回</button><div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">目前 v${esc(APP_VERSION)}${d ? ` · ${d.items.length} 個版本` : ''} · 修 bug 要附重現測試；改動前寫影響哪張流程圖的哪一段</span></div>${tabs}</div>`;
+    if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
+    if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
+    const q = rel.q.trim().toLowerCase().replace(/^v/, '');
+    const list = d.items.filter(r => !q || r.version.includes(q) || r.cards.some(c => c.toLowerCase() === q || c.toLowerCase().startsWith(q)) || r.commits.some(c => c.title.toLowerCase().includes(q) || c.sha.startsWith(q)));
+    const row = r => `<article class="rel-item${rel.hit === r.version ? ' hit' : ''}" id="v${esc(r.version)}">
+      <div class="rel-head"><b>v${esc(r.version)}</b><span class="muted small">${esc(relTime(r.at))}${r.deployedAt ? ' 上線' : '（commit 時間）'}</span>${r.cards.map(c => `<button type="button" class="cid-chip" data-card="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      ${r.fixes.map(f => `<div class="rel-inc fix">🩹 修正 ${esc(f.cause)}（<button type="button" class="link small" data-rel-ver="${esc(f.causeVersion)}">v${esc(f.causeVersion)}</button>）造成的問題：${esc(f.note)}${f.flow ? `（流程 ${esc(f.flow)}）` : ''}</div>`).join('')}
+      ${r.causes.map(c => `<div class="rel-inc cause">⚠ 這版造成的問題，由 ${esc(c.fix)}（<button type="button" class="link small" data-rel-ver="${esc(c.fixVersion)}">v${esc(c.fixVersion)}</button>）修好：${esc(c.note)}</div>`).join('')}
+      <ul class="rel-commits">${r.commits.map(c => `<li><code>${esc(c.sha)}</code> ${esc(c.title)}</li>`).join('')}</ul></article>`;
+    box.innerHTML = head + `<div class="work-filters"><input id="rel-q" type="search" placeholder="找版本、卡號或關鍵字（例：C-276、0.62、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}"></div>
+      ${d.incidents?.length && !q ? `<section class="wpanel rel-incidents"><b>事故對照</b>${d.incidents.map(i => `<div class="small">${esc(i.fix)}（v${esc(i.fixVersion)}）← ${esc(i.cause)}（<button type="button" class="link small" data-rel-ver="${esc(i.causeVersion)}">v${esc(i.causeVersion)}</button>）：${esc(i.note)}${i.flow ? `（${esc(i.flow)}）` : ''}</div>`).join('')}</section>` : ''}
+      <section class="rel-list">${list.map(row).join('') || '<p class="muted">找不到符合的版本。</p>'}</section>`;
+    if (rel.hit) { const el = document.getElementById('v' + rel.hit); if (el) setTimeout(() => el.scrollIntoView({ block: 'center' }), 0); }
+  }
+  // 卡片抽屜：這張卡在哪幾版上線
+  async function fillRelLines(root = document) {
+    const els = root.querySelectorAll?.('[data-rel-card]:not([data-filled])');
+    if (!els?.length) return;
+    const d = await loadReleases();
+    for (const el of els) {
+      el.dataset.filled = '1';
+      const vs = (d?.items || []).filter(r => r.cards.includes(el.dataset.relCard)).map(r => r.version);
+      el.innerHTML = vs.length ? `<span class="muted small">上線版本：</span>${vs.slice(0, 6).map(v => `<button type="button" class="link small" data-rel-ver="${esc(v)}">v${esc(v)}</button>`).join(' ')}${vs.length > 6 ? ` <span class="muted small">等 ${vs.length} 版</span>` : ''}` : '';
+    }
+  }
+  new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1 && (n.matches?.('[data-rel-card]') || n.querySelector?.('[data-rel-card]'))) fillRelLines(n.parentElement || n); })
+    .observe(document.body, { childList: true, subtree: true });
+  document.addEventListener('click', e => {
+    const v = e.target.closest?.('[data-rel-ver]');
+    if (v) { if (document.querySelector('.drawer')) closeCard(); return openReleases(v.dataset.relVer); }
+    const t = e.target.closest?.('[data-rel-tab]');
+    if (t) { rel.tab = t.dataset.relTab; return renderReleasesPage(); }
+    if (e.target.closest?.('[data-rel-back]')) { const b = rel.back; rel.back = null; return b && b.page !== 'releases' ? (b.view && b.view !== state.view ? setProjectView(b.view, b.page) : showPage(b.page)) : setProjectView('hub'); }
+  });
+  document.addEventListener('input', e => { if (e.target.id === 'rel-q') { rel.q = e.target.value; rel.hit = ''; drawReleases(); const q = $('#rel-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); } });
 
   async function renderMyAiPage() {
     const box = $('#page-work');

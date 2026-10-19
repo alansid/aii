@@ -1,0 +1,21 @@
+{
+  "deployed": {},
+  "incidents": [
+    {
+      "fix": "C-248",
+      "fixVersion": "0.58.10",
+      "cause": "C-245 第二批",
+      "causeVersion": "0.58.8",
+      "note": "成員快取拉長，新成員剛註冊時別份程式的快取還沒有他，第一次進來就 500",
+      "flow": "L5"
+    },
+    {
+      "fix": "C-276",
+      "fixVersion": "0.66.2",
+      "cause": "C-256",
+      "causeVersion": "0.62.0",
+      "note": "AI 現況把已結案的卡也算成「在做」",
+      "flow": "K3"
+    }
+  ]
+}
