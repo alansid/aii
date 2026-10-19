@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.77.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.77.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -2180,7 +2180,32 @@
     return `<span class="cfm-pill ${dec ? 'dec' : 'ver'}">${mine ? `等你${act}` : `等${who?.name ? ' ' + esc(who.name) + ' ' : ''}${act}`}</span>`;
   }
   // 驗收通過＝標已完成（人類完成即驗收）；退回＝填原因，卡回到交過來的 AI
-  async function acceptCard(id) { const r = await patchCard(id, { status: '已完成' }); if (r) { toast(`${id} 驗收通過`); loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox') renderWork(); }).catch(() => {}); } }
+  // C-304：收件匣裡驗收／退回：留在原位，該列原地淡出、下一列補上；數字（紅點、分頁標題）立刻更新
+  const verRow = id => (state.page === 'inbox' ? document.querySelector(`#page-work [data-ver-row="${CSS.escape(id)}"]`) : null);
+  const rowBusy = (row, on) => row?.querySelectorAll('button').forEach(b => { b.disabled = on; });
+  // 這張卡交給你驗收的通知一起標為已處理：原本卡還在「等你驗收」時藏著，驗收完就冒到上面「要你回覆」，整頁被往下推
+  function ackCardNotes(id) {
+    const ids = (work.notes || []).filter(n => !n.dm && [...(state.msgCards.get(n.messageId) || []), cardIdOf(n.preview || '')].includes(id)).map(n => n.notificationId);
+    if (!ids.length) return;
+    work.notes = work.notes.filter(n => !ids.includes(n.notificationId));
+    api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } }).then(refreshInboxCount).catch(() => {});
+  }
+  function fadeOutRow(row, id) {
+    ackCardNotes(id);
+    updateTodoBadge();
+    if (!row) return renderWork();
+    row.classList.add('fading');
+    setTimeout(renderWork, 250);
+  }
+  async function acceptCard(id) {
+    const row = verRow(id);
+    rowBusy(row, true);
+    const r = await patchCard(id, { status: '已完成' }, { render: !row });
+    if (!r) return rowBusy(row, false);
+    toast(`${id} 驗收通過`);
+    fadeOutRow(row, id);
+    loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox') renderWork(); }).catch(() => {});
+  }
   async function rejectCard(id) {
     const c = work.cards.get(id);
     const reason = await promptReason(`退回 ${id}？`, '退回原因（會回覆到交接訊息，交過來的 AI 會收到）');
@@ -2188,10 +2213,9 @@
     try {
       const r = await api(`/api/cards/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason, version: c?.version } });
       work.cards.set(id, r);
-      renderWork();
+      fadeOutRow(verRow(id), id); // C-304：原地淡出
       if (work.openId === id) openCard(id);
       toast(`已退回給 ${r.owner?.name || 'AI'}`);
-      updateTodoBadge();
     } catch (err) { toast(err.message); }
   }
   function promptReason(title, label) {
@@ -2626,8 +2650,10 @@
     if (state.page === 'perm') return drawPerm();
     if (!['work', 'inbox', 'hub'].includes(state.page) || !work.loaded) return;
     box.classList.remove('is-board');
-    if (state.page === 'inbox') { box.innerHTML = inboxHtml(); applyFocusItem(); return; }
-    if (state.page === 'hub') { box.innerHTML = hubHtml(); return; }
+    // C-304：收件匣、總覽重畫時留在原本的捲動位置
+    const keepTop = html => { const top = box.scrollTop; box.innerHTML = html; if (box.scrollTop !== top) box.scrollTop = top; };
+    if (state.page === 'inbox') { keepTop(inboxHtml()); applyFocusItem(); return; }
+    if (state.page === 'hub') { keepTop(hubHtml()); return; }
     const all = visibleCards();
     const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView()); // C-180
     const keep = document.activeElement?.id;
@@ -3146,12 +3172,12 @@
     const ta = document.querySelector('[data-note-text]');
     if (ta) { ta.focus(); }
   }
-  async function patchCard(id, body) {
+  async function patchCard(id, body, { render = true } = {}) {
     const c = work.cards.get(id);
     try {
       const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: c?.version } });
       work.cards.set(id, r);
-      renderWork();
+      if (render) renderWork(); // C-304：收件匣驗收時由呼叫端先淡出再重畫
       if (work.openId === id) openCard(id);
       return r;
     } catch (err) {

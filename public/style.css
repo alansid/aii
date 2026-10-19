@@ -2552,3 +2552,7 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 :root[data-style="c"][data-theme="dark"] .msg.mine { background: var(--surface); border-color: var(--human-border); }
 :root[data-style="c"] .composer-tools .send:disabled { background: color-mix(in srgb, var(--primary) 35%, var(--surface)); border-color: transparent; color: var(--surface); }
 :root[data-style="c"] .composer-tools .tag-btn.on { border-color: var(--human-border); background: var(--human-bg); color: var(--human-text); }
+
+/* C-304：收件匣驗收／退回後該列原地淡出 */
+.sugg-row.ver-row { transition: opacity .25s; }
+.sugg-row.ver-row.fading { opacity: 0; }
