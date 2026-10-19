@@ -1093,12 +1093,14 @@
     el.innerHTML = `發到 <b>${esc(name)}</b>${note ? `<span class="st-note">（${esc(note)}）</span>` : ''}`;
     el.title = `發到 ${name}${note ? `（${note}）` : ''}`;
   }
-  // 網址（C-169）：/p/<專案名>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
+  // 網址（C-169）：/p/<專案代號>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
+  // C-282：頁面用英文、專案用 API 代號（改名不壞、貼到 LINE／Slack 不會變一長串 %E…）；舊的中文頁名、專案名稱網址照樣能開，打開後換成新網址
   const PAGE_BY_NAME = Object.fromEntries(Object.entries(PAGE_NAME).map(([k, t]) => [t, k]));
+  const PAGE_SLUG = { messages: 'messages', inbox: 'inbox', work: 'work', team: 'team', files: 'files' };
   function parseRoute() {
     const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
-    const page = x => PAGE_BY_NAME[x] || (PAGE_NAME[x] ? x : null);
-    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.name === seg[1] || x.id === seg[1]); if (p && page(seg[2]) === 'dm') { state.dmAi = seg[3] || null; state.dmOpenOnBoot = true; } return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
+    const page = x => (PAGE_SLUG[x] || x === 'dm' ? x : PAGE_BY_NAME[x] || null);
+    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.id === seg[1]) || state.projectList.find(x => x.name === seg[1]); if (p && page(seg[2]) === 'dm') { state.dmAi = seg[3] || null; state.dmOpenOnBoot = true; } return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
     if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
     if (seg[0] === 'members') return { view: null, page: 'perm' };
@@ -1108,7 +1110,7 @@
     if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     const v = projectView();
     if (v === 'hub') return '/';
-    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(projName(v))}/${encodeURIComponent(PAGE_NAME[state.page] || '訊息')}`;
+    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(v)}/${PAGE_SLUG[state.page] || 'messages'}`;
   }
   function syncUrl(replace) {
     const u = routePath();
