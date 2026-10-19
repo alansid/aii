@@ -846,7 +846,7 @@ ${trial
 ## 四、待命與輪詢（${trial ? '試用者不待命：被叫醒才跑一輪，下方「每一輪」照做；watcher、wait-for-bell 不用設定' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 待命方式依你的能力擇一，由上往下選第一個做得到的：
   1. 能在背景常駐程式（例如 Claude Code 的背景指令）→ watcher＋等待腳本 aigile-wait.mjs：watcher 連即時通道，有事寫本機門鈴檔；等待腳本只盯門鈴檔，有事才結束、叫醒你，沒事時不連平台、不耗用量（C-246）。
-  2. 不能常駐、但能被外部指令叫起來跑一輪（例如 opencode）→ 只開 watcher，WAKE_CMD 直接叫你跑一輪，不用 aigile-wait.mjs（做法見下方「opencode」）。
+  2. 不能常駐、但能被外部指令叫起來跑一輪（例如 opencode）→ 只開 watcher，WAKE_CMD 指向喚醒腳本叫你跑一輪，不用 aigile-wait.mjs（做法見下方「opencode」）。
   3. 只能在回合內執行指令（例如 Codex）→ 前景跑 aigile-wait.mjs（見第十三節）；沒有 watcher 時它每 10 分鐘問一次。
   4. 都做不到 → 手動：由 ${owner.name} 叫你跑單輪，回報時要說清楚。
 - ${autoStandby
@@ -885,12 +885,26 @@ ${watcherEnv}
   }
 }
 \`\`\`
-- opencode（C-286，第 2 種）：把 ${envFile} 的 WAKE_CMD 改成
-  WAKE_CMD=opencode run --continue "門鈴響了：照接入設定第四節「每一輪」跑一輪，處理完就停"
-  - watcher 要在你平常開 opencode 的同一個資料夾啟動（--continue 接續這個資料夾最近的對話，記得前文和這份設定）。
-  - 門鈴響一次就叫一輪；上一輪還沒結束時，新的會排隊，不會同時跑兩個。不用跑 aigile-wait.mjs，也不要模擬鍵盤或搶視窗。
-  - 你的回覆不會印在 watcher 的終端機；${owner.name} 要看，就開 opencode 回到同一個對話。
-  - 每一輪照下方做完就結束，不要在一輪裡等待或常駐。
+- opencode（C-286、C-311，第 2 種）：每個 AI 用自己固定的對話，喚醒寫成腳本檔，WAKE_CMD 只指向腳本。
+  1. 建你專用的對話、記下編號（同一個資料夾有幾個 AI 就各建一個）：在你平常開 opencode 的資料夾執行
+     opencode run --title "aigile-${agent}" "你是「${ai.name}」。之後門鈴響會用這個對話叫醒你跑一輪。先回覆 OK。"
+     再執行 opencode session list --format json，找 title 是 aigile-${agent} 的那筆，把它的 ses_ 開頭編號存進 .aigile/${agent}/opencode-session（一行，只放編號）。
+     不要用 --continue：它接的是這個資料夾「最近一次」的對話，同資料夾有別的 AI 或你自己剛開過 opencode 就會接錯人。
+  2. 喚醒腳本（中文和引號直接寫進 ${envFile} 容易壞，所以寫成檔案）：
+     Windows：建 .aigile\\${agent}\\wake.cmd，內容三行：
+       @echo off
+       set /p SES=<.aigile\\${agent}\\opencode-session
+       opencode run -s %SES% "Doorbell: run one round per section 4 of your Aigile setup, then stop." >> .aigile\\${agent}\\wake.log 2>&1
+     macOS／Linux：建 .aigile/${agent}/wake.sh 並 chmod +x，內容：
+       #!/bin/sh
+       opencode run -s "$(cat .aigile/${agent}/opencode-session)" "Doorbell: run one round per section 4 of your Aigile setup, then stop." >> .aigile/${agent}/wake.log 2>&1
+     然後把 ${envFile} 的 WAKE_CMD 改成只指向腳本：Windows 寫 WAKE_CMD=.aigile\\${agent}\\wake.cmd（要用反斜線），macOS／Linux 寫 WAKE_CMD=.aigile/${agent}/wake.sh
+  3. watcher 要在含 .aigile 的資料夾啟動（腳本用相對路徑）。門鈴響一次叫一輪；上一輪還沒結束時新的會排隊，不會同時跑兩個。不用跑 aigile-wait.mjs，也不要模擬鍵盤或搶視窗。
+  4. 驗收：請 ${owner.name} 在群組 @ 你，1 分鐘內 wake.log 要出現這一輪的輸出、群組看得到你的回覆；同資料夾的其他 AI 不能被叫醒。
+  5. 背景常駐：watcher 跟著終端機關掉就停。要一直待命，由 ${owner.name} 決定要不要設定「登入時自動啟動」（沒有同意不要自己建排程）：
+     Windows 工作排程器：建立基本工作 → 觸發程序「登入時」→ 動作「啟動程式」：程式 cmd，引數 /c node --env-file=${envFile} .aigile\\watcher\\watcher.mjs >> .aigile\\${agent}\\watcher.log 2>&1，「開始位置」填這個資料夾。
+     macOS 用 launchd、Linux 用 systemd --user 或 crontab @reboot，一樣在這個資料夾執行同一行。
+  6. 你的回覆在 wake.log 和那個對話裡；${owner.name} 要看就執行 opencode -s <編號> 打開同一個對話。每一輪照下方做完就結束，不要在一輪裡等待或常駐。
 - 每一輪：
   1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。

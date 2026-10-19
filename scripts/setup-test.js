@@ -97,6 +97,13 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     // C-292 補：本機留著舊 watcher（雜湊不符）要先停、重下一次再核對，不是直接停下回報
     assert.match(obPg, /已經在但 SHA-256 不符.*先停掉你自己用舊檔在跑的 watcher.*重新下載一次覆蓋再核對.*重下仍不符才停止並回報/, '接入設定：舊 watcher 先重下');
     assert.ok(!/不符就停止並告訴/.test(obPg), '不再「一不符就停」');
+    // C-311：opencode 用自己固定的對話（-s 編號）、喚醒寫成腳本檔、說明背景常駐；不再叫它用 --continue
+    assert.match(obPg, /opencode run --title "aigile-PG"/, 'opencode：建專用對話');
+    assert.match(obPg, /opencode run -s %SES%/, 'opencode：wake.cmd 用固定對話編號');
+    assert.match(obPg, /WAKE_CMD=\.aigile\\PG\\wake\.cmd/, 'opencode：WAKE_CMD 只指向腳本（Windows 反斜線）');
+    assert.match(obPg, /wake\.log/, 'opencode：輸出寫 wake.log');
+    assert.match(obPg, /工作排程器/, 'opencode：說明背景常駐');
+    assert.ok(!/WAKE_CMD=opencode run --continue/.test(obPg), '不再用 --continue');
     // 改成環境行內 → 立刻變空
     await call(liu.token, `/api/my-ais/${pg.participantId}`, 'PATCH', { environment: '行內' });
     assert.deepEqual((await call(pg.token, '/api/me')).body.grants.items, [], '改成行內就失效');
