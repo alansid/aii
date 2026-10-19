@@ -1,6 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
+  const APP_VERSION = '0.72.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -57,6 +58,7 @@
     if (!r.ok) {
       const err = new Error(data?.error?.message || `HTTP ${r.status}`);
       err.code = data?.error?.code;
+      state.lastErr = { code: err.code || `HTTP ${r.status}`, at: Date.now() }; // C-281
       if (state.me && (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED')) logout(false);
       throw err;
     }
@@ -1020,9 +1022,9 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.project === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊' }; // C-270：私訊整頁
-  const TOP_PAGES = { myai: '/my-ai', perm: '/members' }; // C-182：第一層頁面（不分專案）
-  const isTop = p => p === 'myai' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
+  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', wishes: '許願池' }; // C-270：私訊整頁
+  const TOP_PAGES = { myai: '/my-ai', perm: '/members', wishes: '/wishes' }; // C-182：第一層頁面（不分專案）；C-281 許願池
+  const isTop = p => p === 'myai' || p === 'wishes' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
   const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
   const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc([...projName(p)][0] || '?')}</span>`;
@@ -1104,6 +1106,7 @@
     if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
     if (seg[0] === 'members') return { view: null, page: 'perm' };
+    if (seg[0] === 'wishes') return { view: null, page: 'wishes' };
     return { view: null, page: null };
   }
   function routePath() {
@@ -2519,6 +2522,8 @@
       return openFiles(); // C-195：文件改成頁面，不再用彈窗擋住左側選單
     } else if (state.page === 'myai') {
       return renderMyAiPage();
+    } else if (state.page === 'wishes') {
+      return renderWishesPage();
     } else if (state.page === 'perm') {
       return renderPermPage();
     } else if (state.page === 'inbox') {
@@ -2606,7 +2611,9 @@
         <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
       </div>
       ${work.type === NOTE && all.some(c => c.type === NOTE && !closedSt(c.status)) ? (() => { const ns = all.filter(c => c.type === NOTE && !closedSt(c.status)); return `<div class="note-ask"><span class="muted small">AI 不會主動看到人類紀錄；收集夠了可以一次請 AI 讀完整理。</span><button type="button" class="btn primary small" data-ask-ai="${esc(ns.map(c => c.cardId).join(','))}">請 AI 整理這 ${ns.length} 張</button></div>`; })() : ''}
+      ${reportsHtml()}
       ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
+    if (fbTeamView() && (!fb.repAt || Date.now() - fb.repAt > 60_000)) loadReports(); // 打開工作頁才讀，不輪詢
     box.classList.toggle('is-board', work.view === 'B'); // 看板：高度＝頁面剩餘高度，欄內各自捲動（C-142）
     if (work.view === 'B') boardMore();
     if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
@@ -3992,6 +3999,8 @@
   function drawDmSide() {
     const entry = dmEntry(), on = entry && dmVisible(), ais = on ? myAisHere() : [];
     const n = ais.reduce((t, a) => t + dmUnread(a.participantId), 0);
+    document.querySelectorAll('[data-fb-toggle]').forEach(b => { b.hidden = state.me?.memberType !== 'human'; }); // C-281
+    document.querySelectorAll('[data-wishes]').forEach(b => { b.hidden = !state.me; });
     document.querySelectorAll('[data-dm-toggle]').forEach(b => {
       b.hidden = !entry;
       const bd = b.querySelector('.badge'); bd.hidden = !n; bd.textContent = n > 99 ? '99+' : n;
@@ -4110,6 +4119,7 @@
     const el = $('#dm-panel');
     if (!el) return;
     if (open && !dmEntry()) open = false;
+    if (open && fbIsOpen()) fbPanel(false);
     el.hidden = !open;
     document.body.classList.toggle('dm-open', open);
     document.querySelectorAll('[data-dm-toggle]').forEach(b => b.setAttribute('aria-expanded', String(open)));
@@ -4431,6 +4441,300 @@
   }
 
   // C-182：第一層「我的 AI」頁：名下所有 AI，不分專案
+  // ---------- C-281 回報問題＋許願池 ----------
+  const fb = { tab: 'report', shots: [], noCtx: false, wishes: null, reports: null, repAt: 0, repOpen: true, repDone: false, draft: {} };
+  const FB_INSIDE = () => ['行內', '投信'].includes(state.me?.environment);
+  const fbIsOpen = () => !!$('#fb-panel') && !$('#fb-panel').hidden;
+  function fbPanel(open) {
+    const el = $('#fb-panel');
+    if (!el) return;
+    if (open && dmIsOpen()) dmPanel(false);
+    el.hidden = !open;
+    document.body.classList.toggle('dm-open', open || dmIsOpen());
+    document.querySelectorAll('[data-fb-toggle]').forEach(b => b.setAttribute('aria-expanded', String(open)));
+    if (!open) return;
+    const tb = document.querySelector('.topbar');
+    document.documentElement.style.setProperty('--dmp-top', `${tb && tb.offsetParent ? Math.round(tb.getBoundingClientRect().bottom) : 0}px`);
+    drawFb();
+    if (fb.tab === 'wish' && !fb.wishes) loadWishes().then(drawFbSimilar);
+    setTimeout(() => $('#fb-title')?.focus(), 0);
+  }
+  const fbDevice = () => {
+    const u = navigator.userAgent;
+    const os = /iPhone|iPad/.test(u) ? (/iPad/.test(u) ? 'iPad' : 'iPhone') : /Android/.test(u) ? 'Android' : /Windows/.test(u) ? 'Windows' : /Mac OS X/.test(u) ? 'Mac' : /Linux/.test(u) ? 'Linux' : '';
+    const br = /Edg\//.test(u) ? 'Edge' : /Chrome\//.test(u) ? 'Chrome' : /Firefox\//.test(u) ? 'Firefox' : /Safari\//.test(u) ? 'Safari' : '';
+    return [os, br].filter(Boolean).join(' ') || '未知';
+  };
+  const fbPage = () => (TOP_PAGES[state.page] ? PAGE_NAME[state.page] : [viewLabel(projectView()), projectView() === 'hub' ? '' : PAGE_NAME[state.page] || '訊息'].filter(Boolean).join(' › '));
+  const fbErr = () => (state.lastErr && Date.now() - state.lastErr.at < 30 * 60_000 ? state.lastErr.code : '');
+  const fbContext = () => ({ page: fbPage(), version: APP_VERSION, device: fbDevice(), at: new Date().toLocaleString('zh-TW', { hour12: false }), errorCode: fbErr() });
+  function drawFb() {
+    const box = $('#fb-box');
+    if (!box) return;
+    const tabs = `<div class="fb-tabs" role="tablist" aria-label="回報或許願"><button type="button" role="tab" data-fb-tab="report" aria-selected="${fb.tab === 'report'}">🐞 回報問題</button><button type="button" role="tab" data-fb-tab="wish" aria-selected="${fb.tab === 'wish'}">✨ 許個願</button></div>`;
+    const d = fb.draft;
+    if (fb.tab === 'report') {
+      const c = fbContext();
+      box.innerHTML = tabs + `<form class="fb-form" id="fb-report" novalidate>
+        <label>哪裡怪怪的？（一句話）<input id="fb-title" maxlength="100" required placeholder="例：手機按送出沒反應" value="${esc(d.title || '')}"></label>
+        <label>發生什麼（選填）<textarea id="fb-detail" rows="3" maxlength="2000" placeholder="我做了什麼、預期看到什麼…">${esc(d.detail || '')}</textarea></label>
+        <div class="fb-lbl">截圖（選填，貼上或拖進來）</div>
+        <button type="button" class="fb-drop" id="fb-drop">📎 Ctrl+V 貼上 或 點一下選圖 · 每張 1 MB 內（太大會自動壓縮）· 最多 3 張 · 保存 30 天</button>
+        <input type="file" id="fb-file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+        ${fb.shots.length ? `<div class="fb-shots">${fb.shots.map((s, i) => `<span class="fb-shot"><img src="${s.url}" alt="截圖 ${i + 1}"><button type="button" class="icon-btn" data-fb-unshot="${i}" aria-label="拿掉截圖 ${i + 1}">×</button></span>`).join('')}</div>` : ''}
+        ${FB_INSIDE() ? `<div class="fb-warn">⚠ 不要貼內部資料、程式碼、客戶個資<label class="chk"><input type="checkbox" id="fb-declare"${d.declared ? ' checked' : ''}> 我確認截圖不含以上內容</label></div>` : ''}
+        <div class="fb-auto">${fb.noCtx ? '<b>不帶頁面、裝置等資料</b>（只送標題、說明、截圖）' : `<b>會一起送出：</b>所在頁面（${esc(c.page)}）· 版本 v${esc(c.version)} · ${esc(c.device)} · ${esc(c.at)} · 最近錯誤代碼（${esc(c.errorCode || '沒有')}）`}<br><button type="button" class="link small" data-fb-ctx>${fb.noCtx ? '還是帶這些 ›' : '不要帶這些 ›'}</button></div>
+        <button type="submit" class="btn primary fb-send">送出回報</button>
+        <p class="muted small">送出後只有平台團隊看得到；不會另外通知你進度。</p></form>`;
+    } else {
+      box.innerHTML = tabs + `<form class="fb-form" id="fb-wish" novalidate>
+        <label>你想要什麼？<input id="fb-title" maxlength="100" required placeholder="例：卡片可以設提醒時間" value="${esc(d.wish || '')}"></label>
+        <div id="fb-similar" aria-live="polite"></div>
+        <label>為什麼（選填）<textarea id="fb-why" rows="2" maxlength="1000" placeholder="讓我們知道對你有多重要">${esc(d.why || '')}</textarea></label>
+        <button type="submit" class="btn primary fb-send">許這個新願望</button>
+        <button type="button" class="link small" data-wishes>看全部願望（許願池）›</button></form>`;
+      drawFbSimilar();
+    }
+  }
+  // 相似願望：兩字一組比對，有重疊就列出來（最多 3 個）
+  const bigrams = s => { const t = String(s).toLowerCase().replace(/[\s，。、！？,.!?：:「」]/g, ''); const out = new Set(); for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2)); if (t.length === 1) out.add(t); return out; };
+  function similarWishes(q) {
+    const a = bigrams(q);
+    if (a.size < 2 || !fb.wishes) return [];
+    return fb.wishes.map(w => { const b = bigrams(w.title); let n = 0; for (const x of a) if (b.has(x)) n++; return { w, s: n / Math.min(a.size, b.size || 1) }; })
+      .filter(x => x.s >= 0.34).sort((x, y) => y.s - x.s || y.w.votes - x.w.votes).slice(0, 3).map(x => x.w);
+  }
+  const WISH_CLS = { 收到: 's1', 評估中: 's2', 排入: 's5', 已上線: 's3', 先不做: 's4' };
+  const wishSt = w => `<span class="wst ${WISH_CLS[w.status] || ''}">${esc(w.status === '排入' && w.cardId ? `排入 ${w.cardId}` : w.status)}</span>`;
+  const wishRow = (w, { full = false } = {}) => `<div class="wish${w.status === '先不做' ? ' off' : ''}"><button type="button" class="wish-plus${w.voted ? ' on' : ''}" data-wish-vote="${esc(w.wishId)}" aria-pressed="${w.voted}" aria-label="${esc(`${w.voted ? '取消 +1' : '+1'}：${w.title}，目前 ${w.votes}`)}"><b>${w.voted ? '✓' : '+1'}</b>${w.votes}</button>
+    <div class="wish-main"><b>${esc(w.title)}</b> ${wishSt(w)}${full ? `<div class="muted small">${[w.project?.name, mmdd(w.createdAt), w.voted ? '你已 +1' : ''].filter(Boolean).map(esc).join(' · ')}${w.status === '先不做' && w.statusNote ? ` · 原因：${esc(w.statusNote)}` : ''}</div>${w.why ? `<div class="small wish-why">${esc(w.why)}</div>` : ''}` : ''}</div>
+    ${full && fb.canEdit ? `<button type="button" class="link small" data-wish-edit="${esc(w.wishId)}">改狀態</button>` : ''}</div>`;
+  function drawFbSimilar() {
+    const el = $('#fb-similar');
+    if (!el) return;
+    const list = similarWishes($('#fb-title')?.value || '');
+    el.innerHTML = list.length ? `<p class="small">有人許過類似的，<b>+1 就好</b>：</p>${list.map(w => wishRow(w)).join('')}` : '';
+  }
+  async function loadWishes() {
+    try { const d = await api('/api/wishes'); fb.wishes = d.items; fb.canEdit = d.canEdit; } catch (err) { toast(err.message); }
+  }
+  async function addShots(files) {
+    for (const f of files) {
+      if (fb.shots.length >= 3) { toast('最多 3 張截圖'); break; }
+      if (!/^image\/(png|jpeg|webp)$/.test(f.type)) { toast('截圖只接受 png、jpg、webp'); continue; }
+      let blob = f;
+      if (f.size > 1024 * 1024) blob = await shrinkShot(f); // 太大先壓縮
+      if (!blob || blob.size > 1024 * 1024) { toast('截圖壓縮後還是超過 1 MB，請裁小一點'); continue; }
+      fb.shots.push({ blob, url: URL.createObjectURL(blob) });
+    }
+    fbKeep(); drawFb();
+  }
+  function shrinkShot(file) {
+    return new Promise(resolve => {
+      const img = new Image(), url = URL.createObjectURL(file);
+      img.onload = async () => {
+        URL.revokeObjectURL(url);
+        for (const [max, q] of [[1920, 0.85], [1600, 0.75], [1280, 0.6]]) {
+          const k = Math.min(1, max / Math.max(img.width, img.height)), c = document.createElement('canvas');
+          c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          const b = await new Promise(r => c.toBlob(r, 'image/webp', q));
+          if (b && b.size <= 1024 * 1024) return resolve(b);
+        }
+        resolve(null);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  }
+  // 打字先記著（切分頁、重畫都不會丟）
+  function fbKeep() {
+    const v = id => $(id)?.value;
+    if (fb.tab === 'report') { if ($('#fb-title')) Object.assign(fb.draft, { title: v('#fb-title'), detail: v('#fb-detail'), declared: !!$('#fb-declare')?.checked }); }
+    else if ($('#fb-title')) Object.assign(fb.draft, { wish: v('#fb-title'), why: v('#fb-why') });
+  }
+  async function sendReport() {
+    fbKeep();
+    const d = fb.draft, title = (d.title || '').trim();
+    if (!title) { toast('請寫一句話說哪裡怪怪的'); return $('#fb-title')?.focus(); }
+    if (fb.shots.length && FB_INSIDE() && !d.declared) { toast('附截圖要先勾「我確認截圖不含以上內容」'); return $('#fb-declare')?.focus(); }
+    const btn = $('#fb-report .fb-send'); btn.disabled = true;
+    try {
+      const pv = projectView();
+      const r = await api('/api/reports', { method: 'POST', body: { title, detail: d.detail || '', project: PROJECTS.includes(pv) ? pv : undefined, context: fb.noCtx ? { at: new Date().toLocaleString('zh-TW', { hour12: false }) } : fbContext() } });
+      let failed = 0;
+      for (const s of fb.shots) {
+        const res = await fetch(`/api/reports/${encodeURIComponent(r.reportId)}/shots${FB_INSIDE() ? '?declared=1' : ''}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': s.blob.type || 'image/webp' }, body: s.blob }).catch(() => null);
+        if (!res || !res.ok) failed++;
+      }
+      fb.shots.forEach(s => URL.revokeObjectURL(s.url));
+      Object.assign(fb, { shots: [], draft: {} });
+      drawFb();
+      toast(`已送出 ${r.reportId}，謝謝！${failed ? `（${failed} 張截圖沒傳上去）` : ''}平台團隊會整理。`);
+    } catch (err) { toast(err.message); } finally { const b = $('#fb-report .fb-send'); if (b) b.disabled = false; }
+  }
+  async function sendWish() {
+    fbKeep();
+    const d = fb.draft, title = (d.wish || '').trim();
+    if (!title) { toast('請寫你想要什麼'); return $('#fb-title')?.focus(); }
+    const btn = $('#fb-wish .fb-send'); btn.disabled = true;
+    try {
+      const pv = projectView();
+      const w = await api('/api/wishes', { method: 'POST', body: { title, why: d.why || '', project: PROJECTS.includes(pv) ? pv : undefined } });
+      fb.wishes = [w, ...(fb.wishes || [])];
+      fb.draft = {};
+      drawFb();
+      toast(`已許願 ${w.wishId}，大家都看得到、可以 +1`);
+    } catch (err) { toast(err.message); } finally { const b = $('#fb-wish .fb-send'); if (b) b.disabled = false; }
+  }
+  async function voteWish(id) {
+    const w = (fb.wishes || []).find(x => x.wishId === id);
+    try {
+      const v = await api(`/api/wishes/${encodeURIComponent(id)}/vote`, { method: w?.voted ? 'DELETE' : 'POST' });
+      fb.wishes = (fb.wishes || []).map(x => (x.wishId === id ? v : x));
+      if (state.page === 'wishes') drawWishesPage();
+      drawFbSimilar();
+    } catch (err) { toast(err.message); }
+  }
+  // 許願池頁：所有登入的人；依 +1 或最新排序、狀態篩選；平台團隊可以改狀態
+  async function renderWishesPage() {
+    const box = $('#page-work');
+    box.classList.remove('is-board');
+    box.innerHTML = '<p class="muted">載入中…</p>';
+    await loadWishes();
+    drawWishesPage();
+  }
+  function drawWishesPage() {
+    const box = $('#page-work');
+    if (state.page !== 'wishes' || !fb.wishes) return;
+    const sort = fb.wSort || 'votes', st = fb.wSt || '';
+    const list = fb.wishes.filter(w => !st || w.status === st).sort((a, b) => (sort === 'votes' ? b.votes - a.votes : 0) || String(b.createdAt).localeCompare(String(a.createdAt)));
+    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>✨ 許願池</h2><span class="muted small">${fb.wishes.length} 個願望 · 所有登入的人看得到、可以 +1${fb.canEdit ? ' · 你可以改狀態（平台團隊）' : ''}</span></div>
+      <button type="button" class="btn primary" data-fb-open="wish">＋ 許個願</button></div>
+      <div class="work-filters"><select id="wish-sort" aria-label="排序"><option value="votes"${sort === 'votes' ? ' selected' : ''}>依 +1</option><option value="new"${sort === 'new' ? ' selected' : ''}>最新</option></select>
+      <select id="wish-st" aria-label="狀態"><option value="">全部狀態</option>${Object.keys(WISH_CLS).map(s => `<option${st === s ? ' selected' : ''}>${s}</option>`).join('')}</select></div>
+      <section class="wpanel wish-list">${list.map(w => wishRow(w, { full: true })).join('') || '<p class="muted">還沒有願望。按「＋ 許個願」許第一個。</p>'}</section>
+      <p class="muted small">問題回報不會出現在這裡，只有平台團隊看得到。</p>`;
+  }
+  function editWish(id) {
+    const w = fb.wishes.find(x => x.wishId === id);
+    if (!w) return;
+    const body = openModal(`改狀態 · ${w.title}`, `<form id="wish-form" class="stack">
+      <label>狀態<select name="status">${['收到', '評估中', '排入', '先不做'].map(s => `<option${(w.status === s || (s === '排入' && w.status === '已上線')) ? ' selected' : ''}>${s}</option>`).join('')}</select></label>
+      <label>排入的工作卡（排入時必填，例：C-290；卡完成會自動顯示「已上線」）<input name="cardId" value="${esc(w.cardId || '')}" placeholder="C-xxx"></label>
+      <label>原因（先不做時必填）<input name="statusNote" maxlength="200" value="${esc(w.statusNote || '')}"></label>
+      <p class="error small" id="wish-err" role="alert"></p></form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="wish-form">儲存</button>' });
+    body.querySelector('#wish-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      try {
+        const v = await api(`/api/wishes/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status: f.status, cardId: f.status === '排入' ? f.cardId.trim().toUpperCase() : null, statusNote: f.statusNote } });
+        fb.wishes = fb.wishes.map(x => (x.wishId === id ? v : x)); closeModal(); drawWishesPage(); toast('已改狀態');
+      } catch (err) { body.querySelector('#wish-err').textContent = err.message; }
+    });
+  }
+  // 平台工作頁的回報區（只有平台團隊；打開工作頁才讀）
+  const fbTeamView = () => projectView() === '平台' && (state.me?.projects || myProjects()).includes('平台') && state.page === 'work';
+  async function loadReports() {
+    fb.repAt = Date.now();
+    try { const d = await api('/api/reports'); fb.reports = d.items; if (fbTeamView()) { const el = $('#rep-strip'); if (el) el.outerHTML = reportsHtml(); } } catch {}
+  }
+  const SEV_CLS = { 嚴重: 'sev-hi', 一般: 'sev-mid', 小: 'sev-lo' };
+  function reportsHtml() {
+    if (!fbTeamView()) return '';
+    if (!fb.reports) return '<section id="rep-strip" class="rep-strip"><div class="rep-head"><b>🐞 回報</b><span class="muted small">載入中…</span></div></section>';
+    const open = fb.reports.filter(r => r.status === '未整理'), done = fb.reports.filter(r => r.status !== '未整理');
+    const ctx = r => [r.reporter.name, r.reporterProject?.name && r.context.page ? r.context.page : r.reporterProject?.name || r.context.page, r.context.device, r.context.version && `v${r.context.version}`, r.context.errorCode && `錯誤 ${r.context.errorCode}`, r.shots.length && `📎${r.shots.length}`].filter(Boolean).map(esc).join(' · ');
+    const row = r => `<div class="rep-row" data-rep="${esc(r.reportId)}"><div class="rep-main"><span class="sev ${SEV_CLS[r.severity] || 'sev-no'}">${esc(r.severity || '未標')}</span> <b>${esc(r.reportId)} ${esc(r.title)}</b>${r.status !== '未整理' ? ` <span class="wst s4">${esc(r.status === '已轉工作卡' || r.status === '已修好' ? `${r.status} ${r.cardId}` : r.status === '已合併' ? `合併到 ${r.mergedInto}` : r.status)}</span>` : ''}
+      <div class="muted small">${ctx(r)} · ${esc(fmtTime(r.createdAt))}</div>${r.detail ? `<div class="small rep-detail">${esc(r.detail)}</div>` : ''}</div>
+      <div class="rep-acts">${r.shots.length ? `<button type="button" class="link small" data-rep-shots="${esc(r.reportId)}">看截圖</button>` : ''}${r.status === '未整理' ? `<select data-rep-sev="${esc(r.reportId)}" aria-label="${esc(r.reportId)} 嚴重度">${['', '嚴重', '一般', '小'].map(s => `<option value="${s}"${r.severity === s ? ' selected' : ''}>${s || '標嚴重度'}</option>`).join('')}</select>
+        <button type="button" class="link small" data-rep-card="${esc(r.reportId)}">轉工作卡</button><button type="button" class="link small" data-rep-merge="${esc(r.reportId)}">合併到…</button><button type="button" class="link small" data-rep-skip="${esc(r.reportId)}">先不處理</button>` : `<button type="button" class="link small" data-rep-reopen="${esc(r.reportId)}">改回未整理</button>`}</div></div>`;
+    return `<section id="rep-strip" class="rep-strip"><div class="rep-head"><button type="button" class="link rep-toggle" data-rep-toggle aria-expanded="${fb.repOpen}"><b>🐞 回報 · 未整理 ${open.length}</b></button><span class="muted small">只有平台團隊看得到；回報的人不會收到進度通知</span></div>
+      ${fb.repOpen ? (open.map(row).join('') || '<p class="muted small rep-empty">沒有未整理的回報。</p>') + (done.length ? `<button type="button" class="link small rep-more" data-rep-done>${fb.repDone ? '收起已整理的' : `看已整理的（${done.length}）`}</button>${fb.repDone ? done.map(row).join('') : ''}` : '') : ''}</section>`;
+  }
+  const redrawReports = () => { const el = $('#rep-strip'); if (el) el.outerHTML = reportsHtml(); };
+  async function patchReport(id, body) {
+    const v = await api(`/api/reports/${encodeURIComponent(id)}`, { method: 'PATCH', body });
+    fb.reports = fb.reports.map(r => (r.reportId === id ? v : r)); redrawReports();
+    return v;
+  }
+  async function showShots(id) {
+    const r = fb.reports.find(x => x.reportId === id);
+    const body = openModal(`${id} 的截圖`, `<div class="rep-shots">${r.shots.map(s => `<a target="_blank" rel="noopener" data-shot="${esc(s.id)}"><img alt="截圖" data-shot-img="${esc(s.id)}"></a>`).join('')}</div><p class="muted small">截圖保存 30 天後自動刪除。</p>`, { size: 'form' });
+    for (const s of r.shots) {
+      const res = await fetch(`/api/reports/${encodeURIComponent(id)}/shots/${encodeURIComponent(s.id)}`, { headers: { Authorization: `Bearer ${state.token}` } }).catch(() => null);
+      if (!res?.ok) continue;
+      const u = URL.createObjectURL(await res.blob());
+      const im = body.querySelector(`[data-shot-img="${CSS.escape(s.id)}"]`); if (im) { im.src = u; im.closest('a').href = u; }
+    }
+  }
+  async function reportToCard(id) {
+    const r = fb.reports.find(x => x.reportId === id);
+    if (!await confirmDialog({ title: `${id} 轉成工作卡？`, confirmText: '建立工作卡', message: `在平台建一張「${esc(id)} ${esc(r.title)}」工作卡（待整理），回報會連到這張卡；卡完成時回報顯示「已修好」。` })) return;
+    try {
+      const c = r.context, reason = [`來自回報 ${id}（${r.reporter.name}${r.reporterProject ? '，' + r.reporterProject.name : ''}）`, r.detail, [c.page, c.device, c.version && 'v' + c.version, c.errorCode && '錯誤 ' + c.errorCode].filter(Boolean).join(' · ')].filter(Boolean).join('\n').slice(0, 500);
+      const card = await api('/api/cards', { method: 'POST', body: { requestId: newRequestId(), project: '平台', type: '工作', title: `${id} ${r.title}`.slice(0, 100), reason } });
+      await patchReport(id, { cardId: card.cardId });
+      await loadCards().catch(() => {});
+      toast(`已建 ${card.cardId}，${id} 連到這張卡`);
+    } catch (err) { toast(err.message); }
+  }
+  function mergeReport(id) {
+    const others = fb.reports.filter(x => x.reportId !== id && x.status !== '已合併');
+    if (!others.length) return toast('沒有別的回報可以合併');
+    const body = openModal(`${id} 合併到哪一則？`, `<div class="an-sheet">${others.map(o => `<button type="button" class="dm-row" data-merge-to="${esc(o.reportId)}"><span class="dm-row-main"><b>${esc(o.reportId)} ${esc(o.title)}</b><span class="dm-prev">${esc(o.status)}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: '重複的回報合併後，只要處理被合併到的那一則' });
+    body.addEventListener('click', async e => { const b = e.target.closest('[data-merge-to]'); if (!b) return; closeModal(); try { await patchReport(id, { mergedInto: b.dataset.mergeTo }); toast(`${id} 已合併到 ${b.dataset.mergeTo}`); } catch (err) { toast(err.message); } });
+  }
+  document.addEventListener('click', async e => {
+    const t = e.target;
+    if (t.closest?.('[data-fb-toggle]')) { if (t.closest('#sheet')) closeSheet(false); return fbPanel(!fbIsOpen()); }
+    if (t.closest?.('[data-fb-close]')) { fbPanel(false); return document.querySelector('[data-fb-toggle]:not([hidden])')?.focus(); }
+    const op = t.closest?.('[data-fb-open]');
+    if (op) { fbKeep(); fb.tab = op.dataset.fbOpen; return fbPanel(true); }
+    const tab = t.closest?.('[data-fb-tab]');
+    if (tab) { fbKeep(); fb.tab = tab.dataset.fbTab; drawFb(); if (fb.tab === 'wish' && !fb.wishes) { await loadWishes(); drawFbSimilar(); } return $(`[data-fb-tab="${fb.tab}"]`)?.focus(); }
+    if (t.closest?.('#fb-drop')) return $('#fb-file')?.click();
+    const un = t.closest?.('[data-fb-unshot]');
+    if (un) { fbKeep(); const [s] = fb.shots.splice(Number(un.dataset.fbUnshot), 1); if (s) URL.revokeObjectURL(s.url); return drawFb(); }
+    if (t.closest?.('[data-fb-ctx]')) { fbKeep(); fb.noCtx = !fb.noCtx; return drawFb(); }
+    const wv = t.closest?.('[data-wish-vote]');
+    if (wv) return voteWish(wv.dataset.wishVote);
+    const we = t.closest?.('[data-wish-edit]');
+    if (we) return editWish(we.dataset.wishEdit);
+    if (t.closest?.('[data-wishes]')) { if (t.closest('#sheet')) closeSheet(false); fbKeep(); fbPanel(false); return goTop('wishes'); }
+    if (t.closest?.('[data-rep-toggle]')) { fb.repOpen = !fb.repOpen; return redrawReports(); }
+    if (t.closest?.('[data-rep-done]')) { fb.repDone = !fb.repDone; return redrawReports(); }
+    const rs = t.closest?.('[data-rep-shots]'); if (rs) return showShots(rs.dataset.repShots);
+    const rc = t.closest?.('[data-rep-card]'); if (rc) return reportToCard(rc.dataset.repCard);
+    const rm = t.closest?.('[data-rep-merge]'); if (rm) return mergeReport(rm.dataset.repMerge);
+    const rk = t.closest?.('[data-rep-skip], [data-rep-reopen]');
+    if (rk) { const id = rk.dataset.repSkip || rk.dataset.repReopen; try { await patchReport(id, { status: rk.dataset.repSkip ? '先不處理' : '未整理' }); } catch (err) { toast(err.message); } }
+  });
+  document.addEventListener('change', async e => {
+    const sv = e.target.closest?.('[data-rep-sev]');
+    if (sv) { try { await patchReport(sv.dataset.repSev, { severity: sv.value }); } catch (err) { toast(err.message); } return; }
+    if (e.target.id === 'fb-file') { await addShots([...e.target.files]); e.target.value = ''; return; }
+    if (e.target.id === 'wish-sort') { fb.wSort = e.target.value; return drawWishesPage(); }
+    if (e.target.id === 'wish-st') { fb.wSt = e.target.value; return drawWishesPage(); }
+    if (e.target.id === 'fb-declare') fbKeep();
+  });
+  document.addEventListener('input', e => { if (e.target.closest?.('#fb-box')) { fbKeep(); if (e.target.id === 'fb-title' && fb.tab === 'wish') drawFbSimilar(); } });
+  document.addEventListener('submit', e => {
+    if (e.target.id === 'fb-report') { e.preventDefault(); return sendReport(); }
+    if (e.target.id === 'fb-wish') { e.preventDefault(); return sendWish(); }
+  });
+  document.addEventListener('paste', e => {
+    if (!fbIsOpen() || fb.tab !== 'report') return;
+    const files = [...(e.clipboardData?.items || [])].filter(i => i.kind === 'file' && /^image\//.test(i.type)).map(i => i.getAsFile()).filter(Boolean);
+    if (files.length) { e.preventDefault(); addShots(files); }
+  });
+  document.addEventListener('dragover', e => { if (e.target.closest?.('#fb-drop')) e.preventDefault(); });
+  document.addEventListener('drop', e => { if (e.target.closest?.('#fb-drop')) { e.preventDefault(); addShots([...(e.dataTransfer?.files || [])]); } });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !fbIsOpen() || !e.target.closest?.('#fb-panel') || document.querySelector('#modal-root .modal, .confirm-root')) return;
+    e.preventDefault(); fbPanel(false); document.querySelector('[data-fb-toggle]:not([hidden])')?.focus();
+  });
+
   async function renderMyAiPage() {
     const box = $('#page-work');
     box.classList.remove('is-board');

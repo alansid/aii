@@ -1581,6 +1581,222 @@ ${trial
     return { __status: 201, ...dmView(await db.get('SELECT * FROM dms WHERE id = ?', id), people) };
   });
 
+  // ---------- C-281 回報問題＋許願池 ----------
+  // 問題回報 R-xx 只給平台團隊（平台專案成員）；願望所有登入者可看可 +1。不加輪詢：打開時才讀。
+  const FB_PROJECT = '平台';
+  const FB_DAILY_MAX = 20;                 // 每人每天回報＋許願最多 20 則
+  const SHOT_MAX = 1024 * 1024, SHOT_DAYS = 30, SHOTS_PER_REPORT = 3;
+  const REPORT_STATUS = ['未整理', '已轉工作卡', '已合併', '先不處理'];
+  const SEVERITIES = ['', '嚴重', '一般', '小'];
+  const WISH_STATUS = ['收到', '評估中', '排入', '已上線', '先不做'];
+  const rNo = seq => `R-${seq}`;
+  const rSeq = v => { const m = /^R-(\d+)$/i.exec(String(v)); return m ? Number(m[1]) : Number(v) || 0; };
+  const cardSeq = id => { const m = /^C-(\d+)$/.exec(String(id || '')); return m ? Number(m[1]) - 100 : null; };
+  const fbTeam = me => projectsOf(me).includes(FB_PROJECT);
+  const requireFbTeam = me => { if (!fbTeam(me)) throw new ApiError(403, 'FORBIDDEN', '問題回報只有平台團隊看得到。'); };
+  async function fbQuota(me) {
+    const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+    const n = (await db.get('SELECT (SELECT COUNT(*) FROM reports WHERE reporter_id = ? AND created_at > ?) + (SELECT COUNT(*) FROM wishes WHERE author_id = ? AND created_at > ?) AS n', me.id, since, me.id, since)).n;
+    if (n >= FB_DAILY_MAX) throw new ApiError(429, 'FEEDBACK_LIMIT', `每人每天最多 ${FB_DAILY_MAX} 則回報＋許願，明天再來。`);
+  }
+  const shortText = (v, max, label, required = false) => {
+    const s = String(v ?? '').trim();
+    if (required && !s) throw invalid(`${label}為必填`);
+    if (s.length > max) throw invalid(`${label}上限 ${max} 字`);
+    return s;
+  };
+  // 工作卡狀態（轉成工作卡的回報、排入的願望跟著卡走）
+  async function cardStates(ids) {
+    const seqs = [...new Set(ids.map(cardSeq).filter(x => x !== null))];
+    if (!seqs.length) return new Map();
+    const rows = await db.all('SELECT seq, status FROM cards WHERE seq IN (SELECT value FROM json_each(?))', JSON.stringify(seqs));
+    return new Map(rows.map(r => [`C-${r.seq + 100}`, r.status]));
+  }
+  const cardDone = st => st === '已完成' || st === '已封存';
+  // 叫醒平台 PO（AI）：在平台專案發一則提及 PO 的訊息（作者＝回報的人；他不在平台也看不到這則）
+  async function notifyPo(ctx, author, text, requestId) {
+    const people = await peopleMap(ctx);
+    let po = [...people.values()].filter(p => p.status === 'active' && p.kind === 'ai' && p.role_key === 'PO' && projectsOf(p).includes(FB_PROJECT) && p.id !== author.id);
+    if (!po.length) { const admin = adminOf(people); po = admin && admin.id !== author.id ? [admin] : []; }
+    if (!po.length) return null;
+    const id = randId('msg'), at = nowIso(), ask = po.length === 1 ? JSON.stringify([po[0].id]) : null;
+    const stmts = [['INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project, reply_from) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [id, author.id, text.slice(0, MAX_TEXT), null, requestId, null, null, null, at, FB_PROJECT, ask]]];
+    for (const p of po) {
+      stmts.push(['INSERT INTO message_recipients (message_id, participant_id) VALUES (?,?)', [id, p.id]]);
+      stmts.push(['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)', [randId('notif'), p.id, id, '["mention"]', at]]);
+    }
+    await db.batch(stmts);
+    ringDoorbell(po.filter(p => p.kind === 'ai').map(p => p.id), at);
+    return id;
+  }
+  // 回報裡可帶的自動資料（送出前網頁列出，可以選不帶）
+  function readContext(v) {
+    const c = v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    const out = {};
+    for (const [k, max] of [['page', 80], ['version', 20], ['device', 80], ['errorCode', 60], ['at', 40]]) if (c[k] !== undefined && c[k] !== null && c[k] !== '') out[k] = String(c[k]).slice(0, max);
+    return out;
+  }
+  async function reportViews(ctx, rows) {
+    const people = await peopleMap(ctx);
+    const cards = await cardStates(rows.map(r => r.card_id));
+    const shots = rows.length ? await db.all('SELECT id, report_seq, mime, size, created_at FROM report_shots WHERE data IS NOT NULL AND report_seq IN (SELECT value FROM json_each(?)) ORDER BY created_at', JSON.stringify(rows.map(r => r.seq))) : [];
+    return rows.map(r => {
+      const cs = r.card_id ? cards.get(r.card_id) : null;
+      return { reportId: rNo(r.seq), seq: r.seq, title: r.title, detail: r.detail, context: JSON.parse(r.context || '{}'),
+        reporter: { participantId: r.reporter_id, name: people.get(r.reporter_id)?.name || '?' }, reporterProject: r.reporter_project ? { id: r.reporter_project, name: nameOf(r.reporter_project) } : null,
+        status: r.status === '已轉工作卡' && cardDone(cs) ? '已修好' : r.status, severity: r.severity, cardId: r.card_id || null, cardStatus: cs || null,
+        mergedInto: r.merged_into ? rNo(r.merged_into) : null, note: r.note,
+        shots: shots.filter(s => s.report_seq === r.seq).map(s => ({ id: s.id, mime: s.mime, size: s.size, expiresAt: iso(s.created_at + SHOT_DAYS * 86400_000) })),
+        createdAt: r.created_at, updatedAt: r.updated_at };
+    });
+  }
+  // 送出回報：任何專案的人都能回報（人類）；進平台、叫醒 PO
+  route('POST', '/api/reports', async ({ ctx, me, req }) => {
+    requireHuman(me);
+    const body = await readJson(req);
+    const title = shortText(body.title, 100, '標題', true), detail = shortText(body.detail, 2000, '說明');
+    await fbQuota(me);
+    const pj = PROJECTS.includes(body.project) && projectsOf(me).includes(body.project) ? body.project : (projectsOf(me).find(x => PROJECTS.includes(x)) || null);
+    const ctxJson = JSON.stringify(readContext(body.context)), at = nowIso();
+    const seq = Number((await db.get('INSERT INTO reports (reporter_id, reporter_project, title, detail, context, created_at, updated_at) VALUES (?,?,?,?,?,?,?) RETURNING seq', me.id, pj, title, detail, ctxJson, at, at)).seq);
+    const where = [pj ? nameOf(pj) : '', readContext(body.context).page || ''].filter(Boolean).join(' › ');
+    await notifyPo(ctx, me, `[回報] ${rNo(seq)} ${title}（${me.name}${where ? ' · ' + where : ''}）\n請到平台「工作」的回報區整理：標嚴重度、轉工作卡、合併或先不處理。GET /api/reports/${rNo(seq)}`, 'report_' + seq).catch(() => {});
+    return { __status: 201, reportId: rNo(seq), seq };
+  });
+  // 截圖：回報的人送出後 30 分鐘內上傳，每張 1 MB 內，最多 3 張；行內／投信要帶聲明
+  route('POST', '/api/reports/:id/shots', async ({ me, req, params, url }) => {
+    const r = await db.get('SELECT * FROM reports WHERE seq = ?', rSeq(params.id));
+    if (!r || r.reporter_id !== me.id) throw new ApiError(404, 'NOT_FOUND', '找不到這則回報');
+    if (Date.now() - Date.parse(r.created_at) > 30 * 60_000) throw new ApiError(409, 'TOO_LATE', '截圖要在送出回報後 30 分鐘內上傳。');
+    if (['行內', '投信'].includes(me.env) && url.searchParams.get('declared') !== '1') throw invalid('請先勾選「我確認截圖不含內部資料、程式碼、客戶個資」。');
+    const n = (await db.get('SELECT COUNT(*) AS n FROM report_shots WHERE report_seq = ?', r.seq)).n;
+    if (n >= SHOTS_PER_REPORT) throw invalid(`每則回報最多 ${SHOTS_PER_REPORT} 張截圖`);
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (!bytes.length) throw invalid('沒有收到圖片');
+    if (bytes.length > SHOT_MAX) throw invalid('截圖超過 1 MB，請縮小後再傳');
+    const mime = avatarMime(bytes);
+    if (!mime) throw invalid('截圖只接受 png、jpg、webp');
+    const id = randId('shot');
+    await db.run('INSERT INTO report_shots (id, report_seq, mime, data, size, created_at) VALUES (?,?,?,?,?,?)', id, r.seq, mime, bytes, bytes.length, Date.now());
+    return { __status: 201, id, size: bytes.length };
+  });
+  route('GET', '/api/reports', async ({ ctx, me, url }) => {
+    requireFbTeam(me);
+    const st = url.searchParams.get('status');
+    const rows = await db.all(`SELECT * FROM reports ${st ? 'WHERE status = ?' : ''} ORDER BY seq DESC LIMIT 200`, ...(st ? [st] : []));
+    const items = await reportViews(ctx, rows);
+    return { items, open: items.filter(x => x.status === '未整理').length };
+  });
+  route('GET', '/api/reports/:id', async ({ ctx, me, params }) => {
+    requireFbTeam(me);
+    const r = await db.get('SELECT * FROM reports WHERE seq = ?', rSeq(params.id));
+    if (!r) throw new ApiError(404, 'NOT_FOUND', '找不到這則回報');
+    return (await reportViews(ctx, [r]))[0];
+  });
+  route('GET', '/api/reports/:id/shots/:shot', async ({ me, params }) => {
+    requireFbTeam(me);
+    const s = await db.get('SELECT mime, data FROM report_shots WHERE id = ? AND report_seq = ?', params.shot, rSeq(params.id));
+    if (!s || !s.data) throw new ApiError(404, 'NOT_FOUND', '截圖不存在或已過 30 天刪除');
+    return new Response(s.data instanceof Uint8Array ? s.data : new Uint8Array(s.data), { headers: { 'Content-Type': s.mime, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' } });
+  });
+  // 平台團隊整理：嚴重度、狀態、轉成的工作卡、合併到哪則、備註
+  route('PATCH', '/api/reports/:id', async ({ ctx, me, req, params }) => {
+    requireFbTeam(me);
+    const r = await db.get('SELECT * FROM reports WHERE seq = ?', rSeq(params.id));
+    if (!r) throw new ApiError(404, 'NOT_FOUND', '找不到這則回報');
+    const body = await readJson(req), next = { status: r.status, severity: r.severity, card_id: r.card_id, merged_into: r.merged_into, note: r.note };
+    if (body.severity !== undefined) { if (!SEVERITIES.includes(body.severity)) throw invalid(`severity 需為：${SEVERITIES.filter(Boolean).join('、')}（或空字串）`); next.severity = body.severity; }
+    if (body.note !== undefined) next.note = shortText(body.note, 500, '備註');
+    if (body.cardId !== undefined && body.cardId !== null) {
+      const cs = (await cardStates([body.cardId])).get(String(body.cardId));
+      if (!cs) throw invalid(`找不到工作卡 ${body.cardId}`);
+      Object.assign(next, { card_id: String(body.cardId), status: '已轉工作卡', merged_into: null });
+    } else if (body.mergedInto !== undefined && body.mergedInto !== null) {
+      const t = await db.get('SELECT seq FROM reports WHERE seq = ?', rSeq(body.mergedInto));
+      if (!t || t.seq === r.seq) throw invalid('mergedInto 需為另一則回報（R-xx）');
+      Object.assign(next, { merged_into: t.seq, status: '已合併', card_id: null });
+    } else if (body.status !== undefined) {
+      if (!REPORT_STATUS.includes(body.status) || ['已轉工作卡', '已合併'].includes(body.status)) throw invalid('status 只能直接改成：未整理、先不處理（轉工作卡帶 cardId、合併帶 mergedInto）');
+      Object.assign(next, { status: body.status, card_id: null, merged_into: null });
+    }
+    await db.run('UPDATE reports SET status = ?, severity = ?, card_id = ?, merged_into = ?, note = ?, updated_at = ? WHERE seq = ?', next.status, next.severity, next.card_id, next.merged_into, next.note, nowIso(), r.seq);
+    return (await reportViews(ctx, [await db.get('SELECT * FROM reports WHERE seq = ?', r.seq)]))[0];
+  });
+
+  // 許願池：所有登入的人看得到願望、+1；作者所在專案只給同專案的人看
+  async function wishViews(me, rows) {
+    const cards = await cardStates(rows.map(w => w.card_id));
+    const mine = new Set(rows.length ? (await db.all('SELECT wish_seq FROM wish_votes WHERE participant_id = ? AND wish_seq IN (SELECT value FROM json_each(?))', me.id, JSON.stringify(rows.map(w => w.seq)))).map(v => v.wish_seq) : []);
+    return rows.map(w => {
+      const cs = w.card_id ? cards.get(w.card_id) : null;
+      const status = w.card_id && w.status !== '先不做' ? (cardDone(cs) ? '已上線' : '排入') : w.status;
+      return { wishId: `W-${w.seq}`, seq: w.seq, title: w.title, why: w.why, status, statusNote: w.status_note, cardId: w.card_id || null, votes: w.votes, voted: mine.has(w.seq), mine: w.author_id === me.id,
+        project: w.author_project && projectsOf(me).includes(w.author_project) ? { id: w.author_project, name: nameOf(w.author_project) } : null, createdAt: w.created_at };
+    });
+  }
+  const wSeq = v => { const m = /^W-(\d+)$/i.exec(String(v)); return m ? Number(m[1]) : Number(v) || 0; };
+  route('GET', '/api/wishes', async ({ me }) => {
+    const rows = await db.all('SELECT * FROM wishes ORDER BY votes DESC, seq DESC LIMIT 300');
+    return { items: await wishViews(me, rows), canEdit: fbTeam(me) };
+  });
+  route('POST', '/api/wishes', async ({ me, req }) => {
+    requireHuman(me);
+    const body = await readJson(req);
+    const title = shortText(body.title, 100, '願望', true), why = shortText(body.why, 1000, '為什麼');
+    await fbQuota(me);
+    const pj = PROJECTS.includes(body.project) && projectsOf(me).includes(body.project) ? body.project : (projectsOf(me).find(x => PROJECTS.includes(x)) || null);
+    const at = nowIso();
+    const seq = Number((await db.get('INSERT INTO wishes (author_id, author_project, title, why, votes, created_at, updated_at) VALUES (?,?,?,?,1,?,?) RETURNING seq', me.id, pj, title, why, at, at)).seq);
+    await db.run('INSERT OR IGNORE INTO wish_votes (wish_seq, participant_id, created_at) VALUES (?,?,?)', seq, me.id, at);
+    return { __status: 201, ...(await wishViews(me, [await db.get('SELECT * FROM wishes WHERE seq = ?', seq)]))[0] };
+  });
+  async function vote(me, id, on) {
+    const w = await db.get('SELECT seq FROM wishes WHERE seq = ?', wSeq(id));
+    if (!w) throw new ApiError(404, 'NOT_FOUND', '找不到這個願望');
+    if (on) await db.run('INSERT OR IGNORE INTO wish_votes (wish_seq, participant_id, created_at) VALUES (?,?,?)', w.seq, me.id, nowIso());
+    else await db.run('DELETE FROM wish_votes WHERE wish_seq = ? AND participant_id = ?', w.seq, me.id);
+    await db.run('UPDATE wishes SET votes = (SELECT COUNT(*) FROM wish_votes WHERE wish_seq = ?) WHERE seq = ?', w.seq, w.seq);
+    return (await wishViews(me, [await db.get('SELECT * FROM wishes WHERE seq = ?', w.seq)]))[0];
+  }
+  route('POST', '/api/wishes/:id/vote', ({ me, params }) => { requireHuman(me); return vote(me, params.id, true); });
+  route('DELETE', '/api/wishes/:id/vote', ({ me, params }) => { requireHuman(me); return vote(me, params.id, false); });
+  // 平台團隊改狀態：收到／評估中／排入（帶 cardId）／先不做（帶原因）；已上線跟著工作卡完成
+  route('PATCH', '/api/wishes/:id', async ({ me, req, params }) => {
+    requireFbTeam(me);
+    const w = await db.get('SELECT * FROM wishes WHERE seq = ?', wSeq(params.id));
+    if (!w) throw new ApiError(404, 'NOT_FOUND', '找不到這個願望');
+    const body = await readJson(req);
+    let status = body.status ?? w.status, cardId = body.cardId !== undefined ? (body.cardId || null) : w.card_id;
+    const note = body.statusNote !== undefined ? shortText(body.statusNote, 200, '原因') : w.status_note;
+    if (!WISH_STATUS.includes(status)) throw invalid(`status 需為：${WISH_STATUS.join('、')}`);
+    if (status === '排入' || status === '已上線') {
+      if (!cardId) throw invalid('排入要帶 cardId（工作卡 C-xxx）');
+      if (!(await cardStates([cardId])).get(String(cardId))) throw invalid(`找不到工作卡 ${cardId}`);
+      status = '排入';
+    } else if (body.status !== undefined) cardId = null;
+    if (status === '先不做' && !note) throw invalid('先不做請寫原因（statusNote）');
+    await db.run('UPDATE wishes SET status = ?, status_note = ?, card_id = ?, updated_at = ? WHERE seq = ?', status, note, cardId, nowIso(), w.seq);
+    return (await wishViews(me, [await db.get('SELECT * FROM wishes WHERE seq = ?', w.seq)]))[0];
+  });
+  // 每天彙整一次新願望給 PO（不叫醒個別願望；排程每 10 分鐘那支順便看是不是該發了）
+  async function wishDigest(now = Date.now()) {
+    const tw = new Date(now + 8 * 3600_000), day = tw.toISOString().slice(0, 10);
+    if (tw.getUTCHours() < 9) return 0;
+    const last = (await db.get("SELECT value FROM app_settings WHERE key = 'wish_digest'").catch(() => null))?.value || '';
+    if (last.startsWith(day)) return 0;
+    const since = last.split('|')[1] || new Date(now - 24 * 3600_000).toISOString();
+    const rows = await db.all('SELECT * FROM wishes WHERE created_at > ? ORDER BY votes DESC, seq', since);
+    await db.run("INSERT INTO app_settings (key, value) VALUES ('wish_digest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", `${day}|${new Date(now).toISOString()}`);
+    if (!rows.length) return 0;
+    const people = await peopleMap({});
+    const admin = adminOf(people);
+    if (!admin) return 0;
+    const lines = rows.slice(0, 15).map(w => `- W-${w.seq} ${w.title}（+${w.votes}）`).join('\n');
+    await notifyPo({}, admin, `[通知] 【許願彙整，系統每天自動發】昨天到現在 ${rows.length} 個新願望：\n${lines}${rows.length > 15 ? '\n…' : ''}\n整理：PATCH /api/wishes/:id（評估中／排入帶 cardId／先不做帶原因）。`, 'wishdigest_' + day);
+    return rows.length;
+  }
+  handle.wishDigest = wishDigest;
+
   // ---------- C-280 跟自己的 AI 討論、生成專案專屬新角色 ----------
   // 本專案角色存在 app_settings「roles:<專案>」；角色提案存「rprop:<編號>」（24 小時作廢，跟頭像提案一樣只在私訊）
   const RP_TTL = 24 * 3600_000;
@@ -2447,7 +2663,9 @@ ${trial
     return html.split(DEFAULT_GROUP_NAME).join(name).replace('</title>', `</title>\n  ${meta}`);
   };
   handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db),
-    proposalsExpired: (await db.run("UPDATE avatar_proposals SET status = 'expired', data = NULL WHERE status = 'pending' AND created_at < ?", Date.now() - 24 * 3600_000).catch(() => ({ changes: 0 }))).changes }); // C-272
+    proposalsExpired: (await db.run("UPDATE avatar_proposals SET status = 'expired', data = NULL WHERE status = 'pending' AND created_at < ?", Date.now() - 24 * 3600_000).catch(() => ({ changes: 0 }))).changes, // C-272
+    shotsCleaned: (await db.run('UPDATE report_shots SET data = NULL WHERE data IS NOT NULL AND created_at < ?', Date.now() - SHOT_DAYS * 86400_000).catch(() => ({ changes: 0 }))).changes, // C-281 截圖保存 30 天
+    wishDigest: await wishDigest().catch(() => 0) });
   return handle;
 
   // C-220：只屬部分專案的人，回應裡別人的 projects、projectRoles 只留看的人自己也在的專案（不露出別專案的名稱或代號）。

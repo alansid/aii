@@ -2362,3 +2362,56 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .pr-acts .link { min-height: 40px; }
 .pr-empty { padding: 12px 14px; margin: 0; }
 @media (max-width: 640px) { .pr-row { flex-wrap: wrap; } .pr-acts { width: 100%; padding-left: 52px; } .rp-f { grid-template-columns: 1fr; gap: 2px; } .rp-f > span { padding-top: 0; } }
+
+/* C-281 回報／許願面板、許願池、平台回報區 */
+.fb-btn[hidden], .fb-top-btn[hidden], .side-wish[hidden] { display: none; }
+.fb-btn[aria-expanded="true"] { outline: 2px solid var(--primary); }
+.fb-body { overflow-y: auto; }
+.fb-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
+.fb-tabs button { flex: 1; min-height: 40px; border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; background: transparent; color: var(--muted); font: inherit; font-size: .9rem; cursor: pointer; }
+.fb-tabs button[aria-selected="true"] { background: var(--surface-2); border-color: var(--border); color: var(--text); font-weight: 700; }
+.fb-form { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 16px; background: var(--surface-2); border-top: 1px solid var(--border); flex: 1; }
+.fb-form label { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; font-weight: 600; }
+.fb-form input, .fb-form textarea { font: inherit; font-weight: 400; }
+.fb-lbl { font-size: .85rem; font-weight: 600; }
+.fb-drop { min-height: 48px; padding: 10px; border: 1.5px dashed var(--border); border-radius: 10px; background: var(--surface); color: var(--muted); font: inherit; font-size: .8rem; cursor: pointer; }
+.fb-shots { display: flex; gap: 8px; flex-wrap: wrap; }
+.fb-shot { position: relative; }
+.fb-shot img { width: 88px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.fb-shot .icon-btn { position: absolute; top: -8px; right: -8px; width: 28px; height: 28px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); }
+.fb-warn { padding: 8px 10px; border-radius: 10px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: .8rem; display: grid; gap: 4px; }
+.fb-warn .chk { flex-direction: row; font-weight: 400; }
+.fb-auto { padding: 8px 10px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); font-size: .78rem; color: var(--muted); line-height: 1.7; }
+.fb-send { min-height: 44px; }
+.wish { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.wish + .wish { margin-top: 6px; }
+.wish.off { opacity: .75; }
+.wish-plus { flex: none; width: 52px; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--primary); font: inherit; font-size: .75rem; cursor: pointer; }
+.wish-plus b { font-size: .95rem; }
+.wish-plus.on { background: #eff6ff; border-color: #bfdbfe; }
+.wish-main { flex: 1; min-width: 0; }
+.wish-why { margin-top: 2px; color: var(--text); white-space: pre-wrap; }
+.wst { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 10px; font-size: .7rem; font-weight: 600; vertical-align: 1px; }
+.wst.s1 { background: #e0f2fe; color: #075985; } .wst.s2 { background: #fef3c7; color: #92400e; } .wst.s3 { background: #dcfce7; color: #166534; } .wst.s4 { background: var(--surface-2); color: var(--muted); } .wst.s5 { background: #ede9fe; color: #5b21b6; }
+.wish-list { display: flex; flex-direction: column; gap: 0; }
+.side-wish { margin-top: auto; min-height: 40px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--sb-text, var(--text)); font: inherit; font-size: .9rem; text-align: left; cursor: pointer; }
+.side-wish:hover { background: var(--surface-2); }
+.rep-strip { border: 1px solid #fecaca; border-radius: 12px; background: var(--surface); overflow: hidden; }
+.rep-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 14px; background: #fef2f2; }
+.rep-toggle { min-height: 36px; color: #991b1b; }
+.rep-row { display: flex; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border); align-items: flex-start; }
+.rep-main { flex: 1; min-width: 0; }
+.rep-detail { margin-top: 2px; white-space: pre-wrap; }
+.rep-acts { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rep-acts select { min-height: 36px; }
+.rep-empty, .rep-more { margin: 8px 14px; display: inline-block; }
+.sev { display: inline-flex; height: 20px; padding: 0 7px; border-radius: 10px; font-size: .7rem; font-weight: 700; vertical-align: 1px; }
+.sev-hi { background: #fee2e2; color: #b91c1c; } .sev-mid { background: #fef3c7; color: #92400e; } .sev-lo { background: #e0f2fe; color: #075985; } .sev-no { background: var(--surface-2); color: var(--muted); }
+.rep-shots { display: grid; gap: 10px; }
+.rep-shots img { max-width: 100%; border: 1px solid var(--border); border-radius: 8px; }
+:root[data-theme="dark"] .rep-head { background: #3b1414; } :root[data-theme="dark"] .fb-warn { background: #3b2410; border-color: #7c4a1a; color: #fed7aa; } :root[data-theme="dark"] .wish-plus.on { background: #172554; border-color: #1e3a8a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rep-head { background: #3b1414; } :root:not([data-theme="light"]) .fb-warn { background: #3b2410; border-color: #7c4a1a; color: #fed7aa; } :root:not([data-theme="light"]) .wish-plus.on { background: #172554; border-color: #1e3a8a; } }
+@media (max-width: 640px) { .rep-row { flex-direction: column; } .fb-btn .dm-btn-t { display: none; } }
+/* C-281：手機頂欄多了 🐞，收緊一點免得擠出去 */
+.fb-top-btn { padding: 0 9px; }
+@media (max-width: 420px) { .mobile-top { gap: 5px; padding-left: 8px; padding-right: 6px; } .mobile-top .top-btn { padding-left: 10px; padding-right: 10px; } .mobile-top .fb-top-btn { padding: 0 8px; } }
