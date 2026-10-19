@@ -53,6 +53,7 @@
     "cf:db:migrate-feedback": "node scripts/migrate.js migrations/0021_feedback.sql",
     "test:feedback": "node scripts/feedback-test.js",
     "releases": "node scripts/releases.mjs",
-    "deploy": "node scripts/releases.mjs --deployed && npx wrangler@4 deploy"
+    "deploy": "node scripts/releases.mjs --deployed && npx wrangler@4 deploy",
+    "test:releases": "node scripts/releases-test.js"
   }
 }
