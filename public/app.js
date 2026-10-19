@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.73.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.74.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -369,6 +369,9 @@
   const isAdmin = () => !!state.projMeta.adminId && state.projMeta.adminId === state.me?.participantId;
   // C-183：專案 leader（每個專案可多位、只能人類）
   const leadersOf = pj => state.projMeta.leaders?.[pj] || [];
+  // C-294 唯讀：人類看名單；AI 跟著主人。所在是跨專案頻道時，只要在任何專案唯讀就算
+  const roOf = (id, pj) => { const p = state.participants?.get(id); const hid = p?.memberType === 'ai' ? p.ownerParticipantId : id; return !!pj && (state.projMeta.readOnly?.[pj] || []).includes(hid); };
+  const meRO = (pj = projectView()) => (PROJECTS.includes(pj) ? roOf(meId(), pj) : pj === 'cross' && PROJECTS.some(x => roOf(meId(), x)));
   const myLeadProjects = () => (state.me ? PROJECTS.filter(pj => leadersOf(pj).includes(state.me.participantId)) : []);
   const leaderTag = (id, pj) => (leadersOf(pj).includes(id) ? '<span class="lead-tag" title="專案 leader">★ leader</span>' : '');
   state.myAiCount = null;
@@ -985,7 +988,7 @@
   async function loadProjectList() {
     const d = await api('/api/projects');
     state.projectList = d.items;
-    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {} };
+    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {} }; // C-294
     document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
     if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
     PROJECTS.length = 0;
@@ -1080,6 +1083,9 @@
     todo.hidden = v !== 'hub' || top;
     nb.hidden = !n; nb.textContent = n > 99 ? '99+' : n;
     drawSendTo();
+    const ro = !!state.me && meRO(); // C-294
+    document.body.classList.toggle('ro-here', ro);
+    const rn = $('#ro-note'); if (rn) rn.hidden = !ro;
   }
   // 發訊息的專案（C-169）：固定是目前所在的專案，不能選；跨專案頻道發的是全部專案；回覆時跟著被回覆的訊息
   function sendTarget() {
@@ -1584,7 +1590,7 @@
     const mine = myProjects();
     const near = p => (p.projects?.length ? p.projects : PROJECTS).some(x => mine.includes(x));
     const people = [...state.participants.values()]
-      .filter(p => p.participantId !== meId() && p.status !== 'disabled' && inScope(p, scope) && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q)));
+      .filter(p => p.participantId !== meId() && p.status !== 'disabled' && inScope(p, scope) && !(scope && roOf(p.participantId, scope)) && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q))); // C-294 唯讀的人不列
     const all = scope ? { ...ALL, label: `${ALL.name}（${projName(scope)}）`, role: `通知${projName(scope)}的所有成員` } : ALL;
     return [...(!q || ALL.name.includes(q) || all.role.includes(q) ? [all] : []), ...people.filter(near), ...people.filter(p => !near(p))];
   }
@@ -3987,7 +3993,7 @@
   const aiKind = id => { const mb = state.team?.members.find(m => m.participantId === id); return mb ? aiNowOf(mb).kind : 'off'; };
   const dmUnread = id => (work.notes || []).filter(n => n.dm && n.sender.participantId === id).length;
   // 這個專案可以看到私訊入口（有自己名下、在這專案的 AI）；沒開時入口淡色，點了說明怎麼開（C-270 退回）
-  const dmEntry = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && myAisHere().length > 0;
+  const dmEntry = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && myAisHere().length > 0 && !meRO(); // C-294 唯讀沒有私訊
   async function dmEnable() {
     const pv = projectView(), can = isAdmin() || myLeadProjects().includes(pv);
     if (!can) {
@@ -5816,6 +5822,25 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     return p.participantId === meId() ? pmLock('自己不能移出') : '<span class="muted">—</span>';
   }
   const pmRoleCell = (p, pj) => (p.memberType === 'human' ? permRoleHtml(p, pj) : `<span class="pm-ai-role">${esc(p.role || '')}</span>`);
+  // C-294：人類列的「一般／👁 唯讀」；AI 跟著主人（只顯示）
+  function pmRoCell(p, pj, isNew) {
+    const ro = roOf(p.participantId, pj);
+    if (p.memberType !== 'human') return ro ? '<span class="pill-tag ro-tag" title="主人在這個專案是唯讀，AI 跟著唯讀">👁 唯讀</span>' : '';
+    const can = permCanEdit(pj) && !isNew && p.participantId !== state.projMeta.adminId && !leadersOf(pj).includes(p.participantId);
+    if (!can) return ro ? '<span class="pill-tag ro-tag">👁 唯讀</span>' : '';
+    return `<button type="button" class="pm-ro-btn${ro ? ' on' : ''}" data-pm-ro="${esc(p.participantId)}" data-pj="${esc(pj)}" aria-pressed="${ro}" title="${ro ? '改回一般成員' : '設成唯讀：只能看，不能發訊息或操作'}">${ro ? '👁 唯讀' : '設唯讀'}</button>`;
+  }
+  async function permSetRo(id, pj, on, { confirm = true } = {}) {
+    const p = state.participants.get(id);
+    const cur = PROJECTS.filter(x => roOf(id, x)), next = on ? [...new Set([...cur, pj])] : cur.filter(x => x !== pj);
+    const changes = [{ id, readOnlyIn: next }];
+    const dry = await api('/api/members/matrix', { method: 'PUT', body: { changes, dryRun: true } });
+    const back = (dry.roChanges || []).flatMap(c => c.returnedCards);
+    if (confirm && !await confirmDialog({ title: on ? `把 ${p?.name} 設成唯讀？` : `把 ${p?.name} 改回一般成員？`, confirmText: on ? '設成唯讀' : '改回一般', danger: on && back.length > 0,
+      message: on ? `在「<b>${esc(projName(pj))}</b>」只能看：不能發訊息、回覆、建卡改卡、交接、上傳或私訊；他名下的 AI 在這個專案也跟著唯讀。${back.length ? `<br>他和名下 AI 負責的 <b>${back.length}</b> 張卡會退回待處理：${esc(back.join('、'))}` : ''}` : `在「<b>${esc(projName(pj))}</b>」恢復一般權限。` })) return false;
+    await api('/api/members/matrix', { method: 'PUT', body: { changes } });
+    return true;
+  }
   function permByProjectHtml() {
     const all = permProjects();
     if (!all.includes(perm.selProj)) perm.selProj = all[0] || null;
@@ -5830,7 +5855,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       const c = permCur(p), b = permBase(p), isNew = !(b.cross || b.projects.has(pj)), lchg = (c.leaders || b.leaders).has(pj) !== b.leaders.has(pj), isAdm = p.participantId === state.projMeta.adminId;
       const tags = [isAdm ? '<span class="pill-tag blue">管理員</span>' : c.cross ? '<span class="pm-cross-tag">跨專案</span>' : '', isNew ? '<span class="pill-tag yellow">新加入</span>' : '', !admin && p.participantId === meId() ? '<span class="muted small">· 你</span>' : ''].join('');
       const name = admin ? `<button type="button" class="pm-name-link" data-pm-goto-mem="${esc(p.participantId)}" title="看 ${esc(p.name)} 的所有專案">${esc(p.name)}</button>` : `<b>${esc(p.name)}</b>`;
-      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name">${name}${tags}${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role">${pmRoleCell(p, pj)}</td><td class="c-lead">${pmLeadCell(p, pj)}</td><td class="c-act">${pmActCell(p, pj, '到「依成員」')}</td></tr>`;
+      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name">${name}${tags}${pmRoCell(p, pj, isNew)}${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role">${pmRoleCell(p, pj)}</td><td class="c-lead">${pmLeadCell(p, pj)}</td><td class="c-act">${pmActCell(p, pj, '到「依成員」')}</td></tr>`;
     };
     const removed = permPeople().filter(p => { const b = permBase(p); return (b.cross || b.projects.has(pj)) && !inProj(p, pj); });
     const rmRow = p => `<tr class="pm-tr chg pm-gone"><td class="c-name"><s>${esc(p.name)}</s><span class="pill-tag red">將移出</span>${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role"><span class="muted">—</span></td><td class="c-lead"><span class="muted">—</span></td><td class="c-act"><button type="button" class="link small" data-pm-restore="${esc(p.participantId)}" data-pj="${esc(pj)}">復原</button></td></tr>`;
@@ -5880,6 +5905,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       <div class="pm-dhead"><strong>加入${esc(projName(pj))}的成員</strong></div>
       <div class="pm-search"><input id="pm-pickq" type="search" placeholder="搜尋要加入的人" aria-label="搜尋要加入的人" value="${esc(perm.pickQ)}"></div>
       <div class="pm-pick-list">${rows.join('') || '<p class="muted small pm-pad">沒有可以加入的人</p>'}</div>
+      <label class="chk pm-pick-ro"><input type="checkbox" id="pm-pick-ro"${perm.pickRo ? ' checked' : ''}> 👁 以唯讀加入（只能看，不能發訊息或操作；只套用在勾選的人類）</label>
       <div class="pm-pick-foot"><button type="button" class="btn" data-pm-pick-cancel>取消</button><button type="button" class="btn primary" data-pm-pick-ok ${sel.size ? '' : 'disabled'}>加入 ${sel.size} 人${pending ? '（跟其他變更一起儲存）' : ''}</button></div>
       <p class="muted small pm-pad">${pending ? '底下還有沒儲存的變更，這次加入會一起放進變更列。' : '加入不會退回任何卡片，按下就直接儲存，10 秒內可以復原。'}勾人類時，名下的 AI 會列在下面可一起勾。</p></section>`;
   }
@@ -6067,12 +6093,19 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     if (isAdmin()) loadInvites(); // C-233：分頁上顯示有效邀請數
   }
   // C-190：只有「加入」時直接儲存（不會退回卡片），toast 可在 10 秒內復原
+  async function applyPendingRo() { // C-294：「以唯讀加入」的人，加入存好後設唯讀（新加入沒有卡，不用再確認）
+    const pr = perm.pendingRo; perm.pendingRo = null;
+    if (!pr?.ids.length) return;
+    await loadProjectList().catch(() => {});
+    for (const id of pr.ids) await permSetRo(id, pr.pj, true, { confirm: false }).catch(err => toast(err.message));
+  }
   async function permQuickAdd(ids, pj) {
     const before = ids.map(id => ({ id, projects: [...permBase(P2(id)).projects] }));
     const changes = ids.map(id => ({ id, projects: PROJECTS.filter(x => perm.draft.get(id)?.projects.has(x)) })).filter(c => c.projects.length);
     try {
       await api('/api/members/matrix', { method: 'PUT', body: { changes } });
       perm.draft.clear();
+      await applyPendingRo();
       await Promise.all([loadProjectList(), loadParticipants()]);
       drawProjSwitch(); drawPerm();
       const names = ids.map(id => P2(id)?.name).filter(Boolean).join('、');
@@ -6116,6 +6149,7 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
         message: `<ul class="pm-impact">${lines.map(l => `<li>${l}</li>`).join('') || '<li>沒有實際變更</li>'}</ul>` })) return;
       await api('/api/members/matrix', { method: 'PUT', body: { changes } });
       perm.draft.clear();
+      await applyPendingRo();
       await Promise.all([loadProjectList(), loadParticipants()]);
       drawProjSwitch(); drawAvatarMenu(); drawPerm();
       toast('已儲存成員與權限');
@@ -6167,10 +6201,16 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     if (el('[data-pm-pick-ok]')) {
       const ids = [...perm.pickSel].sort((a, b) => (P(a)?.memberType === 'ai') - (P(b)?.memberType === 'ai'));
       const direct = perm.draft.size === 0, pj = perm.selProj;
+      if ($('#pm-pick-ro')?.checked) perm.pendingRo = { pj, ids: ids.filter(id => P(id)?.memberType === 'human') }; // C-294：加入存好後再設唯讀
       for (const id of ids) permAdd(P(id), pj);
       Object.assign(perm, { picker: false, pickSel: new Set() });
       if (!direct) return drawPerm();
       return permQuickAdd(ids, pj); // C-190：加入沒有破壞性，直接儲存，10 秒內可復原
+    }
+    if ((x = el('[data-pm-ro]'))) { // C-294
+      const on = x.getAttribute('aria-pressed') !== 'true';
+      try { if (await permSetRo(x.dataset.pmRo, x.dataset.pj, on)) { await Promise.all([loadProjectList(), loadParticipants()]); drawPerm(); toast(on ? '已設成唯讀' : '已改回一般成員'); } } catch (err) { toast(err.message); }
+      return;
     }
     if ((x = el('[data-pm-rm]'))) { permRemove(P(x.dataset.pmRm), x.dataset.pj); return drawPerm(); }
     if ((x = el('[data-pm-restore]'))) { permAdd(P(x.dataset.pmRestore), x.dataset.pj); return drawPerm(); }
@@ -6477,14 +6517,14 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     const body = openModal('＋邀請', `<form id="inv-new" class="stack">
         <label class="field">名字<input name="name" required maxlength="40" autocomplete="off" placeholder="例如：王小明"></label>
         <fieldset class="field inv-projs"><legend class="field-label">專案與角色</legend>
-          ${PROJECTS.map(pj => `<div class="inv-proj-row"><label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label>${roleSelectHtml('', `data-inv-role="${esc(pj)}" disabled`, { pj, ai: false, label: `在${projName(pj)}的角色` })}</div>`).join('')}
+          ${PROJECTS.map(pj => `<div class="inv-proj-row"><label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label><label class="chk inv-ro"><input type="checkbox" data-inv-ro="${esc(pj)}" disabled> 👁 唯讀</label>${roleSelectHtml('', `data-inv-role="${esc(pj)}" disabled`, { pj, ai: false, label: `在${projName(pj)}的角色` })}</div>`).join('')}
           <span class="muted small">每個專案各自一個角色；不勾＝還沒有專案，之後再指派</span></fieldset>
         <p class="error" id="inv-new-err" role="alert"></p>
       </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="inv-new">產生邀請連結</button>' });
     // 勾了專案才能選那個專案的角色
     body.querySelector('#inv-new').addEventListener('change', async e => {
       const cb = e.target.closest('input[name="projects"]');
-      if (cb) { const s = body.querySelector(`[data-inv-role="${CSS.escape(cb.value)}"]`); s.disabled = !cb.checked; return; }
+      if (cb) { const s = body.querySelector(`[data-inv-role="${CSS.escape(cb.value)}"]`); s.disabled = !cb.checked; const ro = body.querySelector(`[data-inv-ro="${CSS.escape(cb.value)}"]`); if (ro) { ro.disabled = !cb.checked; if (!cb.checked) ro.checked = false; } return; }
       const s = e.target.closest('[data-inv-role]');
       if (!s) return;
       const v = await pickRole(s, s.dataset.v || '');
@@ -6498,7 +6538,8 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       const projects = f.getAll('projects');
       const roles = Object.fromEntries(projects.map(pj => [pj, body.querySelector(`[data-inv-role="${CSS.escape(pj)}"]`)?.value || '']).filter(([, v]) => v && v !== '__other'));
       try {
-        const out = await api('/api/invites', { method: 'POST', body: { name: f.get('name').trim(), projects, roles } });
+        const readOnly = projects.filter(pj => body.querySelector(`[data-inv-ro="${CSS.escape(pj)}"]`)?.checked); // C-294
+        const out = await api('/api/invites', { method: 'POST', body: { name: f.get('name').trim(), projects, roles, readOnly } });
         showInviteLink(out);
         if (state.page === 'perm') loadInvites();
       } catch (err) { body.querySelector('#inv-new-err').textContent = err.message; }

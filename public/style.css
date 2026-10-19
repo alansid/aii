@@ -2439,3 +2439,13 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .md-doc h2 { font-size: 1.15rem; margin: 6px 0; } .md-doc h3 { font-size: 1rem; margin: 18px 0 6px; } .md-doc h4 { font-size: .95rem; }
 .md-pre { overflow-x: auto; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: .78rem; line-height: 1.5; }
 .md-table { overflow-x: auto; } .md-table table { border-collapse: collapse; font-size: .85rem; } .md-table th, .md-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+
+/* C-294 唯讀成員 */
+.ro-note { margin: 8px 16px; padding: 10px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: .9rem; }
+.ro-note[hidden] { display: none; }
+.ro-here .composer, .ro-here .reply-btn, .ro-here .cg-reply, .ro-here .gm-re, .ro-here .drawer .inl, .ro-here #card-new, .ro-here .drawer .now-acts, .ro-here .drawer .more-acts, .ro-here .drawer [data-act="handover"], .ro-here [data-ask-ai] { display: none !important; }
+.pm-ro-btn { margin-left: 6px; min-height: 28px; padding: 0 8px; border: 1px dashed var(--border); border-radius: 12px; background: transparent; color: var(--muted); font: inherit; font-size: .75rem; cursor: pointer; }
+.pm-ro-btn.on { border-style: solid; background: var(--surface-2); color: var(--text); font-weight: 600; }
+.ro-tag { margin-left: 6px; }
+.pm-pick-ro { margin: 8px 0 0; font-size: .85rem; }
+.inv-ro { margin: 0 8px; font-size: .8rem; }

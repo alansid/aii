@@ -31,7 +31,7 @@ export function deviceLabelAs(prefix, ua = '') {
 }
 
 export function registerLogin(d) {
-  const { route, db, ApiError, invalid, readJson, randId, newToken, randomBytes, sha256, nowIso, iso, peopleMap, invalidatePeople, readRole, setInitialRoles,
+  const { route, db, ApiError, invalid, readJson, randId, newToken, randomBytes, sha256, nowIso, iso, peopleMap, invalidatePeople, readRole, setInitialRoles, setInitialReadOnly,
     adminOf, requireAdmin, requireHuman, validateName, assertNameFree, newCode, PROJECTS, nameOf, createMessage, publicParticipant,
     groupName, humanTtlMs, failLimit = 10 } = d;
 
@@ -181,13 +181,15 @@ export function registerLogin(d) {
   const listOf = s => String(s || '').split(',').map(x => x.trim()).filter(x => PROJECTS.includes(x));
   const inviteStatus = (iv, now = Date.now()) => (iv.used_at ? '已使用' : iv.revoked_at ? '已取消' : iv.expires_at <= now ? '已過期' : '有效');
   const inviteView = (iv, people) => ({
-    id: iv.id, kind: iv.participant_id ? 'reset' : 'new', name: iv.name, role: roleText(iv.role), roles: rolesOf(iv.role), projects: listOf(iv.projects),
+    id: iv.id, kind: iv.participant_id ? 'reset' : 'new', name: iv.name, role: roleText(iv.role), roles: rolesOf(iv.role), readOnly: roOf(iv.role), projects: listOf(iv.projects),
     status: inviteStatus(iv), createdAt: iso(iv.created_at), expiresAt: iso(iv.expires_at), usedAt: iso(iv.used_at),
     usedByName: iv.used_by ? people.get(iv.used_by)?.name ?? null : null, createdByName: people.get(iv.created_by)?.name ?? null,
   });
   const inviteUrl = (base, token) => `${base}/invite/${token}`;
   // C-219：邀請的角色欄存 { 專案: 角色 } 的 JSON；舊資料是單一字串
-  function rolesOf(raw) { const s = String(raw || ''); if (!s.startsWith('{')) return null; try { return JSON.parse(s); } catch { return null; } }
+  function rolesOf(raw) { const s = String(raw || ''); if (!s.startsWith('{')) return null; try { const r = JSON.parse(s); delete r.__ro; return r; } catch { return null; } }
+  // C-294：邀請時勾的唯讀專案也存在角色欄的 JSON（__ro）
+  function roOf(raw) { const s = String(raw || ''); if (!s.startsWith('{')) return []; try { return JSON.parse(s).__ro || []; } catch { return []; } }
   const roleText = raw => { const r = rolesOf(raw); return r ? Object.entries(r).map(([k, v]) => `${nameOf(k)} ${v}`).join('、') : String(raw || ''); };
   function readInviteProjects(raw) {
     if (raw === undefined || raw === null) return [];
@@ -230,6 +232,12 @@ export function registerLogin(d) {
     } else {
       role = String(body.role ?? '').trim();
       if (role.length > 30) throw invalid('角色最多 30 字');
+    }
+    if (Array.isArray(body.readOnly) && body.readOnly.length) { // C-294
+      const ro = [...new Set(body.readOnly.map(String))];
+      const out = ro.filter(x => !projects.includes(x));
+      if (out.length) throw invalid(`唯讀的專案要先勾選：${out.map(nameOf).join('、')}`);
+      role = JSON.stringify({ ...(rolesOf(role) || {}), __ro: ro });
     }
     const id = randId('inv'), token = newToken();
     await db.run('INSERT INTO invites (id, token_hash, name, role, projects, participant_id, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -377,6 +385,7 @@ export function registerLogin(d) {
           await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)`, pid, 'human', name, roles ? Object.values(roles)[0] || '' : iv.role || '', await newCode(), newToken(), 0, ts, ts, now, listOf(iv.projects).join(','));
           await setInitialRoles(pid, roles || Object.fromEntries(listOf(iv.projects).map(pj => [pj, iv.role || ''])));
+          if (roOf(iv.role).length) await setInitialReadOnly(pid, roOf(iv.role)); // C-294
           created = true;
         }
         await db.run('UPDATE invites SET used_by = ? WHERE id = ?', pid, iv.id);
@@ -391,7 +400,7 @@ export function registerLogin(d) {
           const text = created
             ? `[通知] ${name} 已加入（${[roleText(iv.role), proj.length ? '專案：' + proj.map(nameOf).join('、') : '還沒有專案'].filter(Boolean).join('，')}）`
             : `[通知] ${name} 已用新的邀請連結重新登入`;
-          await createMessage(c2, p, { text, requestId: `invite_${iv.id}_${now}`, recipientIds: [inviter.id], project: proj.length === 1 ? proj[0] : 'all' }).catch(e => console.error('join notice failed:', e.message));
+          await createMessage(c2, p, { text, requestId: `invite_${iv.id}_${now}`, recipientIds: [inviter.id], project: proj.length === 1 ? proj[0] : 'all' }, { systemNotice: true }).catch(e => console.error('join notice failed:', e.message));
         }
         Object.assign(ctx, c2);
         return p;

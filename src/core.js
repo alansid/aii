@@ -327,7 +327,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
 
   // ---------- 訊息 ----------
   // checkProject：成員發文時檢查收件人是否屬於訊息的專案；伺服器代發的通知不檢查
-  async function createMessage(ctx, me, body, { fileId = null, checkProject = false } = {}) {
+  async function createMessage(ctx, me, body, { fileId = null, checkProject = false, systemNotice = false } = {}) {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text || text.length > MAX_TEXT) throw invalid(`text 需為 1～${MAX_TEXT} 字`);
     // C-155：亂碼攔截（Windows 主控台用錯編碼送中文常變成 ????）。U+FFFD 一律擋；連續問號只擋 AI
@@ -418,6 +418,14 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       const named = head && projectRows.find(p => p.name === head[1] || p.id === head[1]);
       if (named && project !== named.id) throw new ApiError(400, 'PROJECT_TEXT_MISMATCH', `訊息開頭寫【${named.name}】，project 必須帶 ${named.id}（目前是${project ? '「' + nameOf(project) + '」' : '全部專案'}）。真的要發給全部專案，請把開頭改成【全部專案】。`);
     }
+    if (!systemNotice) await assertWritable(me, project); // C-294（平台自動發的通知，例如「X 已加入」，不擋）
+    if (project) for (const rid of [...recipientIds]) {
+      const rp = people.get(rid);
+      if (!roIn(rp, project)) continue;
+      if (rawIds.includes(rid) || (rawAsk || []).includes(rid)) throw new ApiError(400, 'READ_ONLY_RECIPIENT', `${rp.name} 在「${nameOf(project)}」是唯讀，不能被 @ 或指定要回覆。`);
+      recipientIds.delete(rid);
+    }
+    if (ask) ask = ask.filter(id => recipientIds.has(id));
     if (replyAuthor && project && !projectsOf(people.get(replyAuthor)).includes(project) && !rawIds.includes(replyAuthor) && !(rawAsk || []).includes(replyAuthor)) recipientIds.delete(replyAuthor); // C-277
     if (checkProject && project && !audience) {
       const outside = [...recipientIds].map(rid => people.get(rid)).filter(p => !projectsOf(p).includes(project));
@@ -660,6 +668,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const aiProjects = body.projects !== undefined ? readProjects(body.projects).join(',') : mineP.length === 1 ? mineP[0] : null;
     if (aiProjects === null) throw invalid(`projects 為必填：這位 AI 屬於哪些專案（至少一個，專案編號：${PROJECTS.join('、')}）`);
     const s = readSettings(body, null, await projRoleKeys(aiProjects.split(','))); // C-280
+    await loadReadOnly(); { const bad = aiProjects.split(',').filter(pj => roHuman(me.id, pj)); if (bad.length) throw readOnlyError(me, bad[0]); } // C-294
     const outside = aiProjects.split(',').filter(x => !mineP.includes(x));
     if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `你不在「${outside.join('、')}」，AI 的專案不能超出所屬人類。`);
     invalidatePeople();
@@ -863,6 +872,7 @@ ${watcherEnv}
 - ${owner.name} 要求停止 → 立刻停止 watcher、等待腳本與排程；要求恢復 → 重新啟動，延續原游標，不重新簽到。
 - 收到 401 INVALID_TOKEN 或 TOKEN_EXPIRED → 立刻停止 watcher 與所有排程，在本機對話告訴 ${owner.name}。
 - 收到 429 RATE_LIMITED → 依 Retry-After 秒數等待後再試。
+- 收到 403 READ_ONLY → 你的所屬人類在那個專案是唯讀（C-294），你也跟著只能看：停下，在本機對話告訴 ${owner.name}，不要重試、不要換專案繞過。
 
 ## 五、狀態檔 .aigile/${agent}/state.json
 \`\`\`json
@@ -992,6 +1002,7 @@ ${trial
     return {
       ...identity(me, people),
       ...(me.kind === 'human' ? { projectRoles: projectRolesOf(me) } : {}), // C-219
+      readOnlyIn: roList(me, await loadReadOnly()), // C-294：在這些專案只能看
       isOnline: true,
       expiresAt: iso(me.token_expires_at),
       ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId } : {}),
@@ -1077,6 +1088,26 @@ ${trial
     }
     crossOv = { add: new Set(v.add || []), remove: new Set(v.remove || []), frozen: v.frozen }; crossAt = Date.now();
     return crossOv;
+  }
+  // C-294 唯讀成員：app_settings 的 read_only＝{ 專案id: [人類id] }；他名下的 AI 在該專案跟著唯讀（AI 權限不超過主人）
+  let roMap = {}, roAt = 0;
+  async function loadReadOnly(force = false) {
+    if (!force && Date.now() - roAt < 10_000) return roMap;
+    const r = await db.get("SELECT value FROM app_settings WHERE key = 'read_only'").catch(() => null);
+    try { roMap = JSON.parse(r?.value || '{}') || {}; } catch { roMap = {}; }
+    roAt = Date.now();
+    return roMap;
+  }
+  const roHuman = (id, pj, map = roMap) => !!pj && (map[pj] || []).includes(id);
+  const roIn = (p, pj, map = roMap) => !!p && roHuman(p.kind === 'ai' ? p.owner_id : p.id, pj, map);
+  const roList = (p, map = roMap) => PROJECTS.filter(pj => roIn(p, pj, map));
+  const readOnlyError = (p, pj) => new ApiError(403, 'READ_ONLY', `${p?.kind === 'ai' ? '你的所屬人類' : '你'}在「${nameOf(pj)}」是唯讀，只能看，不能發訊息、回覆、建卡、改卡、交接、上傳或私訊。需要權限請找管理員或該專案 leader。AI 收到這個就停下、在本機對話告訴所屬人類，不要重試。`);
+  // pj 沒有（全部專案頻道等）：只要在任何專案是唯讀就擋
+  async function assertWritable(me, pj) {
+    await loadReadOnly();
+    if (pj) { if (roIn(me, pj)) throw readOnlyError(me, pj); return; }
+    const l = roList(me);
+    if (l.length) throw readOnlyError(me, l[0]);
   }
   // C-183：專案 leader（每個專案可多位、只能人類），存在 app_settings 的 project_leaders（{ 專案id: [成員id] }）
   let leadersMap = {}, leadersAt = 0;
@@ -1212,7 +1243,9 @@ ${trial
     const admin = adminOf(people);
     const crossRoleIds = [...people.values()].filter(p => crossRole(p)).map(p => p.id);
     const leaders = Object.fromEntries(PROJECTS.map(pj => [pj, (leadersMap[pj] || []).filter(id => people.get(id)?.status === 'active')]));
-    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, ...extra };
+    await loadReadOnly();
+    const readOnly = Object.fromEntries(PROJECTS.map(pj => [pj, (roMap[pj] || []).filter(id => people.get(id)?.status === 'active')])); // C-294
+    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, readOnly, ...extra };
   }
 
   // 改成員所屬專案（單人或批次）。移出某專案時，他在該專案負責的未結案卡片退回「待處理」、改為未指派。
@@ -1412,8 +1445,45 @@ ${trial
         if ((projRoles[p.id]?.[pj] || '') !== role) roleChanges.push({ participantId: p.id, name: p.name, project: pj, role });
       }
     }
+    // C-294 唯讀：只能人類、要在那個專案、管理員與該專案 leader 不能設；他和名下 AI 負責的未結案卡退回待處理
+    await loadReadOnly(true);
+    const nextRo = Object.fromEntries(PROJECTS.map(pj => [pj, [...(roMap[pj] || [])]]));
+    const roChanges = [];
+    for (const ch of body.changes) {
+      if (!Array.isArray(ch.readOnlyIn)) continue;
+      const p = person(ch.id);
+      if (p.kind !== 'human') throw invalid('唯讀只能設人類；他名下的 AI 會跟著唯讀');
+      const want = ch.readOnlyIn.map(String), after = crossRole(p, ov) ? [...PROJECTS] : projAfter(p.id);
+      for (const pj of PROJECTS) {
+        const has = nextRo[pj].includes(p.id), on = want.includes(pj);
+        if (has === on) continue;
+        if (!isAdmin && !myLead.includes(pj)) throw forbid(`你不是「${nameOf(pj)}」的 leader，不能改那個專案的權限。`);
+        if (on && !after.includes(pj)) throw invalid(`${p.name} 不在「${nameOf(pj)}」，不能設唯讀`);
+        if (on && p.id === admin?.id) throw invalid('管理員不能設成唯讀');
+        if (on && nextLeaders[pj].includes(p.id)) throw invalid(`${p.name} 是「${nameOf(pj)}」的 leader，先取消 leader 再設唯讀`);
+        nextRo[pj] = on ? [...nextRo[pj], p.id] : nextRo[pj].filter(x => x !== p.id);
+        const ids = [p.id, ...[...people.values()].filter(a => a.kind === 'ai' && a.owner_id === p.id).map(a => a.id)];
+        const cards = on ? await db.all("SELECT seq FROM cards WHERE project = ? AND status NOT IN ('已完成','已封存') AND owner_id IN (SELECT value FROM json_each(?)) ORDER BY seq", pj, JSON.stringify(ids)) : [];
+        roChanges.push({ participantId: p.id, name: p.name, project: pj, readOnly: on, returnedCards: cards.map(c => 'C-' + (c.seq + 100)), seqs: cards.map(c => c.seq) });
+      }
+    }
+    for (const pj of PROJECTS) if (nextLeaders[pj].some(id => nextRo[pj].includes(id))) throw invalid(`唯讀的人不能當 leader（${nameOf(pj)}）`);
+    for (const c of memberChanges) for (const pj of PROJECTS) if (!c.projects.includes(pj) && nextRo[pj].includes(c.id)) nextRo[pj] = nextRo[pj].filter(x => x !== c.id); // 移出專案就不用記唯讀
     const dryRun = body.dryRun === true;
     const impact = await applyMembership(ctx, me, memberChanges, { dryRun, ov, byLeader: !isAdmin });
+    if (!dryRun && (roChanges.length || JSON.stringify(nextRo) !== JSON.stringify(Object.fromEntries(PROJECTS.map(pj => [pj, roMap[pj] || []]))))) {
+      const at = nowIso(), stmts = [["INSERT INTO app_settings (key, value) VALUES ('read_only', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(nextRo)]]];
+      for (const c of roChanges) {
+        stmts.push(projEvent(c.project, me.id, `${me.name} 把 ${c.name} 設為${c.readOnly ? '唯讀' : '一般成員'}${c.returnedCards.length ? `（${c.returnedCards.length} 張卡退回待處理）` : ''}`, at));
+        for (const seq of c.seqs) {
+          stmts.push(["UPDATE cards SET owner_id = NULL, status = '待處理', updated_at = ?, version = version + 1 WHERE seq = ?", [at, seq]]);
+          stmts.push(['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [seq, at, me.id, '網頁', `${c.name} 在「${nameOf(c.project)}」改為唯讀，改為未指派（狀態改為待處理）`]]);
+        }
+      }
+      await db.batch(stmts);
+      await loadReadOnly(true);
+      invalidatePeople();
+    }
     if (!dryRun && roleChanges.length) {
       await loadProjectRoles(true); // applyMembership 可能清掉了移出專案的角色
       const next = { ...projRoles }, at = nowIso();
@@ -1442,10 +1512,10 @@ ${trial
         }
       }
     }
-    return scopeProjects(await projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges, roleChanges }), me);
+    return scopeProjects(await projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges, roleChanges, roChanges: roChanges.map(({ seqs, ...c }) => c) }), me);
   });
   // UX 第 1354 則：不屬於全部專案的人，專案清單只回自己所屬的專案（不露出別專案名稱）
-  const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))) }; };
+  const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))), readOnly: Object.fromEntries(Object.entries(r.readOnly || {}).filter(([k]) => mine.includes(k))) }; };
   route('GET', '/api/projects', async ({ ctx, me }) => scopeProjects(await projectsResponse(ctx), me));
   // C-193：群組名稱（登入頁也要顯示，所以讀取不用登入）；只有管理員能改
   route('GET', '/api/group', async () => ({ name: await groupName() }), { open: true });
@@ -1639,6 +1709,7 @@ ${trial
     const open = await dmProjects(human, ai);
     if (!open.length) throw new ApiError(403, 'DM_DISABLED', '這個專案沒有開放私訊（專案設定由管理員或 leader 開啟）；舊的私訊還看得到，但不能再送。');
     const project = body.project && open.includes(body.project) ? body.project : open[0];
+    await loadReadOnly(); if (roHuman(human.id, project)) throw readOnlyError(me, project); // C-294：唯讀的人和他的 AI 不能私訊
     const id = await writeDm({ human, ai, from: me.id, text, project, requestId }); // 叫醒 AI（門鈴只含 ID 與時間）
     return { __status: 201, ...dmView(await db.get('SELECT * FROM dms WHERE id = ?', id), people) };
   });
@@ -2396,6 +2467,7 @@ ${trial
   }
 
   async function uploadFile(ctx, me, req, url) {
+    { const qp = url.searchParams.get('project'); await assertWritable(me, PROJECTS.includes(qp) ? qp : qp === 'all' ? null : projectsOf(me).length === 1 ? projectsOf(me)[0] : null); } // C-294
     requireStorage();
     const q = url.searchParams;
     const name = cleanFileName(q.get('name'));
@@ -2679,10 +2751,40 @@ ${trial
     await loadProjectRoles(true);
     await saveProjectRoles({ ...projRoles, [pid]: { ...(projRoles[pid] || {}), ...clean } });
   }
-  login = registerLogin({ route, db, ApiError, invalid, readJson, randId, newToken, randomBytes, sha256, nowIso, iso, peopleMap, invalidatePeople, readRole, setInitialRoles,
+  async function setInitialReadOnly(pid, projects) { // C-294：邀請時勾了唯讀
+    await loadReadOnly(true);
+    const next = { ...roMap };
+    for (const pj of projects) if (PROJECTS.includes(pj) && !(next[pj] || []).includes(pid)) next[pj] = [...(next[pj] || []), pid];
+    await db.run("INSERT INTO app_settings (key, value) VALUES ('read_only', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(next));
+    await loadReadOnly(true);
+  }
+  login = registerLogin({ route, db, ApiError, invalid, readJson, randId, newToken, randomBytes, sha256, nowIso, iso, peopleMap, invalidatePeople, readRole, setInitialRoles, setInitialReadOnly,
     adminOf, requireAdmin, requireHuman, validateName, assertNameFree, newCode, PROJECTS, nameOf, createMessage, publicParticipant,
     groupName, humanTtlMs: HUMAN_TOKEN_TTL_MS, failLimit: Number(config.authFailLimit) || 10 });
-  registerCards({ route, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
+  // C-294：卡片的寫入一律先擋唯讀（不用改 cards.js 每條路由）
+  const cardRoute = (method, path, handler, opts) => route(method, path, async args => {
+    if (method !== 'GET' && args.me) await cardGuard(path, args);
+    return handler(args);
+  }, opts);
+  async function cardGuard(path, { me, req, params }) {
+    await loadReadOnly();
+    const body = req ? await req.clone().json().catch(() => ({})) : {};
+    let pj = null;
+    if (params?.id && path.startsWith('/api/cards/:id')) {
+      const seq = cardSeq(params.id), c = seq !== null ? await db.get('SELECT project FROM cards WHERE seq = ?', seq) : null;
+      if (!c) return; // 找不到卡交給原本的路由回 404
+      pj = c.project;
+    } else if (path === '/api/cards') pj = PROJECTS.includes(body.project) ? body.project : (projectsOf(me).length === 1 ? projectsOf(me)[0] : null);
+    else if (PROJECTS.includes(body.project)) pj = body.project;
+    await assertWritable(me, pj);
+    if (!pj) return;
+    const people = await peopleMap({});
+    for (const k of ['ownerId', 'toId', 'deciderId']) {
+      const p = body[k] && people.get(String(body[k]));
+      if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
+    }
+  }
+  registerCards({ route: cardRoute, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
   // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
   async function scopeTeamMembers(me, members) {
