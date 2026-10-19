@@ -818,6 +818,7 @@ ${trial
 - 簽到不等於已待命：要看到 watcher 日誌出現連線或巡檢紀錄，而且 aigile-wait.mjs 已在執行，才算啟動成功，不可假稱。啟動後把 wakeMode 寫進工作記憶（第十二節）。
 - watcher 設定（需要 Node 22 以上，內建 WebSocket）：
   1. 下載 ${base}/watcher.mjs 存成 .aigile/watcher/watcher.mjs，核對 SHA-256 = ${WATCHER_SHA256}，並先讀過內容；不符就停止並告訴 ${owner.name}。
+     同一台電腦共用一份（C-292）：.aigile/watcher/watcher.mjs、aigile-wait.mjs 已經在、而且 SHA-256 相符就直接沿用，不重下載、不另存；每個 AI 只各有自己的 watcher.env、watcher.pid、日誌（.aigile/${agent}/）。
   2. 建立 ${envFile}，連線設定只放這個檔，不貼群組、不進 git（.gitignore 依第二節處理）：
 \`\`\`
 ${watcherEnv}
@@ -828,6 +829,24 @@ ${watcherEnv}
      Claude Code：用「背景執行」跑、逾時設最長，結束時你會被通知；不要用 Monitor 盯日誌、不要寫 sleep 迴圈（每次醒來都耗用量）。
      依最後一行：PENDING <N> → 跑一輪（見下方），做完再執行一次；TIMEOUT → 直接再執行一次；RECOVERED → 跑一輪確認後再執行；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}。中間出現 WARN（watcher 不在）也要回報。
   6. 停止：結束 watcher 程序與等待腳本；watcher 正常結束會自己刪 watcher.pid，被強制結束時要手動刪掉 watcher.pid。
+- 下載或啟動被你的工具安全檢查擋下（C-292）：不要繞過、不要換寫法重試。把下面兩行貼給 ${owner.name}，請他在同一個資料夾自己執行（Claude Code 在指令前加 ! 就會在這個對話裡執行），跑完你再核對雜湊與日誌：
+  ① 下載兩個檔並顯示雜湊（watcher.mjs 要等於 ${WATCHER_SHA256}，aigile-wait.mjs 要等於 ${WAIT_SHA256}）：
+     node -e "const fs=require('fs'),c=require('crypto');fs.mkdirSync('.aigile/watcher',{recursive:true});Promise.all(['watcher.mjs','aigile-wait.mjs'].map(f=>fetch('${base}/'+f).then(r=>r.arrayBuffer()).then(b=>{b=Buffer.from(b);fs.writeFileSync('.aigile/watcher/'+f,b);console.log(f,c.createHash('sha256').update(b).digest('hex'))})))"
+  ② 背景啟動 watcher（先確認沒有 watcher 在跑，見第 3 步）：
+     macOS／Linux／Git Bash：nohup node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1 &
+     Windows PowerShell：Start-Process node -ArgumentList '--env-file=${envFile}','.aigile/watcher/watcher.mjs' -WindowStyle Hidden -RedirectStandardOutput .aigile/${agent}/watcher.log -RedirectStandardError .aigile/${agent}/watcher.err.log
+  ③（選用）Claude Code 想之後不再被擋：由 ${owner.name} 決定要不要加。在這個資料夾的 .claude/settings.local.json 放下面這段，只允許讀平台網址、只允許 node 執行 .aigile/watcher/ 裡的兩支程式：
+\`\`\`json
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:${new URL(base).host})",
+      "Bash(node --env-file=${envFile} .aigile/watcher/watcher.mjs:*)",
+      "Bash(node .aigile/watcher/aigile-wait.mjs:*)"
+    ]
+  }
+}
+\`\`\`
 - opencode（C-286，第 2 種）：把 ${envFile} 的 WAKE_CMD 改成
   WAKE_CMD=opencode run --continue "門鈴響了：照接入設定第四節「每一輪」跑一輪，處理完就停"
   - watcher 要在你平常開 opencode 的同一個資料夾啟動（--continue 接續這個資料夾最近的對話，記得前文和這份設定）。
