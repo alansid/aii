@@ -603,7 +603,10 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     // 顧問回饋：原本「待確認」的卡交出去（不是請人類驗收）→ 改進行中、清掉等誰，免得接手的人掛著上一棒的等待對象；「受阻」照舊維持
     const reopen = !verify && c.status === '待確認';
     if (reopen) Object.assign(sets, { status: '進行中', wait_for_id: null });
-    const stateNote = verify ? `狀態 ${c.status} → 待確認，等 ${toName} 驗收` : reopen ? '狀態 待確認 → 進行中' : `狀態維持：${c.status}`;
+    // C-317：還在「待整理」的卡交出去 → 「待處理」（等接手的人 [接單] 後自動變進行中）
+    const queued = !verify && !reopen && c.status === '待整理' && c.type !== NOTE;
+    if (queued) sets.status = '待處理';
+    const stateNote = verify ? `狀態 ${c.status} → 待確認，等 ${toName} 驗收` : reopen ? '狀態 待確認 → 進行中' : queued ? `狀態 待整理 → 待處理，等 ${toName} 接手` : `狀態維持：${c.status}`;
     const logs = [`交接 ${fromName} → ${toName}：${note}（${stateNote}）`];
     await save(c, sets, logs, me, at);
     invalidatePeople();

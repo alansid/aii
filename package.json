@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.80.3",
+  "version": "0.81.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -73,6 +73,7 @@
     "test:setup-link": "node scripts/setup-link-test.js",
     "test:hub-count": "node scripts/hub-count-test.js",
     "test:card-key": "node scripts/card-key-test.js",
-    "test:read-cost": "node scripts/read-cost-test.js"
+    "test:read-cost": "node scripts/read-cost-test.js",
+    "test:card-start": "node scripts/card-start-test.js"
   }
 }

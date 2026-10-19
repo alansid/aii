@@ -91,6 +91,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const PEOPLE_CHECK_MS = Number(config.peopleCheckMs) || 30_000, PEOPLE_MAX_MS = 10 * 60_000; // 測試可調短
   let peopleCache = { at: 0, map: null }, peopleDirty = false;
   const invalidatePeople = () => { peopleCache = { at: 0, map: null }; teamCache = { at: 0, data: null }; peopleDirty = true; };
+  const invalidateTeam = () => { teamCache = { at: 0, data: null }; }; // 卡片變動只影響團隊狀態，不用讓每份程式重讀成員表
   const peopleVer = async () => (await db.get("SELECT value FROM app_settings WHERE key = 'people_ver'").catch(() => null))?.value || '';
   async function bumpPeopleVer() { peopleDirty = false; await db.run("INSERT INTO app_settings (key, value) VALUES ('people_ver', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(Date.now()) + Math.random().toString(36).slice(2, 6)).catch(() => {}); }
   const loadPeople = async ctx => {
@@ -344,7 +345,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       if (ownerStatus !== 'active') throw new ApiError(401, 'INVALID_TOKEN', '所屬人類已離開群組');
     }
     delete p.owner_status;
-    if (peopleCache.map && !peopleCache.map.has(p.id)) invalidatePeople(); // C-248：在別份程式剛註冊的新成員，這份快取還沒有他
+    if (peopleCache.map && !peopleCache.map.has(p.id)) { peopleCache = { at: 0, map: null }; teamCache = { at: 0, data: null }; } // C-316：只重讀自己這份（新增成員那份已換版本）；C-248：在別份程式剛註冊的新成員，這份快取還沒有他
     const now = Date.now();
     if (p.kind !== 'human' && p.token_expires_at && p.token_expires_at < now) { // 人類登入碼長期有效（C-202）
       throw new ApiError(401, 'TOKEN_EXPIRED', 'Token 已過期，請所屬人類在網頁重新產生');
@@ -1027,6 +1028,7 @@ ${roster}
 ## 十一、工作卡片（事件驅動，不是每則訊息都呼叫）
 - 新工作開新卡：卡片已完成或已封存後，後續改版、新功能請建新卡（或請人重新打開那張），不要把 [接單]／[進度] 掛在已結案的卡上（伺服器會回 warnings 提醒）。
 - 只在這五個時刻更新卡片：① 接下任務（建卡，或把自己負責的卡改「進行中」）；② 受阻或解除（改「受阻」，寫 blocker 與 waitForId）；③ 需要人類拍板（建「決策」卡，deciderId 留白＝${owner.name}，並在群組 @ 他一下）；④ 完成（改「已完成」；不要自己標已驗證，要由別人或別的 AI 驗證）；⑤ 做完自己的段落、要接力給下一位：POST /api/cards/C-xxx/handover 帶 toId 與 note（交接說明），伺服器會在群組 @ 對方，不用另外發訊息（決策卡不能交）。
+- 接單：你是卡片負責人時，發 [接單]（或 [進度]）帶 cardId，伺服器會自動把卡從「待整理／待處理」改成「進行中」（C-317），不用另外 PATCH。
 - 發與某張卡有關的 [接單]／[進度]／[完成]／[受阻] 時，POST /api/messages 請帶 cardId（例如 C-120），訊息才會自動關聯到卡；卡片超過 24 小時沒更新、關聯訊息之後有新進度，網頁會標「可能過時」。
 - 你只能改自己負責的卡。沒人負責（未指派）的待整理／待處理工作卡可以認領：PATCH ownerId=自己；決策卡與別人負責的卡不行。要改別人的卡、或把工作派給別人，用 POST /api/suggestions 提建議，由人類採用。
 - 卡片內容全體成員都看得到，適用與群組訊息相同的環境限制（不貼內部路徑、檔名、程式碼）。
@@ -2519,11 +2521,11 @@ ${trial
   // cardId（選填）：訊息發出時一併關聯到該卡（C-130 待你處理的行內輸入、卡片內回覆用）；一張卡最多 50 則，滿了就略過關聯
   route('POST', '/api/messages', async ({ req, me, ctx }) => {
     const body = await readJson(req);
-    let cardSeq = null, cardClosed = '';
+    let cardSeq = null, cardClosed = '', card = null;
     if (body.cardId !== undefined && body.cardId !== null && body.cardId !== '') {
-      const m = /^C-(\d+)$/.exec(String(body.cardId));
-      cardSeq = m ? Number(m[1]) - 100 : NaN;
-      const card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status FROM cards WHERE seq = ?', cardSeq) : null;
+      const m = /^C-(\d+)$/i.exec(String(body.cardId));
+      cardSeq = m ? Number(m[1]) - 100 : ((await cardSeqByKey(body.cardId)) ?? NaN); // C-310：PLAT-12 也收
+      card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status, owner_id, type FROM cards WHERE seq = ?', cardSeq) : null;
       if (!card) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
       cardClosed = ['已完成', '已封存'].includes(card.status) ? card.status : ''; // C-276
     }
@@ -2533,9 +2535,20 @@ ${trial
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
       if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
     }
+    // C-317：卡片負責人發 [接單]／[進度] 並帶 cardId → 卡還在「待整理／待處理」就自動改「進行中」，看得出有人在做
+    let cardStarted = false;
+    if (card && !r.duplicate && card.owner_id === me.id && ['待整理', '待處理'].includes(card.status) && card.type !== '決策' && /^\s*\[(接單|進度)\]/.test(body.text || '')) {
+      const at = nowIso();
+      await db.batch([
+        ["UPDATE cards SET status = '進行中', version = version + 1, updated_at = ? WHERE seq = ? AND status IN ('待整理', '待處理')", [at, card.seq]],
+        ['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [card.seq, at, me.id, me.kind === 'human' ? '網頁' : 'API', `${me.name} 發了 ${/\[進度\]/.test(body.text) ? '[進度]' : '[接單]'}：狀態 ${card.status} → 進行中`]],
+      ]);
+      teamCache = { at: 0, data: null };
+      cardStarted = true;
+    }
     const warnings = [...(r.warnings || [])];
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`); // C-276
-    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(warnings.length ? { warnings } : {}) };
+    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(warnings.length ? { warnings } : {}) };
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
@@ -2983,7 +2996,7 @@ ${trial
       if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
     }
   }
-  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
+  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 
   // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
   async function scopeTeamMembers(me, members) {
