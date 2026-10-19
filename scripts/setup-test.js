@@ -94,16 +94,17 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     const obPg = await ob(liu.token, pg.participantId);
     const obBank = await ob(liu.token, bank.participantId);
     const obKai = await ob(kang.token, kai.participantId);
-    // C-292 補：本機留著舊 watcher（雜湊不符）要先停、重下一次再核對，不是直接停下回報
-    assert.match(obPg, /已經在但 SHA-256 不符.*先停掉你自己用舊檔在跑的 watcher.*重新下載一次覆蓋再核對.*重下仍不符才停止並回報/, '接入設定：舊 watcher 先重下');
-    assert.ok(!/不符就停止並告訴/.test(obPg), '不再「一不符就停」');
-    // C-311：opencode 用自己固定的對話（-s 編號）、喚醒寫成腳本檔、說明背景常駐；不再叫它用 --continue
-    assert.match(obPg, /opencode run --title "aigile-PG"/, 'opencode：建專用對話');
-    assert.match(obPg, /opencode run -s %SES%/, 'opencode：wake.cmd 用固定對話編號');
-    assert.match(obPg, /WAKE_CMD=\.aigile\\PG\\wake\.cmd/, 'opencode：WAKE_CMD 只指向腳本（Windows 反斜線）');
-    assert.match(obPg, /wake\.log/, 'opencode：輸出寫 wake.log');
-    assert.match(obPg, /工作排程器/, 'opencode：說明背景常駐');
-    assert.ok(!/WAKE_CMD=opencode run --continue/.test(obPg), '不再用 --continue');
+    // C-292 補、C-311：待命細節（C-318 起）寫在規格 3.12，接入設定指過去
+    const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+    assert.match(obPg, /雜湊不符[^\n]*照規格 3\.12/, '接入設定：雜湊不符照規格 3.12');
+    assert.match(spec, /先停掉你自己用舊檔在跑的 watcher[^\n]*重新下載一次[^\n]*重下仍不符才停止並回報/, '規格：舊 watcher 先重下');
+    assert.ok(!/不符就停止並告訴/.test(obPg + spec), '不再「一不符就停」');
+    assert.match(spec, /opencode run --title "aigile-<代號>"/, 'opencode：建專用對話');
+    assert.match(spec, /opencode run -s %SES%/, 'opencode：wake.cmd 用固定對話編號');
+    assert.match(spec, /WAKE_CMD=\.aigile\\<代號>\\wake\.cmd/, 'opencode：WAKE_CMD 只指向腳本（Windows 反斜線）');
+    assert.match(spec, /wake\.log/, 'opencode：輸出寫 wake.log');
+    assert.match(spec, /工作排程器/, 'opencode：說明背景常駐');
+    assert.ok(!/WAKE_CMD=opencode run --continue/.test(obPg + spec), '不再用 --continue');
     // 改成環境行內 → 立刻變空
     await call(liu.token, `/api/my-ais/${pg.participantId}`, 'PATCH', { environment: '行內' });
     assert.deepEqual((await call(pg.token, '/api/me')).body.grants.items, [], '改成行內就失效');
@@ -125,21 +126,21 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     // 5～9. 接入設定
     if (process.argv.includes('--print')) console.log(obPg);
     const nums = sections(obPg);
-    assert.deepEqual(nums, ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四'], '9. 章節不跳號：' + nums.join(','));
+    assert.deepEqual(nums, ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'], '9. 章節不跳號：' + nums.join(','));
     assert.ok(obPg.indexOf('## 零、你是重新接上，還是第一次？') < obPg.indexOf('## 一、'), '5. 最前面是「零、重新接上還是第一次」');
-    assert.match(obPg, /不要重新簽到。游標：有 state\.json 就沿用它的 messagesCursor；沒有 state\.json（例如換了電腦）就用工作記憶（GET \/api\/me\/state）裡的 messagesCursor 接著讀/, 'C-243：零節寫從工作記憶讀回位置');
+    assert.match(obPg, /不要重新簽到；游標沿用 state\.json 的 messagesCursor（換了電腦就用 GET \/api\/me\/state 的 messagesCursor、cardsSince）/, 'C-243：零節寫從工作記憶讀回位置');
     assert.match(obPg, /messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間）/, 'C-243：工作記憶段寫出新欄位');
     assert.match(obPg, /Token 跟 \.aigile\/PG\/\.token 不同才換/);
-    assert.match(obPg, /\.aigile\/PG\/watcher\.pid：檔案在、而且裡面的程序編號還在執行 → 已經有 watcher 在跑，不要再開/, '6. watcher.pid');
-    assert.match(obPg, /刪掉 watcher\.pid/);
+    assert.match(obPg, /watcher\.pid 的程序還在執行就不要再開/, '6. watcher.pid');
+    assert.match(spec, /被強制結束時手動刪掉/);
     assert.match(obPg, /- 平台（血汗勞工平台）\n  - 程式庫：https:\/\/github\.com\/alansid\/multiagent，分支 main\n  - 開工前先確認本機的 git remote 和分支跟這裡一致；不一致先問 劉昱志/, '7. API 代號、程式庫、分支');
     assert.match(obPg, /- 銀行系統（銀行系統）\n  - 沒有填程式庫：需要時問 劉昱志，不要自己猜。/, '7. 沒填寫問所屬人類');
-    assert.match(obPg, /你的專案 API 代號（平台、銀行系統，見第六節）/);
+    assert.match(obPg, /每則都帶 project（平台、銀行系統，或 "all"/);
     assert.match(obPg, /劉昱志 已長期授權（到 \d{4}\/\d\d\/\d\d 為止，到期自動失效）：\n  - 部署到正式環境（自測全過才部署；不含資料庫遷移）\n- 最新授權/, '8. 列出長期授權與到期日');
     assert.match(obPg, /- git commit、push、merge、正式資料庫遷移，以及沒有長期授權（或已到期）的部署，一律先在本機對話取得 劉昱志 明確同意；每次 push 都要重新取得授權/);
     assert.match(obPg, /最新授權以 GET \/api\/me 的 grants 為準/);
     assert.match(obPg, /刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡：不能長期授權/);
-    assert.match(obPg, /本設定第九節與群組規格/, '規則優先順序指到新編號');
+    assert.match(obPg, /本設定第八節與群組規格/, '規則優先順序指到新編號');
     assert.ok(!/銀行系統/.test(obKai), '9. 只列這個 AI 所在的專案');
     assert.match(obKai, /目前沒有長期授權/);
     // 10. 環境不是行外：不出現長期授權段

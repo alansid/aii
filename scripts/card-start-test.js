@@ -68,7 +68,7 @@ try {
 
   // 接入設定補一句
   const ob = (await call(liu.token, `/api/my-ais/${pg.participantId}/onboarding`)).body.text;
-  assert.match(ob, /發 \[接單\]（或 \[進度\]）帶 cardId，伺服器會自動把卡從「待整理／待處理」改成「進行中」/, '接入設定說明接單會改進行中');
+  assert.match(ob, /發 \[接單\]（或 \[進度\]）帶 cardId，伺服器自動把卡改成「進行中」/, '接入設定說明接單會改進行中');
   console.log('card-start-test：全部通過');
 } catch (e) {
   console.error('card-start-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('card-start-test.js')) || '').trim());

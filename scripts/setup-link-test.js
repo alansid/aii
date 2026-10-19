@@ -31,8 +31,8 @@ try {
   const tBa = await text(lba.url), tPg = await text(lpg.url);
   assert.match(tBa.slice(0, 400), /這份設定是給「投信需求分析」/, 'BA 的設定開頭寫明是給 BA');
   assert.match(tPg.slice(0, 400), /這份設定是給「投信程式開發」/, 'PG 的設定開頭寫明是給 PG');
-  assert.match(tPg, /不是「投信程式開發」，就是讀到別的 AI 的檔：停下來/, '身分不符就停');
-  assert.match(tPg, /\.aigile\/PG\/setup\.md 含 Token：存好 \.token 後就刪掉它/, '接完刪掉 setup.md');
+  assert.match(tPg, /名字不是這個，就是讀到別的 AI 的檔：停下來/, '身分不符就停');
+  assert.match(tPg, /\.aigile\/PG\/setup\.md 含 Token，存好 \.token 後就刪掉/, '接完刪掉 setup.md');
   // 連結只能讀一次（照舊）
   assert.equal((await raw(lpg.url.replace('http://localhost', ''))).status, 410, '連結只能讀一次');
 

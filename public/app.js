@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.81.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.82.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
