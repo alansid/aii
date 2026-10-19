@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.72.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.72.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4773,6 +4773,14 @@
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           const { text } = await api(onboardingUrl(ai));
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
+        } else if (b.dataset.act === 'short') { // C-283：3～4 行、不含 Token，連結 15 分鐘、只能讀一次
+          if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
+          const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!autoStandbyConsent } });
+          const text = `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。
+請在 15 分鐘內用 GET 讀下面這個連結，裡面是你的完整接入設定（含 Token），讀完照著做：
+${r.url}
+這個連結只能讀一次；讀不到或已失效，請直接告訴 ${state.me.name}，請他在網頁重按「複製短版接入」。`;
+          toast((await copyText(text)) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'token') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
@@ -4854,6 +4862,7 @@
                <button class="btn" type="button" data-act="edit" data-id="${id}">編輯</button>`
             : `<button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button>
                <button class="btn" type="button" data-act="copy" data-id="${id}">複製完整接入設定</button>
+               <button class="btn" type="button" data-act="short" data-id="${id}" title="貼長設定會當掉的工具用：只有幾行，AI 自己去讀完整設定">複製短版接入</button>
                <button class="btn" type="button" data-act="edit" data-id="${id}">編輯</button>
                <button class="btn" type="button" data-act="reissue" data-id="${id}">重發 Token</button>`}
           <button type="button" class="link push-right" data-act="more" data-id="${id}" aria-expanded="${expanded}">${expanded ? '收合設定' : '詳細設定'}</button>

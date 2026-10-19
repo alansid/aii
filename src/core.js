@@ -2292,6 +2292,30 @@ ${trial
     const consent = ['1', 'true'].includes(url.searchParams.get('autoStandby'));
     return { text: await onboardingText(base, await myAi(me, params.id), { consent }) };
   });
+  // C-283 短版接入：一次性連結（15 分鐘、只能讀一次；重產讓舊的失效）。只存雜湊，不快取、不記內容
+  const OLINK_TTL = 15 * 60_000;
+  route('POST', '/api/my-ais/:id/onboarding-link', async ({ me, params, base, req }) => {
+    requireHuman(me);
+    const ai = await myAi(me, params.id);
+    if (ai.status !== 'active') throw new ApiError(409, 'AI_DISABLED', '這個 AI 已停用，先重新啟用。');
+    if (ai.token_expires_at < Date.now()) throw new ApiError(409, 'TOKEN_EXPIRED', 'Token 已過期，請先按「重發 Token」。');
+    const body = await readJson(req).catch(() => ({}));
+    const secret = newToken(), exp = Date.now() + OLINK_TTL;
+    await setJson('olink:' + ai.id, { h: await sha256(secret), exp, consent: body.autoStandby === true });
+    return { url: `${base}/api/setup/${ai.id}.${secret}`, expiresAt: iso(exp) };
+  });
+  route('GET', '/api/setup/:key', async ({ params, base }) => {
+    const gone = () => new Response('這個接入連結已失效（15 分鐘內、只能讀一次）。請告訴所屬人類，請他在網頁「我的 AI」重按「複製短版接入」。', { status: 410, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    const [aiId, secret] = String(params.key || '').split('.');
+    if (!aiId || !secret || !/^p_[A-Za-z0-9]+$/.test(aiId)) return gone();
+    const rec = await getJson('olink:' + aiId);
+    if (!rec || rec.h !== await sha256(secret) || Date.now() > rec.exp) return gone();
+    // 只能讀一次：刪得掉的那次才給內容（同時兩個請求只有一個拿得到）
+    if ((await db.run('DELETE FROM app_settings WHERE key = ? AND value = ?', 'olink:' + aiId, JSON.stringify(rec))).changes !== 1) return gone();
+    const ai = await db.get('SELECT * FROM participants WHERE id = ?', aiId);
+    if (!ai || ai.kind !== 'ai' || ai.status !== 'active') return gone();
+    return new Response(await onboardingText(base, ai, { consent: !!rec.consent }), { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
+  }, { open: true });
   // ---------- 上傳文件（需求 v1.1） ----------
   const requireStorage = () => {
     if (!storage) throw new ApiError(503, 'FILES_DISABLED', '此環境未啟用上傳文件功能');

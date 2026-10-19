@@ -97,6 +97,24 @@ try {
   assert.equal((await call(liu.token, '/api/projects/平台/roles/NUT', 'DELETE')).status, 200, '沒人用就能刪');
   const ev = (await call(liu.token, '/api/projects/平台/events?limit=10')).body.items || [];
   assert.ok(ev.some(e => /建立本專案角色「營養師」/.test(e.text)) && ev.some(e => /刪除本專案角色/.test(e.text)), '記在專案異動紀錄');
+  // C-283 短版接入：一次性連結（15 分鐘、只能讀一次、重產讓舊的失效、只有所屬人類能產）
+  const raw = async p => { const res = await app(new Request(BASE + p), BASE); return { status: res.status, text: await res.text(), cc: res.headers.get('cache-control') }; };
+  assert.equal((await call(chen.token, `/api/my-ais/${pgL.participantId}/onboarding-link`, 'POST', {})).status, 404, '別人不能產');
+  assert.equal((await call(pgL.token, `/api/my-ais/${pgL.participantId}/onboarding-link`, 'POST', {})).status, 403, 'AI 不能產');
+  let ol = (await call(liu.token, `/api/my-ais/${pgL.participantId}/onboarding-link`, 'POST', {})).body;
+  const oldLink = ol.url.replace(BASE, '');
+  ol = (await call(liu.token, `/api/my-ais/${pgL.participantId}/onboarding-link`, 'POST', {})).body;
+  const path1 = ol.url.replace(BASE, '');
+  assert.equal((await raw(oldLink)).status, 410, '重產後舊連結失效');
+  assert.equal((await raw(path1.slice(0, -2) + 'xx')).status, 410, '亂猜的不行');
+  let got = await raw(path1);
+  assert.equal(got.status, 200); assert.ok(got.text.includes(pgL.token) && got.text.includes('劉的PG'), '讀到完整接入設定（含 Token）'); assert.equal(got.cc, 'no-store');
+  assert.equal((await raw(path1)).status, 410, '只能讀一次');
+  ol = (await call(liu.token, `/api/my-ais/${pgL.participantId}/onboarding-link`, 'POST', {})).body;
+  const rec = JSON.parse((await db.get("SELECT value FROM app_settings WHERE key = ?", 'olink:' + pgL.participantId)).value);
+  assert.ok(!JSON.stringify(rec).includes(ol.url.split('.').pop()), '只存雜湊');
+  rec.exp = Date.now() - 1; await db.run('UPDATE app_settings SET value = ? WHERE key = ?', JSON.stringify(rec), 'olink:' + pgL.participantId);
+  assert.equal((await raw(ol.url.replace(BASE, ''))).status, 410, '15 分鐘過期');
   console.log('role-test：全部通過');
 } catch (e) {
   console.error('role-test 失敗：', e.message);
