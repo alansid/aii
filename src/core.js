@@ -333,6 +333,21 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     if (me.kind !== 'human') throw new ApiError(403, 'FORBIDDEN', '此操作僅限人類成員');
   };
 
+  // C-301：接入連結與 Token 不能貼進群組、卡片、私訊（拿到的人就能冒用那個 AI 或人）
+  // 連結看格式就擋；Token 要真的是某個成員現在的 Token 才擋（AI 存原文、人類裝置存雜湊），一般亂碼不誤擋
+  const SETUP_LINK_RE = /\/api\/setup\/p_[A-Za-z0-9]+\.[A-Za-z0-9_-]{16,}/;
+  const TOKENISH_RE = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,64}(?![A-Za-z0-9_-])/g;
+  async function assertNoSecret(text) {
+    if (!text) return;
+    const leak = what => { throw new ApiError(400, 'SECRET_IN_TEXT', `這是接入用的機密${what}，不要貼群組（卡片、私訊也不行）：拿到的人就能冒用。請直接貼到你的 AI 對話；已經貼出去的話，到「我的 AI」${what === '連結' ? '重按「複製短版接入」讓舊連結失效' : '按「重發 Token」'}。`); };
+    if (SETUP_LINK_RE.test(text)) leak('連結');
+    const cands = [...new Set(text.match(TOKENISH_RE) || [])].slice(0, 20);
+    if (!cands.length) return;
+    if (await db.get('SELECT 1 AS x FROM participants WHERE token IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(cands))) leak('Token');
+    const dv = cands.filter(s => s.startsWith('dv_'));
+    if (dv.length && await db.get('SELECT 1 AS x FROM devices WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(dv.map(s => sha256(s)))))) leak('Token');
+  }
+
   // ---------- 訊息 ----------
   // checkProject：成員發文時檢查收件人是否屬於訊息的專案；伺服器代發的通知不檢查
   async function createMessage(ctx, me, body, { fileId = null, checkProject = false, systemNotice = false } = {}) {
@@ -343,6 +358,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     if (text.includes('\uFFFD') || (me.kind === 'ai' && /\?{4,}/.test(text.replace(/https?:\/\/\S+/g, '')))) {
       throw new ApiError(400, 'INVALID_ENCODING', '內容看起來是亂碼（連續問號或 U+FFFD），請改用 UTF-8 送出，例如 Node fetch 或 curl --data-binary @檔案.json。');
     }
+    if (!systemNotice) await assertNoSecret(text); // C-301
     const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
     if (!requestId || requestId.length > 128) throw invalid('requestId 為必填，長度 1～128');
     if (body.audience !== undefined && body.audience !== null && body.audience !== 'all') throw invalid('audience 只能是 "all"');
@@ -1718,6 +1734,7 @@ ${trial
     const { human, ai } = await dmPair(ctx, me, body.aiId);
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text || text.length > DM_MAX) throw invalid(`text 需為 1～${DM_MAX} 字`);
+    await assertNoSecret(text); // C-301
     const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
     if (!requestId || requestId.length > 128) throw invalid('requestId 為必填，長度 1～128');
     const people = await peopleMap(ctx);
@@ -2804,6 +2821,7 @@ ${trial
   async function cardGuard(path, { me, req, params }) {
     await loadReadOnly();
     const body = req ? await req.clone().json().catch(() => ({})) : {};
+    await assertNoSecret(JSON.stringify(body)); // C-301：卡片各欄位、交接說明、紀錄都不能含接入連結或 Token
     let pj = null;
     if (params?.id && path.startsWith('/api/cards/:id')) {
       const seq = cardSeq(params.id), c = seq !== null ? await db.get('SELECT project FROM cards WHERE seq = ?', seq) : null;

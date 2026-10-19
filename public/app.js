@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.75.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.75.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4888,7 +4888,8 @@
 1. 在終端機執行（15 分鐘內、只能下載一次；Windows PowerShell 請把 curl 換成 curl.exe）：
 curl -s --create-dirs -o .aigile/setup.md "${r.url}"
 2. 讀 .aigile/setup.md，照裡面的步驟接入。這個檔含你的 Token：不要進 git、不要貼到群組。
-下載失敗、或檔案內容寫「已失效」，就告訴 ${state.me.name}，請他在網頁重按「複製短版接入」。`;
+下載失敗（例如 curl 錯誤 7 連不到網路）：Codex 請允許這個指令連網（或在設定開 network_access）；仍連不到就告訴 ${state.me.name}，請他改用「複製完整接入設定」。
+檔案內容寫「已失效」，就請 ${state.me.name} 在網頁重按「複製短版接入」。這段文字與連結都不要貼到群組。`;
           toast((await copyText(text)) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'token') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
