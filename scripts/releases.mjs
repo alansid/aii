@@ -23,7 +23,8 @@ const CARD = /\bC-\d{3,}\b/g;
 const byVer = new Map();
 let last = null;
 for (const line of log) {
-  const [sha, at, subject] = line.split('\x1f');
+  const [sha, rawAt, subject] = line.split('\x1f');
+  const at = new Date(rawAt).toISOString(); // 一律 UTC，才能跟部署時間比較（commit 時間是 +08:00）
   const m = VER.exec(subject);
   const v = m ? (m[1] || m[2]) : last;
   if (!v) continue;
