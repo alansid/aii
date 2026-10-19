@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.72.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.72.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4442,7 +4442,7 @@
 
   // C-182：第一層「我的 AI」頁：名下所有 AI，不分專案
   // ---------- C-281 回報問題＋許願池 ----------
-  const fb = { tab: 'report', shots: [], noCtx: false, wishes: null, reports: null, repAt: 0, repOpen: true, repDone: false, draft: {} };
+  const fb = { tab: 'report', shots: [], wishes: null, reports: null, repAt: 0, repOpen: true, repDone: false, draft: {} };
   const FB_INSIDE = () => ['行內', '投信'].includes(state.me?.environment);
   const fbIsOpen = () => !!$('#fb-panel') && !$('#fb-panel').hidden;
   function fbPanel(open) {
@@ -4474,7 +4474,6 @@
     const tabs = `<div class="fb-tabs" role="tablist" aria-label="回報或許願"><button type="button" role="tab" data-fb-tab="report" aria-selected="${fb.tab === 'report'}">🐞 回報問題</button><button type="button" role="tab" data-fb-tab="wish" aria-selected="${fb.tab === 'wish'}">✨ 許個願</button></div>`;
     const d = fb.draft;
     if (fb.tab === 'report') {
-      const c = fbContext();
       box.innerHTML = tabs + `<form class="fb-form" id="fb-report" novalidate>
         <label>哪裡怪怪的？（一句話）<input id="fb-title" maxlength="100" required placeholder="例：手機按送出沒反應" value="${esc(d.title || '')}"></label>
         <label>發生什麼（選填）<textarea id="fb-detail" rows="3" maxlength="2000" placeholder="我做了什麼、預期看到什麼…">${esc(d.detail || '')}</textarea></label>
@@ -4483,7 +4482,6 @@
         <input type="file" id="fb-file" accept="image/png,image/jpeg,image/webp" multiple hidden>
         ${fb.shots.length ? `<div class="fb-shots">${fb.shots.map((s, i) => `<span class="fb-shot"><img src="${s.url}" alt="截圖 ${i + 1}"><button type="button" class="icon-btn" data-fb-unshot="${i}" aria-label="拿掉截圖 ${i + 1}">×</button></span>`).join('')}</div>` : ''}
         ${FB_INSIDE() ? `<div class="fb-warn">⚠ 不要貼內部資料、程式碼、客戶個資<label class="chk"><input type="checkbox" id="fb-declare"${d.declared ? ' checked' : ''}> 我確認截圖不含以上內容</label></div>` : ''}
-        <div class="fb-auto">${fb.noCtx ? '<b>不帶頁面、裝置等資料</b>（只送標題、說明、截圖）' : `<b>會一起送出：</b>所在頁面（${esc(c.page)}）· 版本 v${esc(c.version)} · ${esc(c.device)} · ${esc(c.at)} · 最近錯誤代碼（${esc(c.errorCode || '沒有')}）`}<br><button type="button" class="link small" data-fb-ctx>${fb.noCtx ? '還是帶這些 ›' : '不要帶這些 ›'}</button></div>
         <button type="submit" class="btn primary fb-send">送出回報</button>
         <p class="muted small">送出後只有平台團隊看得到；不會另外通知你進度。</p></form>`;
     } else {
@@ -4561,7 +4559,7 @@
     const btn = $('#fb-report .fb-send'); btn.disabled = true;
     try {
       const pv = projectView();
-      const r = await api('/api/reports', { method: 'POST', body: { title, detail: d.detail || '', project: PROJECTS.includes(pv) ? pv : undefined, context: fb.noCtx ? { at: new Date().toLocaleString('zh-TW', { hour12: false }) } : fbContext() } });
+      const r = await api('/api/reports', { method: 'POST', body: { title, detail: d.detail || '', project: PROJECTS.includes(pv) ? pv : undefined, context: fbContext() } }); // C-281 退回：頁面、版本、裝置、時間、錯誤代碼照樣自動附上，面板不列出
       let failed = 0;
       for (const s of fb.shots) {
         const res = await fetch(`/api/reports/${encodeURIComponent(r.reportId)}/shots${FB_INSIDE() ? '?declared=1' : ''}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': s.blob.type || 'image/webp' }, body: s.blob }).catch(() => null);
@@ -4696,7 +4694,6 @@
     if (t.closest?.('#fb-drop')) return $('#fb-file')?.click();
     const un = t.closest?.('[data-fb-unshot]');
     if (un) { fbKeep(); const [s] = fb.shots.splice(Number(un.dataset.fbUnshot), 1); if (s) URL.revokeObjectURL(s.url); return drawFb(); }
-    if (t.closest?.('[data-fb-ctx]')) { fbKeep(); fb.noCtx = !fb.noCtx; return drawFb(); }
     const wv = t.closest?.('[data-wish-vote]');
     if (wv) return voteWish(wv.dataset.wishVote);
     const we = t.closest?.('[data-wish-edit]');
