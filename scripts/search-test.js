@@ -57,9 +57,27 @@ try {
   }
   // 專案篩選
   assert.ok((await call(liu.token, `/api/search/messages?q=${q('藍莓')}&project=${q('平台')}`)).body.items.every(m => m.project === '平台'), '可限定專案');
+
+  // C-312：讀取上限。每類最多 20 筆；卡片搜尋至少 2 字；每人每分鐘最多 10 次（一次 Enter＝卡片＋訊息兩支）
+  const chen = (await call(null, '/api/join', 'POST', { name: '陳昭宇', role: 'PG' })).body;
+  await call(liu.token, `/api/participants/${chen.participant.participantId}/projects`, 'PUT', { projects: ['平台'] });
+  for (let i = 1; i <= 25; i++) await call(liu.token, '/api/cards', 'POST', { requestId: 'k' + i, project: '平台', title: `草莓任務 ${i}` });
+  for (let i = 1; i <= 25; i++) await msg(liu.token, '平台', `草莓訊息 ${i}`);
+  const hit = async () => [await call(chen.token, `/api/cards?q=${q('草莓')}&limit=100`), await call(chen.token, `/api/search/messages?q=${q('草莓')}&limit=50`)];
+  let [c1, m1] = await hit();
+  assert.equal(c1.status, 200); assert.ok(c1.body.items.length <= 20, `卡片最多 20 筆（${c1.body.items.length}）`);
+  assert.equal(m1.status, 200); assert.ok(m1.body.items.length <= 20, `訊息最多 20 筆（${m1.body.items.length}）`);
+  assert.equal((await call(chen.token, `/api/cards?q=${q('草')}`)).status, 400, '卡片搜尋至少 2 字');
+  for (let i = 2; i <= 10; i++) { const [c, m] = await hit(); assert.equal(c.status + m.status, 400, `第 ${i} 次還可以`); }
+  [c1, m1] = await hit();
+  assert.equal(c1.status, 429, '第 11 次擋下'); assert.equal(c1.body.error.code, 'SEARCH_LIMIT');
+  assert.match(c1.body.error.message, /每人每分鐘最多 10 次/);
+  assert.equal(m1.status, 429, '訊息搜尋也擋');
+  assert.equal((await call(liu.token, `/api/search/messages?q=${q('草莓')}`)).status, 200, '別人不受影響');
+  assert.equal((await call(chen.token, '/api/cards?limit=5')).status, 200, '一般卡片列表不受影響');
   console.log('search-test：全部通過');
 } catch (e) {
-  console.error('search-test 失敗：', e.message);
+  console.error('search-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('search-test.js')) || '').trim());
   process.exitCode = 1;
 } finally {
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}

@@ -58,7 +58,7 @@ export async function teamCards(db) {
   return { work, open, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, createMessage, isolatedFrom, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, searchQuota = () => {}, createMessage, isolatedFrom, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // C-144：卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
@@ -217,7 +217,7 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
 
   route('GET', '/api/cards', async ({ ctx, me, url }) => {
     await maybeArchive();
-    const q = url.searchParams, limit = parseLimit(url, 100, 200);
+    const q = url.searchParams, limit = (q.get('q') || '').trim() ? Math.min(parseLimit(url, 100, 200), 20) : parseLimit(url, 100, 200); // C-312：有關鍵字最多 20 筆
     const offset = Math.max(0, Math.min(Number.parseInt(q.get('offset') || '0', 10) || 0, 100_000)); // C-161：已封存分頁
     const where = [], args = [];
     const status = q.get('status');
@@ -232,6 +232,10 @@ export function registerCards({ route, createMessage, isolatedFrom, projectName 
     if (pf) { where.push(pf.sql); args.push(...pf.args); }
     if (isolatedFrom(me)) { const mine = projectsOf(me); where.push(mine.length ? `project IN (${mine.map(() => '?').join(',')})` : '1 = 0'); args.push(...mine); }
     const kw = (q.get('q') || '').trim();
+    if (kw && me.kind === 'human') { // C-312：網頁頂欄搜尋卡片：至少 2 字、算進每人每分鐘上限、最多 20 筆
+      if ([...kw].length < 2) throw invalid('搜尋至少 2 個字');
+      searchQuota(me);
+    }
     if (kw) { where.push("(title LIKE ? ESCAPE '\\' OR next LIKE ? ESCAPE '\\')"); const like = `%${kw.replace(/[%_\\]/g, m => '\\' + m)}%`; args.push(like, like); }
     const rows = await db.all(`SELECT * FROM cards ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC, seq DESC LIMIT ? OFFSET ?`, ...args, limit + 1, offset);
     const hasMore = rows.length > limit;

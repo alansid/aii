@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.79.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.79.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -6457,8 +6457,8 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const ps = people.status === 'fulfilled' ? people.value.filter(p => inViewPerson(p.participantId) && [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(ql))).slice(0, 10) : null;
     const sec = (title, list, row, err) => `<section class="sr-sec"><h3>${title}${list ? ` <span class="muted small">${list.length}${list.length >= 10 && title !== '訊息' ? '+' : ''}</span>` : ''}</h3>${
       !list ? `<p class="muted small">${err}</p>` : list.length ? list.map(row).join('') : '<p class="muted small">沒有符合的。</p>'}</section>`;
-    res.innerHTML = sec('卡片', cs, c => `<button type="button" class="sr-row" data-sr-card="${esc(c.cardId)}"><span class="sr-k">${esc(c.cardId)}</span><span class="sr-t">${markHit(c.title, q)}</span><span class="sr-m muted small">${esc(c.status)}${c.project ? ' · ' + esc(projName(c.project)) : ''}</span></button>`, '卡片搜尋失敗，請再按一次 Enter。')
-      + sec('訊息', ms, m => `<button type="button" class="sr-row" data-sr-msg="${esc(m.messageId)}" data-sr-pj="${esc(m.project || '')}"><span class="sr-k">${esc(m.author?.name || '?')}</span><span class="sr-t">${snippet(m.text, q)}</span><span class="sr-m muted small">${esc(fmtTime(m.createdAt).slice(0, -3))}${m.project ? ' · ' + esc(projName(m.project)) : ''}</span></button>`, '訊息搜尋失敗，請再按一次 Enter。')
+    res.innerHTML = sec('卡片', cs, c => `<button type="button" class="sr-row" data-sr-card="${esc(c.cardId)}"><span class="sr-k">${esc(c.cardId)}</span><span class="sr-t">${markHit(c.title, q)}</span><span class="sr-m muted small">${esc(c.status)}${c.project ? ' · ' + esc(projName(c.project)) : ''}</span></button>`, esc(cards.reason?.message || '卡片搜尋失敗，請再按一次 Enter。'))
+      + sec('訊息', ms, m => `<button type="button" class="sr-row" data-sr-msg="${esc(m.messageId)}" data-sr-pj="${esc(m.project || '')}"><span class="sr-k">${esc(m.author?.name || '?')}</span><span class="sr-t">${snippet(m.text, q)}</span><span class="sr-m muted small">${esc(fmtTime(m.createdAt).slice(0, -3))}${m.project ? ' · ' + esc(projName(m.project)) : ''}</span></button>`, esc(msgs.reason?.message || '訊息搜尋失敗，請再按一次 Enter。'))
       + sec('成員', ps, p => `<button type="button" class="sr-row" data-sr-person="${esc(p.name)}">${avatarDot(p)}<span class="sr-t">${markHit(p.name, q)}</span><span class="sr-m muted small">${esc(p.role || '')}${p.memberType === 'ai' && p.ownerName ? ' · 所屬 ' + esc(p.ownerName) : ''}</span></button>`, '成員載入失敗。');
   }
   document.addEventListener('submit', e => {
