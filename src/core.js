@@ -1030,7 +1030,7 @@ ${trial
       readOnlyIn: roList(me, await loadReadOnly()), // C-294：在這些專案只能看
       isOnline: true,
       expiresAt: iso(me.token_expires_at),
-      ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId } : {}),
+      ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId, prefs: await prefsOf(me) } : {}), // C-298：個人偏好（風格）記在帳號
       // C-229：長期授權（到期或環境不是行外＝空的）與所在專案的程式庫
       ...(me.kind === 'ai' ? { settings: settingsOf(me), grants: await grantsOf(me), repos: await reposOf(me) } : {}),
     };
@@ -1186,6 +1186,16 @@ ${trial
 
   // ---------- C-229 專案程式庫連結（repo:<專案id>）與 AI 長期授權（grants:<AI id>），都存在 app_settings ----------
   const setJson = (key, v) => db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, JSON.stringify(v));
+  // C-298：個人偏好（目前只有風格 a 清爽／b 深色側欄／c 溫暖柔和），存在 app_settings 的 prefs:<id>
+  const STYLES = ['a', 'b', 'c'];
+  async function prefsOf(me) { const p = await getJson('prefs:' + me.id).catch(() => null); return { style: STYLES.includes(p?.style) ? p.style : 'a' }; }
+  route('PUT', '/api/me/prefs', async ({ me, req }) => {
+    requireHuman(me);
+    const body = await readJson(req);
+    if (!STYLES.includes(body.style)) throw invalid('style 需為 a（清爽）、b（深色側欄）、c（溫暖柔和）');
+    await setJson('prefs:' + me.id, { style: body.style });
+    return { prefs: await prefsOf(me) };
+  });
   async function getJson(key) {
     const r = await db.get('SELECT value FROM app_settings WHERE key = ?', key).catch(() => null);
     try { return r ? JSON.parse(r.value) : null; } catch { return null; }
@@ -2358,6 +2368,18 @@ ${trial
   });
 
   route('GET', '/api/messages', ({ ctx, url, me }) => listMessages(ctx, url, me));
+  // C-298：頂欄搜尋訊息（按 Enter 才查一次）。看得到的範圍跟訊息列表一樣；只查最近 5000 則，控制資料庫讀取量
+  route('GET', '/api/search/messages', async ({ ctx, url, me }) => {
+    const kw = (url.searchParams.get('q') || '').trim();
+    if (kw.length < 2 || kw.length > 50) throw invalid('q 需為 2～50 字');
+    const limit = parseLimit(url, 20, 50);
+    const pf = projectFilter(url.searchParams.get('project'), me), scope = await messageScope(me);
+    const where = (pf ? ` AND ${pf.sql}` : '') + (scope ? ` AND ${scope.sql}` : ''), args = [...(pf ? pf.args : []), ...(scope ? scope.args : [])];
+    const top = (await db.get('SELECT COALESCE(MAX(seq), 0) AS s FROM messages')).s;
+    const like = '%' + kw.replace(/[%_\\]/g, m => '\\' + m) + '%';
+    const rows = await db.all(`SELECT * FROM messages WHERE seq > ? AND text LIKE ? ESCAPE '\\'${where} ORDER BY seq DESC LIMIT ?`, top - 5000, like, ...args, limit + 1);
+    return { items: await serializeMessages(ctx, rows.slice(0, limit)), hasMore: rows.length > limit, scanned: Math.min(top, 5000) };
+  });
   route('GET', '/api/messages/:id/around', async ({ ctx, me, params, url }) => {
     const m = await db.get('SELECT * FROM messages WHERE id = ?', params.id);
     if (!m || !(await canSeeMessage(me, m))) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');

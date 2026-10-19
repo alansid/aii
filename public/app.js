@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.76.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.77.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -109,6 +109,15 @@
     else delete document.documentElement.dataset.theme;
   }
   applyTheme(store.get(THEME_KEY));
+  // C-298：風格 a 清爽（預設）／b 深色側欄／c 溫暖柔和。以帳號為準；這台裝置先記著，開頁不會閃一下
+  const STYLE_KEY = 'aigile-switch-style';
+  const STYLE_OPTS = [['a', '清爽', '白底藍色（預設）'], ['b', '深色側欄', '側欄深色、內容白底'], ['c', '溫暖柔和', '米色暖調、圓角大一點']];
+  function applyStyle(s) {
+    if (s === 'b' || s === 'c') document.documentElement.dataset.style = s;
+    else delete document.documentElement.dataset.style;
+  }
+  applyStyle(store.get(STYLE_KEY));
+  const rememberStyle = s => { applyStyle(s); if (s === 'b' || s === 'c') store.set(STYLE_KEY, s); else store.del(STYLE_KEY); };
 
   // 文字頭像：AI 用角色代碼（PO、PG…），自訂角色取角色名前兩字；人類取名字第一個字
   // 自訂頭像文字優先，否則用預設
@@ -449,6 +458,7 @@
         state.me = await api('/api/me');
       } catch {}
     }
+    rememberStyle(state.me.prefs?.style || 'a'); // C-298：帳號上的風格
     $('#join').hidden = true; // C-195：主畫面等資料載完才顯示（先留在「載入中」）
     drawMe();
     // C-240：專案、成員、訊息同時抓（原本一支等一支，每支都要等資料庫）
@@ -6380,6 +6390,62 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
     const body = openModal(onlyPj ? '跟哪個 AI 討論新角色？' : '請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: onlyPj ? `在「${projName(onlyPj)}」的私訊跟它討論，它會送角色提案卡` : '會打開跟它的私訊，幫你先打好開頭' });
     body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });
   }
+  // ---------- C-298：頂欄搜尋（卡片、訊息、成員），按 Enter 才查一次 ----------
+  const findAt = (s, q) => String(s || '').toLowerCase().indexOf(q.toLowerCase());
+  function markHit(s, q) { // 把第一個符合的字標起來（先切段再跳脫，不用正規式）
+    s = String(s || ''); const i = findAt(s, q);
+    return i < 0 ? esc(s) : `${esc(s.slice(0, i))}<mark>${esc(s.slice(i, i + q.length))}</mark>${esc(s.slice(i + q.length))}`;
+  }
+  function snippet(s, q, n = 90) {
+    s = String(s || '').replace(/\s+/g, ' '); const i = Math.max(0, findAt(s, q));
+    const a = Math.max(0, i - 30), part = s.slice(a, a + n);
+    return (a ? '…' : '') + markHit(part, q) + (a + n < s.length ? '…' : '');
+  }
+  function searchForm(q = '') {
+    return `<form class="search-modal-form" data-search-form role="search"><input type="search" name="q" value="${esc(q)}" maxlength="50" enterkeyhint="search" autocomplete="off" placeholder="搜尋卡片、訊息、成員" aria-label="搜尋卡片、訊息、成員（按 Enter 搜尋）"></form>`;
+  }
+  function openSearch(q = '') {
+    openModal('搜尋', `${searchForm(q)}<div id="search-res" class="search-res"><p class="muted small">輸入至少 2 個字，按 Enter 搜尋。訊息只找最近 5000 則。</p></div>`);
+  }
+  async function runSearch(q) {
+    if ([...q].length < 2) { toast('請輸入至少 2 個字'); return; }
+    const top = $('.topbar [data-search-form] input'); if (top) top.value = q;
+    const body = openModal('搜尋', `${searchForm(q)}<div id="search-res" class="search-res" aria-live="polite"><p class="muted">搜尋中…</p></div>`);
+    const ql = q.toLowerCase();
+    const [cards, msgs, people] = await Promise.allSettled([
+      api(`/api/cards?q=${encodeURIComponent(q)}&limit=10`),
+      api(`/api/search/messages?q=${encodeURIComponent(q)}&limit=20`),
+      loadParticipants(),
+    ]);
+    const res = body.querySelector('#search-res'); if (!res) return;
+    const cs = cards.status === 'fulfilled' ? cards.value.items || [] : null;
+    const ms = msgs.status === 'fulfilled' ? msgs.value.items || [] : null;
+    const ps = people.status === 'fulfilled' ? people.value.filter(p => inViewPerson(p.participantId) && [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(ql))).slice(0, 10) : null;
+    const sec = (title, list, row, err) => `<section class="sr-sec"><h3>${title}${list ? ` <span class="muted small">${list.length}${list.length >= 10 && title !== '訊息' ? '+' : ''}</span>` : ''}</h3>${
+      !list ? `<p class="muted small">${err}</p>` : list.length ? list.map(row).join('') : '<p class="muted small">沒有符合的。</p>'}</section>`;
+    res.innerHTML = sec('卡片', cs, c => `<button type="button" class="sr-row" data-sr-card="${esc(c.cardId)}"><span class="sr-k">${esc(c.cardId)}</span><span class="sr-t">${markHit(c.title, q)}</span><span class="sr-m muted small">${esc(c.status)}${c.project ? ' · ' + esc(projName(c.project)) : ''}</span></button>`, '卡片搜尋失敗，請再按一次 Enter。')
+      + sec('訊息', ms, m => `<button type="button" class="sr-row" data-sr-msg="${esc(m.messageId)}" data-sr-pj="${esc(m.project || '')}"><span class="sr-k">${esc(m.author?.name || '?')}</span><span class="sr-t">${snippet(m.text, q)}</span><span class="sr-m muted small">${esc(fmtTime(m.createdAt).slice(0, -3))}${m.project ? ' · ' + esc(projName(m.project)) : ''}</span></button>`, '訊息搜尋失敗，請再按一次 Enter。')
+      + sec('成員', ps, p => `<button type="button" class="sr-row" data-sr-person="${esc(p.name)}">${avatarDot(p)}<span class="sr-t">${markHit(p.name, q)}</span><span class="sr-m muted small">${esc(p.role || '')}${p.memberType === 'ai' && p.ownerName ? ' · 所屬 ' + esc(p.ownerName) : ''}</span></button>`, '成員載入失敗。');
+  }
+  document.addEventListener('submit', e => {
+    const f = e.target.closest?.('[data-search-form]'); if (!f) return;
+    e.preventDefault(); runSearch(f.q.value.trim());
+  });
+  document.addEventListener('click', async e => {
+    if (e.target.closest?.('[data-search-open]')) return openSearch($('.topbar [data-search-form] input')?.value || '');
+    const c = e.target.closest?.('[data-sr-card]'), m = e.target.closest?.('[data-sr-msg]'), p = e.target.closest?.('[data-sr-person]');
+    if (c) { closeModal(); return openCard(c.dataset.srCard); }
+    if (m) {
+      closeModal();
+      const pj = m.dataset.srPj, target = pj && myProjects().includes(pj) ? pj : 'cross';
+      if (hasHub() && (projectView() !== target || state.page !== 'messages')) await setProjectView(target, 'messages');
+      return jumpTo(m.dataset.srMsg);
+    }
+    if (p) {
+      closeModal(); await openMembers();
+      const i = $('#member-q'); if (i) { i.value = p.dataset.srPerson; i.dispatchEvent(new Event('input')); }
+    }
+  });
   document.addEventListener('click', e => { const b = e.target.closest?.('[data-set-open]'); if (!b) return; closeModal(); return b.dataset.setOpen === 'devices' ? openDevices() : openApi(); }); // C-298：從個人設定進
   function openSettings(opts = {}) {
     const theme = store.get(THEME_KEY) || 'system';
@@ -6388,6 +6454,11 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
         <div class="seg-scope full" role="group" aria-labelledby="theme-label">
           ${[['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']].map(([k, t]) => `<button type="button" data-theme-opt="${k}" aria-pressed="${theme === k}">${t}</button>`).join('')}
         </div></div>
+      <div class="field"><span class="field-label" id="style-label">風格</span>
+        <div class="style-opts" role="group" aria-labelledby="style-label">
+          ${STYLE_OPTS.map(([k, t, d]) => `<button type="button" class="style-opt" data-style-opt="${k}" aria-pressed="${(state.me?.prefs?.style || 'a') === k}"><span class="style-sw sw-${k}" aria-hidden="true"><i></i><i></i><i></i></span><b>${t}</b><span class="muted small">${d}</span></button>`).join('')}
+        </div>
+        <span class="muted small">記在你的帳號，換裝置也一樣；淺色、深色都能用。</span></div>
       <div class="avatar-row">
         <span class="av-56" id="set-avatar">${avatar(state.me)}</span>
         <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
@@ -6447,6 +6518,17 @@ curl -s --create-dirs -o .aigile/setup.md "${r.url}"
       if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);
       applyTheme(v);
       body.querySelectorAll('[data-theme-opt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    }));
+    body.querySelectorAll('[data-style-opt]').forEach(b => b.addEventListener('click', async () => { // C-298：換風格，存在帳號
+      const v = b.dataset.styleOpt, prev = state.me?.prefs?.style || 'a';
+      if (v === prev) return;
+      const mark = s => body.querySelectorAll('[data-style-opt]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.styleOpt === s)));
+      rememberStyle(v); mark(v);
+      try {
+        const r = await api('/api/me/prefs', { method: 'PUT', body: { style: v } });
+        state.me = { ...state.me, prefs: r.prefs };
+        toast(`已換成「${STYLE_OPTS.find(o => o[0] === v)[1]}」風格`);
+      } catch (err) { rememberStyle(prev); mark(prev); toast(err.message); }
     }));
     const sw = body.querySelector('#set-mine');
     sw.onclick = () => {

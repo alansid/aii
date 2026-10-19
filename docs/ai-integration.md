@@ -124,6 +124,8 @@ C-259：有標「要回覆／知會」的訊息，`replyFrom` 是要回覆的人
 }
 ```
 
+- 搜尋（C-298）：`GET /api/search/messages?q=<2～50 字>&limit=20&project=<選填>` 依關鍵字找訊息（新的在前），看得到的範圍跟訊息列表一樣，只找最近 5000 則；卡片用 `GET /api/cards?q=`。不要拿來輪詢。
+
 ### 3.5 `GET /api/messages/:messageId` — 單則訊息
 收到通知後，用 `messageId`（或 `replyToMessageId`）讀完整原文與上下文。
 

@@ -2478,3 +2478,77 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
 .av-ico { width: 20px; text-align: center; flex: none; }
 .av-group { padding: 2px 12px 0; font-size: .72rem; color: var(--muted); }
 .set-links .row { gap: 8px; flex-wrap: wrap; }
+
+/* C-298 第二批：頂欄搜尋 */
+.tb-search { position: relative; flex: 0 1 300px; margin: 0 12px; }
+.tb-search input { height: 36px; padding: 0 12px 0 34px; border-radius: 18px; background: var(--surface-2); border-color: transparent; font-size: 14px; }
+.tb-search input:focus { background: var(--surface); border-color: var(--primary); }
+.tb-search-ico { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; opacity: .7; pointer-events: none; }
+.search-modal-form { margin-bottom: 12px; }
+.search-res { display: grid; gap: 14px; }
+.sr-sec h3 { margin: 0 0 6px; font-size: .9rem; }
+.sr-row { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; align-items: center; padding: 8px 10px; border-radius: 8px; }
+.sr-row:hover, .sr-row:focus-visible { background: var(--surface-2); outline: none; }
+.sr-row:focus-visible { box-shadow: inset 0 0 0 2px var(--primary); }
+.sr-k { font-weight: 600; font-size: .85rem; white-space: nowrap; }
+.sr-t { min-width: 0; overflow-wrap: anywhere; }
+.sr-m { grid-column: 2; }
+.sr-row mark { background: var(--mine-bg); color: inherit; border-radius: 3px; padding: 0 1px; }
+
+/* C-298 第二批：個人設定的風格選擇 */
+.style-opts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.style-opt { all: unset; box-sizing: border-box; cursor: pointer; display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.style-opt b { font-size: .9rem; }
+.style-opt[aria-pressed="true"] { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.style-opt:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.style-sw { display: grid; grid-template-columns: 1fr 2fr; grid-template-rows: 1fr 1fr; height: 40px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.style-sw i:nth-child(1) { grid-row: 1 / span 2; }
+.sw-a i:nth-child(1) { background: #e9edf4; } .sw-a i:nth-child(2) { background: #f5f7fb; } .sw-a i:nth-child(3) { background: #2563eb; }
+.sw-b i:nth-child(1) { background: #0f172a; } .sw-b i:nth-child(2) { background: #f5f7fb; } .sw-b i:nth-child(3) { background: #3b82f6; }
+.sw-c i:nth-child(1) { background: #efe7da; } .sw-c i:nth-child(2) { background: #f7f3ec; } .sw-c i:nth-child(3) { background: #c2622d; }
+@media (max-width: 480px) { .style-opts { grid-template-columns: 1fr; } .style-opt { grid-template-columns: 72px 1fr; align-items: center; } .style-opt .muted { grid-column: 2; } .style-sw { grid-row: 1 / span 2; } }
+
+/* 側欄裡的總覽清單跟著側欄配色（三種風格都適用） */
+.sidebar .hs-head, .sidebar .hs-muted { color: var(--sb-muted); }
+.sidebar .hs-add { color: var(--sb-active); }
+.sidebar .hs-item:hover { background: color-mix(in srgb, var(--sb-text) 8%, transparent); }
+.sidebar .hs-item.on { background: color-mix(in srgb, var(--sb-active) 16%, transparent); color: var(--sb-active); }
+
+/* C-298 風格 B：深色側欄（淺色模式側欄也深色；深色模式側欄再深一階） */
+:root[data-style="b"] { --sb-bg: #0f172a; --sb-card: #1e293b; --sb-line: #1e293b; --sb-text: #e5e7eb; --sb-muted: #94a3b8; --sb-active: #93c5fd; --sb-bar: #60a5fa; --sb-danger: #fca5a5; --sb-on: #4ade80; --sb-warn: #fbbf24; --sb-off: #9ca3af; }
+@media (prefers-color-scheme: dark) { :root[data-style="b"]:not([data-theme="light"]) { --sb-bg: #070b14; --sb-card: #131c2e; --sb-line: #1a2336; } }
+:root[data-style="b"][data-theme="dark"] { --sb-bg: #070b14; --sb-card: #131c2e; --sb-line: #1a2336; }
+:root[data-style="b"] .sidebar input, :root[data-style="b"] .sidebar select { background: var(--sb-card); color: var(--sb-text); border-color: var(--sb-line); }
+
+/* C-298 風格 C：溫暖柔和（米色暖調、陶土色主色、圓角大一點） */
+:root[data-style="c"] {
+  --bg: #f7f3ec; --surface: #fffdf9; --surface-2: #f3ede3; --border: #e6dccd;
+  --text: #2b2118; --muted: #76685a; --primary: #c2622d; --primary-text: #ffffff;
+  --human-bg: #fbe9dc; --human-text: #9a4a1c; --human-border: #f3cdb3; --mention: #b4541f; --quote-bg: #f3e8d6;
+  --radius: 16px; --shadow: 0 10px 30px rgba(68, 44, 20, .16);
+  --sb-bg: #efe7da; --sb-card: #fffaf2; --sb-line: #e0d4c2; --sb-text: #3a2c20; --sb-muted: #7a6a59; --sb-active: #b4541f; --sb-bar: #c2622d;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-style="c"]:not([data-theme="light"]) {
+    --bg: #1a1612; --surface: #231e19; --surface-2: #2d2620; --border: #3d342b;
+    --text: #f2ebe2; --muted: #b3a595; --primary: #e08a55; --primary-text: #1a1209;
+    --human-bg: #3a2618; --human-text: #f4b98f; --human-border: #5a3a24; --mention: #f4b98f; --quote-bg: #2e2619;
+    --shadow: 0 10px 30px rgba(0, 0, 0, .5);
+    --sb-bg: #15110d; --sb-card: #231e19; --sb-line: #3d342b; --sb-text: #efe6db; --sb-muted: #a89887; --sb-active: #f4b98f; --sb-bar: #e08a55;
+  }
+}
+:root[data-style="c"][data-theme="dark"] {
+  --bg: #1a1612; --surface: #231e19; --surface-2: #2d2620; --border: #3d342b;
+  --text: #f2ebe2; --muted: #b3a595; --primary: #e08a55; --primary-text: #1a1209;
+  --human-bg: #3a2618; --human-text: #f4b98f; --human-border: #5a3a24; --mention: #f4b98f; --quote-bg: #2e2619;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  --sb-bg: #15110d; --sb-card: #231e19; --sb-line: #3d342b; --sb-text: #efe6db; --sb-muted: #a89887; --sb-active: #f4b98f; --sb-bar: #e08a55;
+}
+:root[data-style="c"] .hub-card, :root[data-style="c"] .modal { border-radius: 16px; }
+:root[data-style="c"] .btn { border-radius: 10px; }
+/* 風格 C：蓋掉寫死的藍色（自己的訊息底色、送出鈕停用、標記鈕） */
+:root[data-style="c"] .msg.mine { background: #fffaf3; border-color: #eedfcc; }
+@media (prefers-color-scheme: dark) { :root[data-style="c"]:not([data-theme="light"]) .msg.mine { background: var(--surface); border-color: var(--human-border); } }
+:root[data-style="c"][data-theme="dark"] .msg.mine { background: var(--surface); border-color: var(--human-border); }
+:root[data-style="c"] .composer-tools .send:disabled { background: color-mix(in srgb, var(--primary) 35%, var(--surface)); border-color: transparent; color: var(--surface); }
+:root[data-style="c"] .composer-tools .tag-btn.on { border-color: var(--human-border); background: var(--human-bg); color: var(--human-text); }
