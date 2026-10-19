@@ -1157,10 +1157,10 @@ ${trial
     await loadProjects(true);
     const people = await peopleMap(ctx);
     const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status NOT IN ('已完成','已封存') GROUP BY project")).map(r => [r.project, r.n]));
-    const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(); // C-280
+    const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(), slugs = await slugMap(); // C-280、C-285
     await loadProjectRoles();
     const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
-    return projectRows.map(r => ({ id: r.id, name: r.name, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229
+    return projectRows.map(r => ({ id: r.id, name: r.name, slug: slugs[r.id], archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229；C-285 網址英文名
       roles: (rdefs[r.id] || []).map(d => ({ ...d, createdByName: people.get(d.createdBy)?.name || null, inUse: inUse(r.id, d) })), // C-280 本專案角色
       dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null }, // C-270
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id)).length,
@@ -1476,6 +1476,29 @@ ${trial
     return projectsResponse(ctx);
   });
   // C-270：私訊開關；管理員與該專案 leader 能改。關掉後舊私訊雙方仍看得到、不能再送
+  // C-285：網址用的英文名（/p/platform/messages）；只改網址，API 的 project 代號照舊。平台→platform、銀行系統→bank，其他預設用代號
+  const SLUG_DEFAULT = { '平台': 'platform', '銀行系統': 'bank' };
+  const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,39}$/;
+  async function slugMap() {
+    const set = {};
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'slug:%'").catch(() => [])) set[r.key.slice(5)] = r.value;
+    return Object.fromEntries(projectRows.map(r => [r.id, set[r.id] || SLUG_DEFAULT[r.id] || r.id]));
+  }
+  route('PUT', '/api/projects/:id/slug', async ({ ctx, me, req, params }) => {
+    await requireAdmin(ctx, me, '改專案的網址英文名');
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    const slug = String((await readJson(req)).slug ?? '').trim().toLowerCase();
+    if (!SLUG_RE.test(slug)) throw invalid('網址英文名需為 2～40 個英文小寫、數字或 -（開頭不能是 -）');
+    if (['cross', 'p', 'api', 'hub'].includes(slug)) throw invalid(`「${slug}」是保留字`);
+    const all = await slugMap();
+    const clash = projectRows.find(r => r.id !== row.id && (all[r.id] === slug || r.id.toLowerCase() === slug));
+    if (clash) throw new ApiError(409, 'SLUG_TAKEN', `「${slug}」已經是「${clash.name}」在用的網址名`);
+    const at = nowIso();
+    await db.batch([["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['slug:' + row.id, slug]], projEvent(row.id, me.id, `${me.name} 把網址英文名改成 ${slug}`, at)]);
+    return projectsResponse(ctx);
+  });
   route('PUT', '/api/projects/:id/dm', async ({ ctx, me, req, params }) => {
     requireHuman(me);
     await loadProjects(true);

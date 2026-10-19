@@ -115,6 +115,16 @@ try {
   assert.ok(!JSON.stringify(rec).includes(ol.url.split('.').pop()), '只存雜湊');
   rec.exp = Date.now() - 1; await db.run('UPDATE app_settings SET value = ? WHERE key = ?', JSON.stringify(rec), 'olink:' + pgL.participantId);
   assert.equal((await raw(ol.url.replace(BASE, ''))).status, 410, '15 分鐘過期');
+  // C-285 網址英文名：平台→platform、銀行系統→bank；只有管理員能改、不能重複、API 代號不變
+  let pr = await call(liu.token, '/api/projects');
+  assert.equal(pr.body.items.find(p => p.id === '平台').slug, 'platform'); assert.equal(pr.body.items.find(p => p.id === '銀行系統').slug, 'bank');
+  assert.equal((await call(chen.token, '/api/projects/平台/slug', 'PUT', { slug: 'plat' })).status, 403, 'leader 不能改，只有管理員');
+  assert.equal((await call(liu.token, '/api/projects/平台/slug', 'PUT', { slug: '平台' })).status, 400, '只能英數與 -');
+  assert.equal((await call(liu.token, '/api/projects/平台/slug', 'PUT', { slug: 'bank' })).status, 409, '不能跟別的專案重複');
+  assert.equal((await call(liu.token, '/api/projects/平台/slug', 'PUT', { slug: 'cross' })).status, 400, '保留字');
+  pr = await call(liu.token, '/api/projects/平台/slug', 'PUT', { slug: 'Plat-2' });
+  assert.equal(pr.body.items.find(p => p.id === '平台').slug, 'plat-2', '轉小寫');
+  assert.equal(pr.body.items.find(p => p.id === '平台').id, '平台', 'API 代號不變');
   console.log('role-test：全部通過');
 } catch (e) {
   console.error('role-test 失敗：', e.message);

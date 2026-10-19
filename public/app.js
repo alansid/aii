@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.72.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.72.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -1102,7 +1102,7 @@
   function parseRoute() {
     const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
     const page = x => (PAGE_SLUG[x] || x === 'dm' ? x : PAGE_BY_NAME[x] || null);
-    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.id === seg[1]) || state.projectList.find(x => x.name === seg[1]); if (p && page(seg[2]) === 'dm') { state.dmAi = seg[3] || null; state.dmOpenOnBoot = true; } return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
+    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.slug === seg[1]) || state.projectList.find(x => x.id === seg[1]) || state.projectList.find(x => x.name === seg[1]); if (p && page(seg[2]) === 'dm') { state.dmAi = seg[3] || null; state.dmOpenOnBoot = true; } return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
     if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
     if (seg[0] === 'members') return { view: null, page: 'perm' };
@@ -1113,7 +1113,7 @@
     if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     const v = projectView();
     if (v === 'hub') return '/';
-    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(v)}/${PAGE_SLUG[state.page] || 'messages'}`;
+    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/${PAGE_SLUG[state.page] || 'messages'}`; // C-285 網址英文名
   }
   function syncUrl(replace) {
     const u = routePath();
@@ -5850,6 +5850,7 @@ ${r.url}
         : p.archived ? '<span class="muted">—</span>' : `<span class="pm-sub">未填 · </span><button type="button" class="link small" data-pm-repo="${esc(p.id)}">設定</button>`;
       const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
           <button type="button" role="menuitem" data-pp="rename">改名</button>
+          <button type="button" role="menuitem" data-pp="slug">網址英文名…<span class="pm-sub">/p/${esc(p.slug || p.id)}</span></button>
           <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">程式庫設定</button>
           <button type="button" role="menuitem" data-pp="dm">${p.dm?.on ? '關閉私訊…' : '開放成員私訊自己的 AI…'}<span class="pm-sub">${p.dm?.on ? `已開放${p.dm.at ? ' · ' + esc(mmdd(p.dm.at)) : ''}${p.dm.byName ? ' ' + esc(p.dm.byName) + ' 打開' : ''}` : '預設關'}</span></button>
           <button type="button" role="menuitem" data-pp="log">異動紀錄</button>
@@ -6126,6 +6127,13 @@ ${r.url}
         const name = await promptName('改專案名稱', projName(id));
         if (!name || name === projName(id)) return;
         await api(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } });
+      } else if (a === 'slug') { // C-285
+        const cur = state.projectList.find(p => p.id === id)?.slug || id;
+        const slug = await promptName('網址英文名', cur, { label: '英文小寫、數字或 -（例：platform）', max: 40, hint: `網址會變成 /p/${'<英文名>'}/messages；API 與 AI 接入設定的專案代號不變（${id}），舊網址照樣能開。` });
+        if (!slug || slug === cur) return;
+        await api(`/api/projects/${encodeURIComponent(id)}/slug`, { method: 'PUT', body: { slug } });
+        if (projectView() === id) setTimeout(() => syncUrl(true), 0);
+        toast(`網址改成 /p/${slug.toLowerCase()}/…`);
       } else if (a === 'archive') {
         if (pp.getAttribute('aria-disabled') === 'true') { drawPerm(); return toast(pp.title); }
         if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(id))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以還原。` })) return;
@@ -6169,11 +6177,11 @@ ${r.url}
     }
     drawPerm();
   });
-  function promptName(title, value) {
+  function promptName(title, value, { label = '專案名稱', max = 20, hint = '' } = {}) {
     return new Promise(resolve => {
       const host = document.createElement('div');
       host.className = 'confirm-root';
-      host.innerHTML = modalFrame({ title, size: 'narrow', body: `<label class="field"><span class="field-label">專案名稱</span><input id="pn-input" maxlength="20" value="${esc(value)}"></label>`,
+      host.innerHTML = modalFrame({ title, size: 'narrow', body: `<label class="field"><span class="field-label">${esc(label)}</span><input id="pn-input" maxlength="${max}" value="${esc(value)}">${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</label>`,
         foot: '<button class="btn" type="button" data-pn="0">取消</button><button class="btn primary" type="button" data-pn="1">確定</button>' });
       document.body.appendChild(host);
       const input = host.querySelector('#pn-input');
