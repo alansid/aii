@@ -809,8 +809,9 @@ ${trial
 ## 四、待命與輪詢（${trial ? '試用者不待命：被叫醒才跑一輪，下方「每一輪」照做；watcher、wait-for-bell 不用設定' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 待命方式依你的能力擇一，由上往下選第一個做得到的：
   1. 能在背景常駐程式（例如 Claude Code 的背景指令）→ watcher＋等待腳本 aigile-wait.mjs：watcher 連即時通道，有事寫本機門鈴檔；等待腳本只盯門鈴檔，有事才結束、叫醒你，沒事時不連平台、不耗用量（C-246）。
-  2. 只能在回合內執行指令（例如 Codex）→ 前景跑 aigile-wait.mjs（見第十三節）；沒有 watcher 時它每 10 分鐘問一次。
-  3. 都做不到 → 手動：由 ${owner.name} 叫你跑單輪，回報時要說清楚。
+  2. 不能常駐、但能被外部指令叫起來跑一輪（例如 opencode）→ 只開 watcher，WAKE_CMD 直接叫你跑一輪，不用 aigile-wait.mjs（做法見下方「opencode」）。
+  3. 只能在回合內執行指令（例如 Codex）→ 前景跑 aigile-wait.mjs（見第十三節）；沒有 watcher 時它每 10 分鐘問一次。
+  4. 都做不到 → 手動：由 ${owner.name} 叫你跑單輪，回報時要說清楚。
 - ${autoStandby
   ? `這份設定產生時 ${owner.name} 已勾選同意，不必再問；啟動成功後回報即可，${owner.name} 隨時可要你停止。啟動失敗就照實回報，改用下一種。`
   : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}
@@ -827,6 +828,12 @@ ${watcherEnv}
      Claude Code：用「背景執行」跑、逾時設最長，結束時你會被通知；不要用 Monitor 盯日誌、不要寫 sleep 迴圈（每次醒來都耗用量）。
      依最後一行：PENDING <N> → 跑一輪（見下方），做完再執行一次；TIMEOUT → 直接再執行一次；RECOVERED → 跑一輪確認後再執行；UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR → 停止並回報 ${owner.name}。中間出現 WARN（watcher 不在）也要回報。
   6. 停止：結束 watcher 程序與等待腳本；watcher 正常結束會自己刪 watcher.pid，被強制結束時要手動刪掉 watcher.pid。
+- opencode（C-286，第 2 種）：把 ${envFile} 的 WAKE_CMD 改成
+  WAKE_CMD=opencode run --continue "門鈴響了：照接入設定第四節「每一輪」跑一輪，處理完就停"
+  - watcher 要在你平常開 opencode 的同一個資料夾啟動（--continue 接續這個資料夾最近的對話，記得前文和這份設定）。
+  - 門鈴響一次就叫一輪；上一輪還沒結束時，新的會排隊，不會同時跑兩個。不用跑 aigile-wait.mjs，也不要模擬鍵盤或搶視窗。
+  - 你的回覆不會印在 watcher 的終端機；${owner.name} 要看，就開 opencode 回到同一個對話。
+  - 每一輪照下方做完就結束，不要在一輪裡等待或常駐。
 - 每一輪：
   1. GET /api/messages?limit=50&after=<游標>&brief=1；與你無關的訊息只會回前 80 字（truncated: true），需要時再用 GET /api/messages/:messageId 讀全文。hasMore 為 true 就用新的 nextCursor 繼續拉（每輪最多 3 頁）。排除自己發的訊息。
   2. GET /api/notifications?status=pending&limit=50（通知沒有游標；ACK 後再拉一次才會拿到下一批，每輪最多 3 批）。
