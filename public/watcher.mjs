@@ -49,7 +49,16 @@ const bell = { v: 1, seq: 0, pending: 0, bellAt: null, heartbeatAt: null, pid: p
 function writeBell(patch = {}) {
   if (!BELL_FILE) return;
   Object.assign(bell, patch, { heartbeatAt: new Date().toISOString(), pid: process.pid });
-  try { writeFileSync(BELL_FILE + '.tmp', JSON.stringify(bell)); renameSync(BELL_FILE + '.tmp', BELL_FILE); }
+  const text = JSON.stringify(bell);
+  try { writeFileSync(BELL_FILE + '.tmp', text); } catch (e) { return log('寫門鈴檔失敗：', e.message); }
+  // C-295：Windows 上門鈴檔正被讀（等待腳本、防毒）時，rename 會回 EPERM／EBUSY：稍等重試，還是不行就直接覆寫，不放棄
+  for (let i = 0; i < 5; i++) {
+    try { renameSync(BELL_FILE + '.tmp', BELL_FILE); return; } catch (e) {
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
+    }
+  }
+  try { writeFileSync(BELL_FILE, text); try { unlinkSync(BELL_FILE + '.tmp'); } catch {} }
   catch (e) { log('寫門鈴檔失敗：', e.message); }
 }
 function ring(pending) { writeBell({ seq: bell.seq + 1, pending, bellAt: new Date().toISOString() }); }

@@ -67,7 +67,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = 'c2d084da3168de098a89d89d0aafd753c2965dfd0691a8762a18f75f0a503201';
+  const WATCHER_SHA256 = '73e6728b9154f3f3c47d35cb15b31fd612d452e476f26f91ecdba9373ea40358';
   const WAIT_SHA256 = '5b8c92808bf06616cf06448457ef729802e11a4a89eb3a5092e1c02ee2351bd9'; // C-246 等待腳本
   const defer = config.defer || (p => p);
   function ringDoorbell(ids, at) {

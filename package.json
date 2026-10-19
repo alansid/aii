@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.74.1",
+  "version": "0.74.2",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -56,6 +56,7 @@
     "deploy": "node scripts/releases.mjs --deployed && npx wrangler@4 deploy",
     "test:releases": "node scripts/releases-test.js",
     "test:cross": "node scripts/cross-test.js",
-    "test:readonly": "node scripts/readonly-test.js"
+    "test:readonly": "node scripts/readonly-test.js",
+    "test:bell": "node scripts/bell-test.js"
   }
 }
