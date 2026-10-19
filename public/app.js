@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.79.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.80.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -647,13 +647,20 @@
     return lead + html.split(/(\bhttps?:\/\/[^\s<]+)/).map((part, i) => i % 2
       ? `<a href="${part}" target="_blank" rel="noopener">${part}</a>`
       : part.replace(/\b[0-9a-f]{40}\b/g, h => `<button type="button" class="sha" data-sha="${h}" title="${h}（點一下複製）">${h.slice(0, 7)}</button>`)
-        .replace(/\bC-\d{3,}\b/g, capsuleHtml)).join('');
+        .replace(/\b(?:C-\d{3,}|[A-Z]{2,5}-\d+)\b/g, m => (/^C-/.test(m) ? capsuleHtml(m) : keyToId(m) ? capsuleHtml(keyToId(m)) : m))).join(''); // C-310
   }
   // 訊息內的 C-xxx 轉成膠囊：卡號＋狀態文字（不只靠顏色）；清單載入後找不到的卡號灰字不可點
+  // C-310：卡號顯示成「專案代號-號碼」（PLAT-12）；C-xxx 留在提示裡、程式內部照舊用 C-xxx
+  const ckey = id => work.cards.get(id)?.key || id;
+  let keyIdx = null, keyIdxAt = 0;
+  function keyToId(k) {
+    if (!keyIdx || keyIdxAt !== work.cards.size) { keyIdx = new Map([...work.cards.values()].filter(c => c.key).map(c => [c.key, c.cardId])); keyIdxAt = work.cards.size; }
+    return keyIdx.get(k) || null;
+  }
   function capsuleHtml(id) {
     const c = work.cards.get(id);
     if (!c) return work.loaded ? `<button type="button" class="cap cap-miss" data-cap="${id}" title="點一下查看">${id}</button>` : id; // C-181：點了再問伺服器（別專案／已封存／不存在）
-    return `<button type="button" class="cap" data-cap="${id}" data-st="${esc(c.status)}">${id}<i class="cdot" aria-hidden="true"></i>${esc(c.status)}</button>`;
+    return `<button type="button" class="cap" data-cap="${id}" data-st="${esc(c.status)}" title="${esc(c.key ? `${c.key}（${id}）` : id)}">${esc(ckey(id))}<i class="cdot" aria-hidden="true"></i>${esc(c.status)}</button>`;
   }
 
   // 第二行：AI 寫成「角色 · AI · 所屬人 · 所在環境」
@@ -854,7 +861,7 @@
     for (const m of shown) if (state.grpHidden.has(m.replyToMessageId)) state.kids?.delete(m.messageId); // C-271：原訊息被收起的回覆不縮排（不然像接在組標題下）
     const title = c ? cardTitle(c) : '';
     return `<section class="cgrp" aria-label="${esc(`卡片 ${cid}${title ? ' ' + title : ''}，${msgs.length} 則訊息`)}">
-      <button type="button" class="cg-head" data-cap="${cid}"><span class="cg-dot ${c ? ST_DOT[c.status] || 'todo' : 'todo'}" aria-hidden="true"></span><b>${cid}</b><span class="cg-title">${esc(title)}</span><span class="cg-meta">${c ? esc(c.status) + ' · ' : ''}${msgs.length} 則 ›</span></button>
+      <button type="button" class="cg-head" data-cap="${cid}"><span class="cg-dot ${c ? ST_DOT[c.status] || 'todo' : 'todo'}" aria-hidden="true"></span><b>${esc(ckey(cid))}</b><span class="cg-title">${esc(title)}</span><span class="cg-meta">${c ? esc(c.status) + ' · ' : ''}${msgs.length} 則 ›</span></button>
       ${many ? `<button type="button" class="cg-more" data-grp-open="${esc(key)}">展開較早 ${msgs.length - 3} 則</button>` : ''}
       ${shown.map(m => groupMsgHtml(m, ids)).join('')}
       <button type="button" class="cg-reply" data-grp-reply="${esc(msgs[msgs.length - 1].messageId)}">回覆這張卡…</button>
@@ -892,9 +899,9 @@
     if (!id) return '';
     const c = work.cards.get(id); // 卡名從已載入的卡片清單拿，不多查伺服器；沒載到只顯示卡號
     const title = c ? `<span class="cr-title">${esc(c.title)}</span>` : '';
-    if (!own) return `<button type="button" class="cardref cr-reply" data-cap="${id}" aria-label="${esc(`回覆 ${id} ${c?.title || ''}，打開卡片`)}"><span aria-hidden="true">↳</span> 回覆 <b>${id}</b>${title}</button>`;
-    if (own === prevCard) return `<button type="button" class="cardref cr-same" data-cap="${id}" aria-label="${esc(`同一張卡 ${id}，打開卡片`)}">${id}</button>`; // 連續同一張卡只第一則完整
-    return `<button type="button" class="cardref" data-cap="${id}" aria-label="${esc(`${id} ${c?.title || ''} ${c?.status || ''}，打開卡片`)}"><span aria-hidden="true">🗂</span><b>${id}</b>${title}${c ? `<span class="cr-st">${esc(c.status)} ›</span>` : ''}</button>`;
+    if (!own) return `<button type="button" class="cardref cr-reply" data-cap="${id}" aria-label="${esc(`回覆 ${id} ${c?.title || ''}，打開卡片`)}"><span aria-hidden="true">↳</span> 回覆 <b>${esc(ckey(id))}</b>${title}</button>`;
+    if (own === prevCard) return `<button type="button" class="cardref cr-same" data-cap="${id}" aria-label="${esc(`同一張卡 ${ckey(id)}，打開卡片`)}">${esc(ckey(id))}</button>`; // 連續同一張卡只第一則完整
+    return `<button type="button" class="cardref" data-cap="${id}" aria-label="${esc(`${id} ${c?.title || ''} ${c?.status || ''}，打開卡片`)}"><span aria-hidden="true">🗂</span><b>${esc(ckey(id))}</b>${title}${c ? `<span class="cr-st">${esc(c.status)} ›</span>` : ''}</button>`;
   }
   // ---------- C-260 AI 訊息：白話結論在前、細節收合 ----------
   // 去掉開頭的 [標籤]、【專案名】、交接的「C-xxx 卡名 → @誰：」；第一段（第一個空行前）當結論，沒有空行就前兩行
@@ -2120,7 +2127,7 @@
   const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
   const NOTE = '人類紀錄'; // C-218：人類記內容，AI 不主動看到（給卡號才讀）
   const typeTag = c => (c.type !== '工作' && c.type !== NOTE ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
-  const cidHtml = c => `<span class="cid">${c.type === NOTE ? '<span aria-label="人類紀錄">🔒</span> ' : ''}${esc(c.cardId)}</span>`;
+  const cidHtml = c => `<span class="cid" title="${esc(c.key ? `${c.key}（${c.cardId}）` : c.cardId)}">${c.type === NOTE ? '<span aria-label="人類紀錄">🔒</span> ' : ''}${esc(c.key || c.cardId)}</span>`; // C-310
   const mergedHtml = c => (c.mergedInto ? `<button type="button" class="merged-into" data-card="${esc(c.mergedInto)}">已整理 · 已整理到 ${esc(c.mergedInto)}</button>` : '');
   // C-226：人類紀錄只有「收集中」「已整理」兩種狀態
   const noteStText = c => (c.status === '已完成' ? '已整理' : c.status === '已封存' ? '已封存' : '收集中');
@@ -2703,7 +2710,7 @@
     const archMore = work.filter === '已封存' && work.archived.hasMore ? `<button type="button" class="btn small" data-arch-more ${work.archived.loading ? 'disabled' : ''}>再載入 50 張</button>` : '';
     const sa = work.archSearch, archHits = work.q.trim() && sa.q === work.q.trim() && work.filter !== '已封存' ? sa.items.filter(c => !listed.some(x => x.cardId === c.cardId)) : [];
     const archGroup = archHits.length ? `<div class="arch-group"><button type="button" class="arch-group-head" data-arch-toggle aria-expanded="${sa.open}">已封存 ${archHits.length}（${sa.open ? '點一下收合' : '收合中，點開'}）${sa.open ? '▴' : '▾'}</button>
-        ${sa.open ? archHits.map(c => `<button type="button" class="crow arch" data-card="${esc(c.cardId)}"><span class="cid">${esc(c.cardId)}</span><span class="crow-main"><span class="crow-title">${cardPTag(c)} ${esc(cardTitle(c))}</span></span><span class="crow-st">${archTag(c)}</span></button>`).join('') : ''}</div>` : '';
+        ${sa.open ? archHits.map(c => `<button type="button" class="crow arch" data-card="${esc(c.cardId)}">${cidHtml(c)}<span class="crow-main"><span class="crow-title">${cardPTag(c)} ${esc(cardTitle(c))}</span></span><span class="crow-st">${archTag(c)}</span></button>`).join('') : ''}</div>` : '';
     const decSection = decisionSectionHtml(decideMe);
     return `
       ${decSection}
@@ -2738,7 +2745,7 @@
       <section class="wdecisions"><div class="wdec-head"><h3>等你決定</h3><span class="wcount ora">${decideMe.length}</span></div>
         <div class="dgrid">${decideMe.map(c => `
           <article class="dcard" data-dcard="${esc(c.cardId)}">
-            <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span><span class="cid">${esc(c.cardId)}</span><span class="grow"></span>
+            <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span>${cidHtml(c)}<span class="grow"></span>
               <button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
             <h4>${esc(c.decision.question)}</h4>
             ${decisionBox(c)}
@@ -2957,7 +2964,7 @@
         <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
         ${mergedHtml(c)}
       </div>`;
-    const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}"><span class="cid">${esc(c.cardId)}</span><span class="cmini-t">${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
+    const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}">${cidHtml(c)}<span class="cmini-t">${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
     const archFoot = work.archived.count ? `<button type="button" class="bfoot" data-show-archived>更早完成的 ${work.archived.count} 張已收進「已封存」· 查看</button>` : '';
     const colBody = (st, list) => {
       if (st === '已完成') {
@@ -3363,7 +3370,7 @@
       ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
       <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
-          <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
+          <div class="drawer-titles">${cidHtml(d)}${d.key ? `<span class="cid-alt muted small">${esc(d.cardId)}</span>` : ''}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
           <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
         </div>
@@ -6047,6 +6054,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
           <button type="button" role="menuitem" data-pp="rename">改名</button>
           <button type="button" role="menuitem" data-pp="slug">網址英文名…<span class="pm-sub">/p/${esc(p.slug || p.id)}</span></button>
+          <button type="button" role="menuitem" data-pp="code">專案代號…<span class="pm-sub">${esc(p.code || '')}-1、${esc(p.code || '')}-2…</span></button>
           <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">程式庫設定</button>
           <button type="button" role="menuitem" data-pp="dm">${p.dm?.on ? '關閉私訊…' : '開放成員私訊自己的 AI…'}<span class="pm-sub">${p.dm?.on ? `已開放${p.dm.at ? ' · ' + esc(mmdd(p.dm.at)) : ''}${p.dm.byName ? ' ' + esc(p.dm.byName) + ' 打開' : ''}` : '預設關'}</span></button>
           <button type="button" role="menuitem" data-pp="log">異動紀錄</button>
@@ -6343,6 +6351,13 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
         if (!pj || pj === fbPj()) return;
         await api('/api/settings/feedback-project', { method: 'PUT', body: { project: pj } });
         toast(`回報改送到「${projName(pj)}」`);
+      } else if (a === 'code') { // C-310
+        const cur = state.projectList.find(p => p.id === id)?.code || '';
+        const code = await promptName('專案代號', cur, { label: '2～5 個英文字母（例：PLAT）', max: 5, hint: `卡片會顯示成 ${'<代號>'}-12；改了以後舊的代號號就找不到，但 C-xxx 永遠可用。` });
+        if (!code || code.toUpperCase() === cur) return;
+        await api(`/api/projects/${encodeURIComponent(id)}/code`, { method: 'PUT', body: { code } });
+        await loadCards().catch(() => {}); renderWork();
+        toast(`專案代號改成 ${code.toUpperCase()}`);
       } else if (a === 'slug') { // C-285
         const cur = state.projectList.find(p => p.id === id)?.slug || id;
         const slug = await promptName('網址英文名', cur, { label: '英文小寫、數字或 -（例：platform）', max: 40, hint: `網址會變成 /p/${'<英文名>'}/messages；API 與 AI 接入設定的專案代號不變（${id}），舊網址照樣能開。` });

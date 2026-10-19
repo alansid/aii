@@ -126,7 +126,35 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     }
     PROJECTS.length = 0;
     PROJECTS.push(...projectRows.filter(r => !r.archived).map(r => r.id));
+    await loadCodes();
     projectsAt = Date.now();
+  }
+  // C-310：專案代號（2～5 個英文大寫，卡片顯示 PLAT-12）。設定存 app_settings 的 pcode:<專案>；沒設就取網址英文名的字母
+  const CODE_RE = /^[A-Z]{2,5}$/;
+  let projCodes = {};
+  async function loadCodes() {
+    const set = {}, slugs = {};
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'pcode:%' OR key LIKE 'slug:%'").catch(() => [])) (r.key.startsWith('pcode:') ? set : slugs)[r.key.slice(r.key.indexOf(':') + 1)] = r.value;
+    const out = {}, used = new Set(Object.values(set));
+    projectRows.forEach((r, i) => {
+      if (CODE_RE.test(set[r.id] || '')) { out[r.id] = set[r.id]; return; }
+      const slug = slugs[r.id] || { '平台': 'platform', '銀行系統': 'bank' }[r.id] || '';
+      const letters = slug.replace(/[^a-z]/gi, '').toUpperCase();
+      let code = letters.length >= 2 ? letters.slice(0, 4) : 'PJ' + String.fromCharCode(65 + (i % 26));
+      for (let k = 0; used.has(code) && k < 26; k++) code = code.slice(0, 4) + String.fromCharCode(65 + k);
+      used.add(code); out[r.id] = code;
+    });
+    projCodes = out;
+  }
+  const cardKey = c => (c && c.proj_no && projCodes[c.project] ? `${projCodes[c.project]}-${c.proj_no}` : null);
+  // PLAT-12 → 卡片 seq；找不到回 null（C-xxx 照舊由各路由自己解析）
+  async function cardSeqByKey(id) {
+    const m = /^([A-Za-z]{2,5})-(\d+)$/.exec(String(id || '').trim());
+    if (!m || /^C$/i.test(m[1])) return null;
+    await loadProjects();
+    const pj = Object.keys(projCodes).find(k => projCodes[k] === m[1].toUpperCase());
+    if (!pj) return null;
+    return (await db.get('SELECT seq FROM cards WHERE project = ? AND proj_no = ?', pj, Number(m[2])))?.seq ?? null;
   }
   const invalidateProjects = () => { projectsAt = 0; };
   // 成員所屬專案：欄位是空字串＝沒有任何專案（只看得到「全部專案」）；沒有欄位值（舊資料）＝所有專案
@@ -1283,7 +1311,7 @@ ${trial
     const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(), slugs = await slugMap(); // C-280、C-285
     await loadProjectRoles();
     const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
-    return projectRows.map(r => ({ id: r.id, name: r.name, slug: slugs[r.id], archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229；C-285 網址英文名
+    return projectRows.map(r => ({ id: r.id, name: r.name, slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229；C-285 網址英文名
       roles: (rdefs[r.id] || []).map(d => ({ ...d, createdByName: people.get(d.createdBy)?.name || null, inUse: inUse(r.id, d) })), // C-280 本專案角色
       dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null }, // C-270
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id)).length,
@@ -1592,12 +1620,15 @@ ${trial
   };
   route('POST', '/api/projects', async ({ ctx, me, req }) => {
     await requireAdmin(ctx, me);
-    const name = readProjectName((await readJson(req)).name);
+    const body = await readJson(req);
+    const name = readProjectName(body.name);
     await loadProjects(true);
     if (projectRows.some(r => !r.archived && r.name === name)) throw new ApiError(409, 'NAME_TAKEN', '已有同名的專案');
+    const code = body.code ? readCode(body.code, null) : null; // C-310
     const id = randId('prj'), at = nowIso();
     await loadCrossRoles();
     const stmts = [['INSERT INTO projects (id, name, archived, created_by, created_at) VALUES (?,?,0,?,?)', [id, name, me.id, at]], projEvent(id, me.id, `${me.name} 建立專案`, at)];
+    if (code) stmts.push(["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['pcode:' + id, code]]);
     // 新專案只含建立者＋目前的跨專案角色（C-221：不一定是 PO、SM，可在成員與權限開關）；其他人由管理員在專案成員勾選加入
     for (const p of (await peopleMap(ctx)).values()) {
       if (p.kind === 'system' || p.status !== 'active' || !(p.id === me.id || crossRole(p))) continue;
@@ -1655,6 +1686,26 @@ ${trial
     const at = nowIso();
     await db.batch([["INSERT INTO app_settings (key, value) VALUES ('feedback_project', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [pj]], projEvent(pj, me.id, `${me.name} 設為回報收件專案`, at)]);
     await loadFbProject(true);
+    return projectsResponse(ctx);
+  });
+  // C-310：專案代號（卡片顯示 PLAT-12）；管理員可改；改了舊代號號就失效（C-xxx 永遠可用）
+  function readCode(raw, selfId) {
+    const code = String(raw ?? '').trim().toUpperCase();
+    if (!CODE_RE.test(code)) throw invalid('專案代號需為 2～5 個英文字母');
+    const clash = projectRows.find(r => r.id !== selfId && projCodes[r.id] === code);
+    if (clash) throw new ApiError(409, 'CODE_TAKEN', `「${code}」已經是「${clash.name}」的代號`);
+    return code;
+  }
+  route('PUT', '/api/projects/:id/code', async ({ ctx, me, req, params }) => {
+    await requireAdmin(ctx, me, '改專案代號');
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === params.id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    const code = readCode((await readJson(req)).code, row.id);
+    if (code === projCodes[row.id]) return projectsResponse(ctx);
+    const at = nowIso();
+    await db.batch([["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['pcode:' + row.id, code]], projEvent(row.id, me.id, `${me.name} 把專案代號改成 ${code}`, at)]);
+    invalidateProjects();
     return projectsResponse(ctx);
   });
   route('PUT', '/api/projects/:id/slug', async ({ ctx, me, req, params }) => {
@@ -2866,6 +2917,11 @@ ${trial
     groupName, humanTtlMs: HUMAN_TOKEN_TTL_MS, failLimit: Number(config.authFailLimit) || 10 });
   // C-294：卡片的寫入一律先擋唯讀（不用改 cards.js 每條路由）
   const cardRoute = (method, path, handler, opts) => route(method, path, async args => {
+    if (args.params?.id && /^[A-Za-z]{2,5}-\d+$/.test(args.params.id) && !/^C-\d+$/i.test(args.params.id)) { // C-310：專案代號號也收
+      const seq = await cardSeqByKey(args.params.id);
+      if (seq === null) throw new ApiError(404, 'NOT_FOUND', `找不到卡片 ${args.params.id}`);
+      args.params.id = `C-${seq + 100}`;
+    }
     if (method !== 'GET' && args.me) await cardGuard(path, args);
     return handler(args);
   }, opts);
@@ -2888,7 +2944,7 @@ ${trial
       if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
     }
   }
-  registerCards({ route: cardRoute, searchQuota, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
+  registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours: config.cardStaleHours });
 
   // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
   async function scopeTeamMembers(me, members) {

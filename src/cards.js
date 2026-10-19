@@ -58,7 +58,7 @@ export async function teamCards(db) {
   return { work, open, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, searchQuota = () => {}, createMessage, isolatedFrom, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, isolatedFrom, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // C-144：卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
@@ -78,7 +78,7 @@ export function registerCards({ route, searchQuota = () => {}, createMessage, is
   const mark = (people, by, at) => (by ? { by: ref(people, by), at } : null);
 
   const view = (c, people) => ({
-    cardId: cardNo(c.seq), type: c.type, project: c.project, title: c.title, reason: c.reason, status: c.status,
+    cardId: cardNo(c.seq), key: cardKey(c), type: c.type, project: c.project, title: c.title, reason: c.reason, status: c.status, // C-310：key＝專案代號號（PLAT-12）
     owner: ref(people, c.owner_id), next: c.next, blocker: c.blocker, waitFor: ref(people, c.wait_for_id), criteria: c.criteria,
     createdBy: ref(people, c.created_by), createdAt: c.created_at, updatedAt: c.updated_at, version: c.version,
     done: mark(people, c.done_by, c.done_at), verified: mark(people, c.verified_by, c.verified_at),
@@ -150,6 +150,8 @@ export function registerCards({ route, searchQuota = () => {}, createMessage, is
   const decisionFields = c => (c.type === '決策' ? c : null);
 
   // me 有給時套用 C-146 A 隔離：不屬於卡片專案的成員視為找不到
+  // C-310：新卡在所屬專案拿下一個號（先寫 NULL 再補，唯一索引不會撞）
+  const assignProjNo = uid => db.run('UPDATE cards SET proj_no = (SELECT COALESCE(MAX(c2.proj_no), 0) + 1 FROM cards c2 WHERE c2.project = cards.project) WHERE uid = ? AND proj_no IS NULL', uid);
   async function load(no, me = null) {
     const c = await db.get('SELECT * FROM cards WHERE seq = ?', parseNo(no));
     if (!c) throw notFound();
@@ -236,7 +238,9 @@ export function registerCards({ route, searchQuota = () => {}, createMessage, is
       if ([...kw].length < 2) throw invalid('搜尋至少 2 個字');
       searchQuota(me);
     }
-    if (kw) { where.push("(title LIKE ? ESCAPE '\\' OR next LIKE ? ESCAPE '\\')"); const like = `%${kw.replace(/[%_\\]/g, m => '\\' + m)}%`; args.push(like, like); }
+    // C-310：打卡號（PLAT-12 或 C-212）也找得到那張
+    const kwSeq = !kw ? null : (await cardSeqByKey(kw)) ?? (/^C-\d+$/i.test(kw) ? Number(kw.slice(2)) - 100 : null);
+    if (kw) { where.push(`(title LIKE ? ESCAPE '\\' OR next LIKE ? ESCAPE '\\'${kwSeq !== null ? ' OR seq = ?' : ''})`); const like = `%${kw.replace(/[%_\\]/g, m => '\\' + m)}%`; args.push(like, like, ...(kwSeq !== null ? [kwSeq] : [])); }
     const rows = await db.all(`SELECT * FROM cards ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY updated_at DESC, seq DESC LIMIT ? OFFSET ?`, ...args, limit + 1, offset);
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit);
@@ -336,6 +340,7 @@ export function registerCards({ route, searchQuota = () => {}, createMessage, is
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, type, title, text(body, 'reason') ?? '', owner, status, text(body, 'next') ?? '', text(body, 'blocker') ?? '',
       waitFor, text(body, 'criteria') ?? '', me.id, requestId, at, at,
       dec.decider_id, dec.proposer_id, dec.question, dec.recommendation, dec.options, dec.impact, dec.after_next, project);
+    await assignProjNo(uid); // C-310
     const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
     await db.batch([
       ...logStmt(c.seq, me, [`建立卡片（類型：${type}）`, ...(type === '決策' ? [`等 ${people.get(dec.decider_id)?.name} 決定`] : [])], at),
@@ -378,6 +383,7 @@ export function registerCards({ route, searchQuota = () => {}, createMessage, is
       if (!PROJECTS.includes(body.project)) throw invalid(`project 需為：${PROJECTS.join('、')}`);
       if (me.kind === 'ai' && !projectsOf(me).includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，不能把卡片改到那個專案。');
       sets.project = body.project; logs.push(`專案改為 ${body.project}`);
+      sets.proj_no = (await db.get('SELECT COALESCE(MAX(proj_no), 0) + 1 AS n FROM cards WHERE project = ?', body.project)).n; // C-310：在新專案拿新號
     }
     if (body.type !== undefined && checkType(body.type) !== c.type) {
       if (body.type === '決策' || c.type === '決策') throw new ApiError(400, 'TYPE_LOCKED', '決策卡片的類型不能改，工作或阻塞卡片也不能改成決策。請另外建立一張。');
@@ -773,6 +779,7 @@ export function registerCards({ route, searchQuota = () => {}, createMessage, is
     await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at, project)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, f.type, f.title, f.reason ?? '', f.ownerId ?? null, status, f.next ?? '', f.blocker ?? '', f.waitForId ?? null,
       f.criteria ?? '', r.from_id, `sug_${r.id}`, at, at, f.project || PROJECTS[0]); // C-300：不寫死「平台」
+    await assignProjNo(uid); // C-310
     const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
     await db.batch([
       ...logStmt(c.seq, me, [`採用 ${aiName} 的建議建立卡片（類型：${f.type}）`], at),

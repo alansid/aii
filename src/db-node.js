@@ -47,7 +47,9 @@ function migrate(db) {
     standby_at: 'INTEGER NOT NULL DEFAULT 0',
     projects: "TEXT NOT NULL DEFAULT '平台,銀行系統'",
   });
+  const hadProjNo = new Set(db.prepare('PRAGMA table_info(cards)').all().map(c => c.name)).has('proj_no');
   add('cards', {
+    proj_no: 'INTEGER',
     project: "TEXT NOT NULL DEFAULT '平台'",
     decider_id: "TEXT",
     proposer_id: "TEXT",
@@ -61,6 +63,11 @@ function migrate(db) {
     decision_at: "TEXT",
     decision_note: "TEXT NOT NULL DEFAULT ''",
   });
+  // C-310：舊資料庫剛補上 proj_no → 舊卡依建立順序在各自專案內補號（同 migration 0022）
+  if (!hadProjNo && db.prepare('SELECT COUNT(*) AS n FROM cards').get().n) {
+    db.exec('UPDATE cards SET proj_no = (SELECT COUNT(*) FROM cards c2 WHERE c2.project = cards.project AND (c2.created_at < cards.created_at OR (c2.created_at = cards.created_at AND c2.seq <= cards.seq)))');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_proj_no ON cards (project, proj_no)');
+  }
   add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT', project: 'TEXT', reply_from: 'TEXT' });
   const soon = Date.now() + 24 * 3600_000;
   db.prepare('UPDATE participants SET token_expires_at = ? WHERE token_expires_at = 0').run(soon);

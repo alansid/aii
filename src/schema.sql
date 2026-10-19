@@ -166,12 +166,14 @@ CREATE TABLE IF NOT EXISTS cards (
   impact TEXT NOT NULL DEFAULT '', after_next TEXT NOT NULL DEFAULT '',
   decision_result TEXT, decision_by TEXT, decision_at TEXT, decision_note TEXT NOT NULL DEFAULT '',
   project TEXT NOT NULL DEFAULT '平台',    -- 所屬專案（C-302：原本只靠 migration 0012 補；寫入時一定帶）
+  proj_no INTEGER,                         -- C-310：專案內連號（顯示 PLAT-12）
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cards_updated ON cards (updated_at);
 CREATE INDEX IF NOT EXISTS idx_cards_status ON cards (status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_proj_no ON cards (project, proj_no);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_request ON cards (created_by, request_id);
 CREATE TABLE IF NOT EXISTS card_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

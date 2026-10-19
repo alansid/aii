@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.79.3",
+  "version": "0.80.0",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -51,6 +51,7 @@
     "cf:db:migrate-avatar-proposals": "node scripts/migrate.js migrations/0020_avatar_proposals.sql",
     "test:role": "node scripts/role-test.js",
     "cf:db:migrate-feedback": "node scripts/migrate.js migrations/0021_feedback.sql",
+    "cf:db:migrate-card-proj-no": "node scripts/migrate.js migrations/0022_card_proj_no.sql",
     "test:feedback": "node scripts/feedback-test.js",
     "releases": "node scripts/releases.mjs",
     "deploy": "node scripts/releases.mjs --deployed && npx wrangler@4 deploy",
@@ -69,6 +70,7 @@
     "test:layout-clip": "node scripts/layout-clip-test.js",
     "test:invite-ttl": "node scripts/invite-ttl-test.js",
     "test:setup-link": "node scripts/setup-link-test.js",
-    "test:hub-count": "node scripts/hub-count-test.js"
+    "test:hub-count": "node scripts/hub-count-test.js",
+    "test:card-key": "node scripts/card-key-test.js"
   }
 }
