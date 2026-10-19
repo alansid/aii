@@ -2579,3 +2579,8 @@ html:not(.gn-ready) [data-group-name] { visibility: hidden; }
   .set-tabs [role="tab"] { min-height: 36px; padding: 0 12px; border-radius: 18px; background: var(--surface-2); font-size: 13px; }
   .set-panes { padding: 12px 14px 16px; }
 }
+
+/* C-306：整頁與側欄不能被橫向捲動（有東西太寬、或捲到看得見時，側欄左邊會被切掉） */
+html, body { overflow-x: clip; }
+.app { overflow: clip; }
+.sidebar { overflow: clip; }

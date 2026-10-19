@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.78.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.78.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -1541,9 +1541,9 @@
   const typingField = () => document.activeElement?.matches?.('input, textarea, select, [contenteditable="true"]');
   const keyboardOpen = () => !!window.visualViewport && visualViewport.height < window.innerHeight * 0.85;
   const pinPage = (force = false) => {
-    if ($('#app').hidden || !(window.scrollY || document.documentElement.scrollTop || document.body.scrollTop)) return;
+    if ($('#app').hidden || !(window.scrollY || window.scrollX || document.documentElement.scrollTop || document.body.scrollTop || document.documentElement.scrollLeft || document.body.scrollLeft)) return; // C-306：橫向也算
     if (!force && typingField() && keyboardOpen()) return;
-    window.scrollTo(0, 0); document.documentElement.scrollTop = 0; document.body.scrollTop = 0;
+    window.scrollTo(0, 0); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0;
   };
   window.addEventListener('scroll', () => pinPage(), { passive: true });
   window.visualViewport?.addEventListener('resize', () => setTimeout(() => { if (!keyboardOpen()) pinPage(true); }, 80));
@@ -4904,10 +4904,10 @@
     const box = $('#page-work');
     box.classList.remove('is-board');
     box.innerHTML = '<div id="myai-pane" class="inline-pane myai-page"></div>';
-    await loadProjectList().catch(() => {});
-    await openMyAi();
+    // C-306：先畫出頁面，專案清單與 AI 清單同時抓（原本一支等完才抓下一支，中間整塊空白）
+    await openMyAi(loadProjectList().catch(() => {}));
   }
-  async function openMyAi() {
+  async function openMyAi(waitFor = null) {
     const body = openModal('我的 AI', `
       <p class="muted small">你名下所有 AI，不分專案；每列看得到它在哪些專案。</p>
       <div class="row spread">
@@ -4915,12 +4915,12 @@
         <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a>
       </div>
       <label class="check"><input type="checkbox" id="ai-auto-standby"${autoStandbyConsent ? ' checked' : ''}> 允許 AI 自動啟動待命（watcher／wait-for-bell，簽到後直接啟動再回報；行內／投信仍會先問你）</label>
-      <div id="ai-list" class="stack"></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });
+      <div id="ai-list" class="stack"><p class="muted small">載入中…</p></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });
     body.querySelector('#ai-auto-standby').onchange = e => { autoStandbyConsent = e.target.checked; };
     let items = [];
     const open = new Set();
     async function draw() {
-      items = (await api('/api/my-ais')).items;
+      items = (await Promise.all([api('/api/my-ais'), waitFor]))[0].items; waitFor = null;
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
       body.querySelector('#ai-list').innerHTML = items.length ? items.map(ai => aiCardHtml(ai, open.has(ai.participantId))).join('')
         : '<p class="muted">還沒有 AI 助手。按「新增 AI 助手」選一個角色範例開始。</p>';
