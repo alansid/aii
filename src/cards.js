@@ -11,7 +11,9 @@ export const NOTE = '人類紀錄';
 const NOTE_LOG = '紀錄'; // card_log.via：卡上的人類紀錄（不發群組）
 const MERGED = /^已整理到 (C-\d+)/;
 const BUILTIN_RESULTS = ['不同意', '要求補充']; // 決定時固定可用，不可當選項名稱
-const OPEN_STATUSES_SQL = "('已完成','已封存')";
+// C-336：用 IN 列出狀態才走得到 idx_cards_status（NOT IN、!= 會逐列濾）
+const UNFINISHED_SQL = "('待整理','待處理','進行中','待確認','受阻')";
+const NOT_ARCHIVED_SQL = "('待整理','待處理','進行中','待確認','受阻','已完成')";
 export const CARD_LIMITS = { title: 100, reason: 500, next: 300, blocker: 300, criteria: 500, question: 200, recommendation: 500, impact: 200, afterNext: 300, note: 500, option: 40, handover: 300, record: 1000 };
 const CARD_NO_BASE = 100; // 顯示編號 = C-(seq + 100)
 
@@ -239,9 +241,9 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const offset = Math.max(0, Math.min(Number.parseInt(q.get('offset') || '0', 10) || 0, 100_000)); // C-161：已封存分頁
     const where = [], args = [];
     const status = q.get('status');
-    if (status === 'open') where.push(`status NOT IN ${OPEN_STATUSES_SQL}`);
+    if (status === 'open') where.push(`status IN ${UNFINISHED_SQL}`);
     else if (status) { where.push('status = ?'); args.push(checkStatus(status)); }
-    else if (!q.get('since') && q.get('include') !== 'archived') where.push("status != '已封存'");
+    else if (!q.get('since') && q.get('include') !== 'archived') where.push(`status IN ${NOT_ARCHIVED_SQL}`);
     if (q.get('owner')) { where.push('owner_id = ?'); args.push(q.get('owner')); }
     if (q.get('type')) { where.push('type = ?'); args.push(checkType(q.get('type'))); }
     else if (me.kind !== 'human') where.push("type != '人類紀錄'"); // C-218：AI 平常的列表、增量不含
@@ -287,7 +289,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const c = (await attachMerged([await load(params.id, me)]))[0];
     const people = await peopleMap(ctx);
     // C-245：只有人類紀錄卡會「已整理到」；只查這些卡的紀錄，不掃整張 card_log
-    const mergedFrom = (await db.all("SELECT DISTINCT card_seq FROM card_log WHERE card_seq IN (SELECT seq FROM cards WHERE type = ?) AND text = ? ORDER BY card_seq", NOTE, `已整理到 ${cardNo(c.seq)}`)).map(r => cardNo(r.card_seq));
+    const mergedFrom = c.type === NOTE ? [] : (await db.all("SELECT DISTINCT card_seq FROM card_log WHERE card_seq IN (SELECT seq FROM cards WHERE type = ?) AND text = ? ORDER BY card_seq", NOTE, `已整理到 ${cardNo(c.seq)}`)).map(r => cardNo(r.card_seq));
     const [log, msgs] = await Promise.all([
       db.all('SELECT at, by_id, via, text FROM card_log WHERE card_seq = ? ORDER BY id DESC LIMIT 200', c.seq),
       db.all('SELECT message_id FROM card_msgs WHERE card_seq = ? ORDER BY rowid', c.seq),
@@ -686,9 +688,10 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   }
   // 針對某張卡的建議：卡片在建議之後有任何存檔就算過期，只能略過（C-144）
   const isExpired = (r, card) => r.state === 'pending' && !!card && card.updated_at > r.created_at;
-  async function sugView(r, people) {
+  // cardMap：清單先一次查好卡片（C-336 R7，避免每則各查一次）
+  async function sugView(r, people, cardMap = null) {
     const p = JSON.parse(r.payload || '{}');
-    const card = r.card_seq ? await db.get('SELECT seq, title, status, updated_at, project FROM cards WHERE seq = ?', r.card_seq) : null;
+    const card = !r.card_seq ? null : cardMap ? cardMap.get(r.card_seq) ?? null : await db.get('SELECT seq, title, status, updated_at, project FROM cards WHERE seq = ?', r.card_seq);
     return {
       project: card?.project ?? p.project ?? null,
       suggestionId: sugNo(r.id), kind: r.kind, state: r.state, expired: isExpired(r, card), from: ref(people, r.from_id), why: r.why, basisMessageId: r.basis_message_id, createdAt: r.created_at,
@@ -761,7 +764,9 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
           ? await db.all(`SELECT s.* FROM suggestions s WHERE s.state = ? AND ${SUG_PROJECT_SQL} IN (${mine.map(() => '?').join(',')}) ORDER BY s.id DESC LIMIT ?`, st, ...mine, limit)
           : [];
     const people = await peopleMap(ctx);
-    return { items: await Promise.all(rows.map(r => sugView(r, people))) };
+    const seqs = [...new Set(rows.map(r => r.card_seq).filter(Boolean))];
+    const cardMap = new Map(seqs.length ? (await db.all('SELECT seq, title, status, updated_at, project FROM cards WHERE seq IN (SELECT value FROM json_each(?))', JSON.stringify(seqs))).map(c => [c.seq, c]) : []);
+    return { items: await Promise.all(rows.map(r => sugView(r, people, cardMap))) };
   });
 
   const humanOnly = me => { if (me.kind !== 'human') throw new ApiError(403, 'FORBIDDEN', '只有人類成員能採用或略過建議。'); };

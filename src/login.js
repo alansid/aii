@@ -185,8 +185,8 @@ export function registerLogin(d) {
     return { p: p.id ? p : null, dev: { id: dv_id, last_used_at: dv_last } };
   }
   // 使用中自動展延；每 20 秒最多寫一次（回傳要執行的語句，讓呼叫端跟其他更新一起送）
-  function touchStmt(dev, now = Date.now()) {
-    if (now - dev.last_used_at < 20_000) return null;
+  function touchStmt(dev, now = Date.now(), gap = 20_000) { // C-336：間隔跟在線時間一致
+    if (now - dev.last_used_at < gap) return null;
     return ['UPDATE devices SET last_used_at = ?, expires_at = ? WHERE id = ?', [now, now + humanTtlMs, dev.id]];
   }
   async function touch(dev, now = Date.now()) { const s = touchStmt(dev, now); if (s) await db.run(s[0], ...s[1]); }

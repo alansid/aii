@@ -46,7 +46,7 @@
     try {
       r = await fetch(path, {
         method, signal: ctl?.signal,
-        headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
+        headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(document.hidden ? { 'X-Aigile-Bg': '1' } : {}) }, // C-336：背景分頁，伺服器少寫在線時間
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch (e) {

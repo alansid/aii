@@ -10,7 +10,8 @@ import { registerLogin } from './login.js';
 import { optionWarnings } from './questions.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
-const ACTIVE_WINDOW_MS = 30_000;           // 人類：網頁每幾秒就會回報
+const ACTIVE_WINDOW_MS = 90_000;           // 人類：前景網頁 60 秒寫一次在線時間（C-336，原 30 秒門檻配 20 秒寫入）
+const HUMAN_SEEN_MS = 60_000, HUMAN_SEEN_BG_MS = 5 * 60_000;
 const AI_ACTIVE_WINDOW_MS = 20 * 60_000;   // AI：依 15 分鐘輪詢，門檻對齊輪詢間隔才不會閃離線
 const RATE_LIMIT_PER_MIN = 120;
 const MAX_TEXT = 2000;
@@ -160,7 +161,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   let projCodes = {};
   async function loadCodes() {
     const set = {}, slugs = {};
-    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'pcode:%' OR key LIKE 'slug:%'").catch(() => [])) (r.key.startsWith('pcode:') ? set : slugs)[r.key.slice(r.key.indexOf(':') + 1)] = r.value;
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'pcode:' AND key < 'pcode;') OR (key >= 'slug:' AND key < 'slug;')").catch(() => [])) (r.key.startsWith('pcode:') ? set : slugs)[r.key.slice(r.key.indexOf(':') + 1)] = r.value;
     const out = {}, used = new Set(Object.values(set));
     projectRows.forEach((r, i) => {
       if (CODE_RE.test(set[r.id] || '')) { out[r.id] = set[r.id]; return; }
@@ -364,9 +365,11 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       throw new ApiError(429, 'RATE_LIMITED', '請求頻率超過限制', { retryAfter: Math.ceil((r.windowStart + 60_000 - now) / 1000) });
     }
     if (p.kind === 'human') p.token_expires_at = now + HUMAN_TOKEN_TTL_MS; // 人類使用中自動展延
-    // C-240：裝置展延和在線時間合成一次送出（各自每 20 秒最多寫一次，減少 D1 寫入與來回）
-    const touches = [dev && login.touchStmt(dev, now)].filter(Boolean);
-    const seen = now - p.last_seen_at > 20_000;
+    // C-240：裝置展延和在線時間合成一次送出，減少 D1 寫入與來回
+    // C-336：人類前景分頁 60 秒、背景分頁（X-Aigile-Bg）5 分鐘才寫一次（原 20 秒，10 人約占免費寫入 43%）；AI 照舊 20 秒
+    const seenGap = p.kind !== 'human' ? 20_000 : req.headers.get('x-aigile-bg') === '1' ? HUMAN_SEEN_BG_MS : HUMAN_SEEN_MS;
+    const touches = [dev && login.touchStmt(dev, now, seenGap)].filter(Boolean);
+    const seen = now - p.last_seen_at > seenGap;
     if (seen) touches.push(['UPDATE participants SET last_seen_at = ?, token_expires_at = ? WHERE id = ?', [now, p.token_expires_at, p.id]]);
     if (touches.length) await (touches.length === 1 ? db.run(touches[0][0], ...touches[0][1]) : db.batch(touches));
     if (seen) {
@@ -1150,14 +1153,14 @@ ${trial
   // C-270：各專案是否允許成員私訊自己的 AI（預設關）
   async function dmMap() {
     const out = {};
-    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'dm:%'").catch(() => [])) {
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'dm:' AND key < 'dm;')").catch(() => [])) {
       try { const v = JSON.parse(r.value); out[r.key.slice(3)] = { on: !!v.on, by: v.by || null, at: v.at || null }; } catch {}
     }
     return out;
   }
   async function reposMap() {
     const out = {};
-    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'repo:%'").catch(() => [])) {
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'repo:' AND key < 'repo;')").catch(() => [])) {
       try { const v = JSON.parse(r.value); if (v?.url) out[r.key.slice(5)] = { url: v.url, branch: v.branch || '' }; } catch {}
     }
     return out;
@@ -1208,7 +1211,7 @@ ${trial
   async function projectViews(ctx) {
     await loadProjects(true);
     const people = await peopleMap(ctx);
-    const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status NOT IN ('已完成','已封存') GROUP BY project")).map(r => [r.project, r.n]));
+    const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status IN ('待整理','待處理','進行中','待確認','受阻') GROUP BY project")).map(r => [r.project, r.n]));
     const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(), slugs = await slugMap(); // C-280、C-285
     await loadProjectRoles();
     const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
@@ -1256,7 +1259,7 @@ ${trial
         if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `${target.name} 的所屬人類 ${owner?.name || ''} 不在「${outside.map(nameOf).join('、')}」，AI 的專案不能超出所屬人類。`);
       }
       const cards = removed.length ? await db.all(
-        `SELECT seq, project FROM cards WHERE owner_id = ? AND status NOT IN ('已完成','已封存') AND project IN (${removed.map(() => '?').join(',')}) ORDER BY seq`,
+        `SELECT seq, project FROM cards WHERE owner_id = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') AND project IN (${removed.map(() => '?').join(',')}) ORDER BY seq`,
         target.id, ...removed) : [];
       if (added.length || removed.length) plan.push({ target, next, added, removed, cards });
     }
@@ -1445,7 +1448,7 @@ ${trial
         if (on && nextLeaders[pj].includes(p.id)) throw invalid(`${p.name} 是「${nameOf(pj)}」的 leader，先取消 leader 再設唯讀`);
         nextRo[pj] = on ? [...nextRo[pj], p.id] : nextRo[pj].filter(x => x !== p.id);
         const ids = [p.id, ...[...people.values()].filter(a => a.kind === 'ai' && a.owner_id === p.id).map(a => a.id)];
-        const cards = on ? await db.all("SELECT seq FROM cards WHERE project = ? AND status NOT IN ('已完成','已封存') AND owner_id IN (SELECT value FROM json_each(?)) ORDER BY seq", pj, JSON.stringify(ids)) : [];
+        const cards = on ? await db.all("SELECT seq FROM cards WHERE project = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') AND owner_id IN (SELECT value FROM json_each(?)) ORDER BY seq", pj, JSON.stringify(ids)) : [];
         roChanges.push({ participantId: p.id, name: p.name, project: pj, readOnly: on, returnedCards: cards.map(c => 'C-' + (c.seq + 100)), seqs: cards.map(c => c.seq) });
       }
     }
@@ -1577,7 +1580,7 @@ ${trial
   const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,39}$/;
   async function slugMap() {
     const set = {};
-    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'slug:%'").catch(() => [])) set[r.key.slice(5)] = r.value;
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'slug:' AND key < 'slug;')").catch(() => [])) set[r.key.slice(5)] = r.value;
     return Object.fromEntries(projectRows.map(r => [r.id, set[r.id] || SLUG_DEFAULT[r.id] || r.id]));
   }
   // C-300：回報收件專案（回報 R-xx、許願整理、回報區都在這個專案）
@@ -1973,7 +1976,7 @@ ${trial
   const ROLE_NAME_MAX = 10; // 人類的專案角色最多 10 字，名稱跟著
   async function roleDefsMap() {
     const out = {};
-    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'roles:%'").catch(() => [])) {
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'roles:' AND key < 'roles;')").catch(() => [])) {
       try { const v = JSON.parse(r.value); if (Array.isArray(v)) out[r.key.slice(6)] = v; } catch {}
     }
     return out;
@@ -2211,7 +2214,7 @@ ${trial
     if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
     if (row.archived) return projectsResponse(ctx);
     if (projectRows.filter(r => !r.archived).length <= 1) throw new ApiError(409, 'LAST_PROJECT', '至少要保留一個專案');
-    const open = (await db.get("SELECT COUNT(*) AS n FROM cards WHERE project = ? AND status NOT IN ('已完成','已封存')", row.id)).n;
+    const open = (await db.get("SELECT COUNT(*) AS n FROM cards WHERE project = ? AND status IN ('待整理','待處理','進行中','待確認','受阻')", row.id)).n;
     if (open) throw new ApiError(409, 'HAS_OPEN_CARDS', `這個專案還有 ${open} 張未結案的卡片，請先結案或把卡片移到別的專案。`);
     await db.batch([['UPDATE projects SET archived = 1 WHERE id = ?', [row.id]], projEvent(row.id, me.id, `${me.name} 封存專案`, nowIso())]);
     invalidateProjects();
@@ -2451,7 +2454,7 @@ ${trial
     requireHuman(me);
     const people = await peopleMap(ctx);
     const raws = {}; // C-229 長期授權
-    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key LIKE 'grants:%'").catch(() => [])) { try { raws[r.key.slice(7)] = JSON.parse(r.value); } catch {} }
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'grants:' AND key < 'grants;')").catch(() => [])) { try { raws[r.key.slice(7)] = JSON.parse(r.value); } catch {} }
     const items = [...people.values()].filter(p => p.kind === 'ai' && p.owner_id === me.id && p.status !== 'deleted')
       .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(p => ({ ...aiView(p, people), grants: grantsView(raws[p.id], p), grantable: grantable(p) }));
     return { items };
@@ -2467,7 +2470,7 @@ ${trial
     const ai = await myAi(me, params.id);
     if (String(body.confirmName ?? '').trim() !== ai.name) throw invalid('confirmName 必須和 AI 名稱完全相同');
     const at = nowIso();
-    const cards = await db.all("SELECT seq, title FROM cards WHERE owner_id = ? AND status NOT IN ('已完成','已封存') ORDER BY seq", ai.id);
+    const cards = await db.all("SELECT seq, title FROM cards WHERE owner_id = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') ORDER BY seq", ai.id);
     const stmts = [
       ["UPDATE participants SET status = 'deleted', token = ?, token_expires_at = 0, updated_at = ? WHERE id = ?", ['deleted_' + ai.id, at, ai.id]],
       ["UPDATE notifications SET status = 'acked', acked_at = ? WHERE recipient_id = ? AND status = 'pending'", [at, ai.id]],
