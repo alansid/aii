@@ -58,7 +58,7 @@ export async function teamCards(db) {
   return { work, open, decisions: decisions.map(d => ({ cardId: cardNo(d.seq), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, isolatedFrom, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // C-144：卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
@@ -566,7 +566,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     return { ...view(await load(params.id), people), rejectMessageId: messageId, ...(notifyError ? { notifyError } : {}) };
   });
   route('POST', '/api/cards/:id/verify', async ({ ctx, me, params }) => {
-    const c = await load(params.id);
+    const c = await load(params.id, me); // C-333 B1：驗證者必須看得到這張卡（屬於卡片專案）
     if (c.type === NOTE && me.kind !== 'human') throw aiNoteForbidden();
     if (c.status !== '已完成') throw new ApiError(409, 'NOT_DONE', '卡片要先是「已完成」才能標為已驗證。');
     if (c.verified_by) throw new ApiError(409, 'ALREADY_VERIFIED', '這張卡片已經驗證過了。');
@@ -657,11 +657,12 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     return { cardId: cardNo(c.seq), notes: (await notesOf(c.seq)).map(l => noteView(people, l)) };
   });
   route('POST', '/api/cards/:id/messages', async ({ ctx, me, req, params }) => {
-    const c = await load(params.id);
+    const c = await load(params.id, me); // C-333 B1
     if (c.type === NOTE && me.kind !== 'human') throw aiNoteForbidden();
     requireEdit(me, c);
     const mid = String((await readJson(req)).messageId || '');
-    if (!(await db.get('SELECT id FROM messages WHERE id = ?', mid))) throw invalid('找不到這則訊息');
+    const m = await db.get('SELECT id, project, created_at FROM messages WHERE id = ?', mid);
+    if (!m || !(await canSeeMessage(me, m))) throw invalid('找不到這則訊息'); // 看不到的訊息不能掛
     const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', c.seq)).n;
     if (n >= 50) throw invalid('一張卡片最多關聯 50 則訊息');
     await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, mid);
@@ -676,9 +677,11 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到這則建議');
     return Number(m[1]);
   };
-  async function loadSug(id) {
-    const r = await db.get('SELECT * FROM suggestions WHERE id = ?', parseSug(id));
-    if (!r) throw new ApiError(404, 'NOT_FOUND', '找不到這則建議');
+  // C-333 B4：建議所屬專案＝卡片專案，沒有卡（新建建議）用建議內容的專案
+  const SUG_PROJECT_SQL = "COALESCE((SELECT c.project FROM cards c WHERE c.seq = s.card_seq), json_extract(s.payload, '$.project'))";
+  async function loadSug(id, me = null) {
+    const r = await db.get(`SELECT s.*, ${SUG_PROJECT_SQL} AS sug_project FROM suggestions s WHERE s.id = ?`, parseSug(id));
+    if (!r || (me && isolatedFrom(me) && !projectsOf(me).includes(r.sug_project))) throw new ApiError(404, 'NOT_FOUND', '找不到這則建議');
     return r;
   }
   // 針對某張卡的建議：卡片在建議之後有任何存檔就算過期，只能略過（C-144）
@@ -727,7 +730,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       payload = { type, project: sp, title, reason: text(body, 'reason') ?? '', ownerId: owner, next: text(body, 'next') ?? '', blocker: text(body, 'blocker') ?? '',
         waitForId: await validPerson(people, body.waitForId, '等誰'), criteria: text(body, 'criteria') ?? '' };
     } else if (kind === 'status') {
-      const c = await load(String(body.cardId ?? ''));
+      const c = await load(String(body.cardId ?? ''), me); // C-333：看不到的卡不能提建議
       if (c.type === NOTE) throw aiNoteForbidden();
       const to = checkStatus(body.status);
       if (canEdit(me, c)) throw new ApiError(400, 'USE_PATCH', '這張是你負責的卡片，請直接用 PATCH /api/cards/:id 修改。');
@@ -749,9 +752,14 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const st = url.searchParams.get('state') || 'pending';
     if (!['pending', 'applied', 'skipped'].includes(st)) throw invalid('state 需為 pending、applied 或 skipped');
     const limit = parseLimit(url, 100, 200);
-    const rows = me.kind === 'human'
-      ? await db.all('SELECT * FROM suggestions WHERE state = ? ORDER BY id DESC LIMIT ?', st, limit)
-      : await db.all('SELECT * FROM suggestions WHERE state = ? AND from_id = ? ORDER BY id DESC LIMIT ?', st, me.id, limit);
+    const mine = isolatedFrom(me) ? projectsOf(me) : null; // C-333 B4：只屬部分專案的人類只看自己專案的建議
+    const rows = me.kind !== 'human'
+      ? await db.all('SELECT * FROM suggestions WHERE state = ? AND from_id = ? ORDER BY id DESC LIMIT ?', st, me.id, limit)
+      : !mine
+        ? await db.all('SELECT * FROM suggestions WHERE state = ? ORDER BY id DESC LIMIT ?', st, limit)
+        : mine.length
+          ? await db.all(`SELECT s.* FROM suggestions s WHERE s.state = ? AND ${SUG_PROJECT_SQL} IN (${mine.map(() => '?').join(',')}) ORDER BY s.id DESC LIMIT ?`, st, ...mine, limit)
+          : [];
     const people = await peopleMap(ctx);
     return { items: await Promise.all(rows.map(r => sugView(r, people))) };
   });
@@ -765,7 +773,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   route('POST', '/api/suggestions/:id/apply', async ({ ctx, me, req, params }) => {
     humanOnly(me);
     const body = await readJson(req);
-    return applySuggestion(ctx, me, await loadSug(params.id), body, null);
+    return applySuggestion(ctx, me, await loadSug(params.id, me), body, null);
   });
 
   // collect：批次時傳入陣列，通知先收集起來，最後每位收件人合併成一則；單筆採用維持原本逐筆通知
@@ -823,7 +831,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const results = [], collect = [];
     for (const id of ids) {
       try {
-        const r = await loadSug(id);
+        const r = await loadSug(id, me);
         if (body.action === 'skip') await claim(r, me, nowIso(), null, 'skipped');
         else await applySuggestion(ctx, me, r, {}, collect);
         results.push({ id, ok: true });
@@ -844,7 +852,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
 
   route('POST', '/api/suggestions/:id/skip', async ({ ctx, me, params }) => {
     humanOnly(me);
-    const r = await loadSug(params.id);
+    const r = await loadSug(params.id, me);
     await claim(r, me, nowIso(), null, 'skipped');
     return sugView(await loadSug(params.id), await peopleMap(ctx));
   });

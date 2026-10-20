@@ -152,7 +152,8 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await call(liu.token, `/api/cards/${blk.cardId}/verify`, 'POST')).body.error.code, 'NOT_DONE', '未完成不能驗證');
     const ver = (await call(qa.token, `/api/cards/${c1.cardId}/verify`, 'POST')).body;
     assert.equal(ver.verified.by.participantId, qa.participantId, '其他 AI 可以驗證');
-    assert.equal((await call(percy.token, `/api/cards/${c1.cardId}/verify`, 'POST')).body.error.code, 'ALREADY_VERIFIED');
+    assert.equal((await call(liu.token, `/api/cards/${c1.cardId}/verify`, 'POST')).body.error.code, 'ALREADY_VERIFIED');
+    assert.equal((await call(percy.token, `/api/cards/${c1.cardId}/verify`, 'POST')).body.error.code, 'CARD_FORBIDDEN', 'C-333 B1：不屬於卡片專案的人不能驗證');
     const reopen = (await call(liu.token, `/api/cards/${c1.cardId}`, 'PATCH', { status: '進行中' })).body;
     assert.equal(reopen.done, null); assert.equal(reopen.verified, null, '重開後清掉完成與驗證');
 

@@ -213,6 +213,44 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.ok(!(await call(plat.token, '/api/cards?limit=200')).body.items.some(c => c.cardId === bc.cardId), '只屬平台的成員看不到銀行系統的卡');
     assert.equal((await call(plat.token, `/api/cards/${bc.cardId}`)).body.error?.code, 'CARD_FORBIDDEN', 'C-181：卡片詳情回 403 沒權限（不寫專案名）');
     assert.equal((await call(plat.token, '/api/cards/C-99999')).status, 404, '真的不存在才回 404');
+    // ===== C-333：跨專案隔離破口（健檢 B1～B4、S8）=====
+    await put(liu.token, lone.participant.participantId, ['平台']); // 只屬平台的人類
+    // B1 驗證：別專案的人不能驗證
+    // 由銀行 AI 完成（人類完成會自動算驗收）
+    assert.equal((await call(liu.token, `/api/cards/${bc.cardId}`, 'PATCH', { ownerId: bank.participantId })).status, 200);
+    assert.equal((await call(bank.token, `/api/cards/${bc.cardId}`, 'PATCH', { status: '已完成' })).status, 200);
+    assert.equal((await call(plat.token, `/api/cards/${bc.cardId}/verify`, 'POST')).body.error?.code, 'CARD_FORBIDDEN', 'B1：別專案的 AI 不能驗證');
+    assert.equal((await call(lone.token, `/api/cards/${bc.cardId}/verify`, 'POST')).body.error?.code, 'CARD_FORBIDDEN', 'B1：別專案的人類不能驗證');
+    assert.equal((await call(liu.token, `/api/cards/${bc.cardId}/verify`, 'POST')).status, 200, 'B1：同專案的人照常可驗證');
+    // B1 掛訊息：別專案的卡不能掛；自己的卡不能掛看不到的訊息
+    assert.equal((await call(plat.token, `/api/cards/${bc.cardId}/messages`, 'POST', { messageId: am.messageId })).body.error?.code, 'CARD_FORBIDDEN', 'B1：不能把訊息掛到別專案的卡');
+    const pc333 = (await call(plat.token, '/api/cards', 'POST', { requestId: 'req_c333_pc', title: '平台自己的卡', project: '平台' })).body;
+    assert.equal((await call(plat.token, `/api/cards/${pc333.cardId}/messages`, 'POST', { messageId: bm.messageId })).status, 400, 'B1：看不到的訊息不能掛');
+    assert.equal((await call(plat.token, `/api/cards/${pc333.cardId}/messages`, 'POST', { messageId: am.messageId })).status, 200, 'B1：看得到的訊息照常可掛');
+    // B1 解決 [需確認]：別專案的不能解決
+    const bq = (await msg(bank.token, '[需確認] 銀行要人決定\n\n選項：\n1. 甲\n2. 乙', { project: '銀行系統', replyFrom: [liuId] })).body;
+    assert.equal((await call(lone.token, `/api/decisions/${bq.messageId}/resolve`, 'POST')).status, 404, 'B1：只屬平台的人類不能解決銀行的 [需確認]');
+    assert.equal((await call(liu.token, `/api/decisions/${bq.messageId}/resolve`, 'POST')).status, 200, 'B1：看得到的人照常可解決');
+    // B3 專案異動紀錄：只有專案成員或管理員
+    assert.equal((await call(plat.token, '/api/projects/銀行系統/events')).status, 403, 'B3：非專案成員讀不到別專案異動紀錄');
+    assert.equal((await call(lone.token, '/api/projects/銀行系統/events')).status, 403, 'B3：非管理員人類也讀不到');
+    assert.equal((await call(bank.token, '/api/projects/銀行系統/events')).status, 200, 'B3：專案成員讀得到');
+    assert.equal((await call(liu.token, '/api/projects/銀行系統/events')).status, 200, 'B3：管理員讀得到');
+    // B4 AI 建議：只屬平台的人類看不到、也不能處理銀行系統的建議
+    const bs = (await call(bank.token, '/api/suggestions', 'POST', { requestId: 'req_c333_s1', kind: 'create', project: '銀行系統', title: '銀行建議', ownerId: liuId, why: 'C-333 測試' })).body;
+    assert.ok(bs.suggestionId, JSON.stringify(bs));
+    assert.ok(!(await call(lone.token, '/api/suggestions?state=pending')).body.items.some(s => s.suggestionId === bs.suggestionId), 'B4：只屬平台的人類列表裡沒有銀行的建議');
+    assert.ok((await call(liu.token, '/api/suggestions?state=pending')).body.items.some(s => s.suggestionId === bs.suggestionId), 'B4：兩邊都屬的人看得到');
+    assert.equal((await call(lone.token, `/api/suggestions/${bs.suggestionId}/skip`, 'POST')).status, 404, 'B4：不能略過看不到的建議');
+    assert.equal((await call(lone.token, `/api/suggestions/${bs.suggestionId}/apply`, 'POST', {})).status, 404, 'B4：不能採用看不到的建議');
+    assert.equal((await call(plat.token, '/api/suggestions', 'POST', { requestId: 'req_c333_s2', kind: 'status', cardId: bc.cardId, status: '進行中', why: 'x' })).body.error?.code, 'CARD_FORBIDDEN', '不能對看不到的卡提建議');
+    // S8 檔案下載：掛在別專案訊息上的檔案下載不到
+    const up = await fetch(`${BASE}/api/files?${new URLSearchParams({ name: '銀行文件.pdf', declared: 'true', project: '銀行系統' })}`, { method: 'POST', headers: { Authorization: `Bearer ${bank.token}` }, body: new TextEncoder().encode('%PDF-1.4\n%%EOF\n') });
+    const upb = await up.json();
+    assert.equal(up.status, 201, JSON.stringify(upb));
+    const fid = upb.file.fileId;
+    assert.equal((await fetch(`${BASE}/api/files/${fid}`, { headers: { Authorization: `Bearer ${plat.token}` } })).status, 404, 'S8：別專案的檔案下載不到');
+    assert.equal((await fetch(`${BASE}/api/files/${fid}`, { headers: { Authorization: `Bearer ${bank.token}` } })).status, 200, 'S8：同專案照常下載');
     assert.ok((await call(liu.token, '/api/cards?limit=200')).body.items.some(c => c.cardId === bc.cardId), '兩邊成員看得到兩邊的卡');
     const after0 = (await call(plat.token, '/api/messages?limit=1')).body.nextCursor;
     await msg(bank.token, '[進度] 銀行又一則（隔離）', { project: '銀行系統' });

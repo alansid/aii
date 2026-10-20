@@ -1499,7 +1499,9 @@ ${trial
     pageName = { at: 0, name: null }; // 網頁上的群組名立刻換新
     return { name };
   });
-  route('GET', '/api/projects/:id/events', async ({ params, url }) => {
+  route('GET', '/api/projects/:id/events', async ({ ctx, me, params, url }) => {
+    // C-333 B3：只有該專案成員或管理員看得到（含程式庫網址、成員異動）
+    if (!projectsOf(me).includes(params.id)) await requireAdmin(ctx, me, '查看其他專案的異動紀錄');
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
     const rows = await db.all('SELECT * FROM project_events WHERE project_id = ? ORDER BY id DESC LIMIT ?', params.id, limit);
     return { items: rows.map(r => ({ at: r.at, actorId: r.actor_id, text: r.text })) };
@@ -2600,6 +2602,11 @@ ${trial
   async function downloadFile(me, id) {
     requireStorage();
     const f = await activeFile(id);
+    // C-333 S8：已掛在訊息上的檔案，套用跟訊息相同的專案隔離；看不到就當作不存在
+    if (f.message_id) {
+      const m = await db.get('SELECT project, created_at FROM messages WHERE id = ?', f.message_id);
+      if (m && !(await canSeeMessage(me, m))) throw new ApiError(404, 'NOT_FOUND', '找不到檔案');
+    }
     const bytes = await storage.get(f.id);
     if (!bytes) throw new ApiError(404, 'NOT_FOUND', '檔案內容不存在');
     await audit('download', me, f);
@@ -2753,7 +2760,8 @@ ${trial
   }
 
   async function teamStatus(ctx) {
-    if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return teamCache.data;
+    // C-333 B2：回傳 { data, priv }，呼叫端用這份；不要事後再讀全域 teamCache（期間可能被寫入請求清掉）
+    if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return { data: teamCache.data, priv: teamCache.priv };
     // C-240：互不相關的查詢同時送（每次查詢都可能要跨洲來回）
     const [people, recent, cardWork, pending, aiRows] = await Promise.all([
       peopleMap(ctx), recentMessages(), teamCards(db),
@@ -2838,8 +2846,9 @@ ${trial
     }
     const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, tokenWarnHours: TOKEN_WARN_MS / 3600_000, members, unanswered, decisions };
     // C-235：只屬部分專案的人看團隊狀態時，目前工作／張數／待處理則數要依他的專案重算，原始資料留在這裡（不回傳）
-    teamCache = { at: Date.now(), data, priv: { cards: cardWork.open, stateMsgs, pendRows } };
-    return data;
+    const priv = { cards: cardWork.open, stateMsgs, pendRows };
+    teamCache = { at: Date.now(), data, priv };
+    return { data, priv };
   }
 
   // Token 到期提醒不再發群組訊息（會增加資料量、所有 AI 都要讀）；改由網頁只對所屬人類顯示
@@ -2890,12 +2899,13 @@ ${trial
       if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
     }
   }
-  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
+  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 
   // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
-  async function scopeTeamMembers(me, members) {
-    if (!isolatedFrom(me) || !teamCache.priv) return members;
-    const { cards, stateMsgs, pendRows } = teamCache.priv;
+  async function scopeTeamMembers(me, members, priv) {
+    if (!isolatedFrom(me)) return members;
+    if (!priv) return members.map(m => ({ ...m, status: null, pendingCount: 0, oldestPendingAt: null })); // 保險：沒有原始資料就不露任何工作內容
+    const { cards, stateMsgs, pendRows } = priv;
     const mine = projectsOf(me), since = await isolationSince(), joined = me.created_at || '';
     const seeMsg = (project, at) => (project && mine.includes(project)) || !since || (at >= since ? !project : at >= joined);
     const work = workFrom(cards, c => mine.includes(c.project));
@@ -2912,7 +2922,7 @@ ${trial
   }
   route('GET', '/api/team-status', async ({ ctx, me, url }) => {
     await loadProjectRoles();
-    const d = await teamStatus(ctx);
+    const { data: d, priv } = await teamStatus(ctx);
     const people = await peopleMap(ctx);
     // C-146 A：只屬部分專案的成員，「等你決定」只留看得到的（訊息依隔離規則、決策卡依卡片專案）
     const decisions = [];
@@ -2922,12 +2932,12 @@ ${trial
     await loadCrossRoles();
     const sees = id => { const p = people.get(id); return !!p && seesPerson(me, p); }; // C-188
     return { ...d, decisions, unanswered: d.unanswered.filter(u => sees(u.participantId)),
-      members: roleForProject((await scopeTeamMembers(me, d.members)).filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url) }; // 工作記憶依專案可見；C-219 角色依專案
+      members: roleForProject((await scopeTeamMembers(me, d.members, priv)).filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url) }; // 工作記憶依專案可見；C-219 角色依專案
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);
-    const m = await db.get('SELECT id, text FROM messages WHERE id = ?', params.id);
-    if (!m) throw new ApiError(404, 'NOT_FOUND', '找不到訊息');
+    const m = await db.get('SELECT id, text, project, created_at FROM messages WHERE id = ?', params.id);
+    if (!m || !(await canSeeMessage(me, m))) throw new ApiError(404, 'NOT_FOUND', '找不到訊息'); // C-333 B1：別專案的 [需確認] 不能代為解決
     if (inferState(m.text) !== 'waiting') throw invalid('這則不是 [需確認] 訊息');
     await db.run('INSERT OR IGNORE INTO decision_resolutions (message_id, resolved_by, resolved_at) VALUES (?,?,?)', m.id, me.id, nowIso());
     teamCache = { at: 0, data: null };
