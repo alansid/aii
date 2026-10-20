@@ -314,3 +314,29 @@ CREATE INDEX IF NOT EXISTS idx_report_shots_created ON report_shots (created_at)
 CREATE TABLE IF NOT EXISTS wishes (seq INTEGER PRIMARY KEY AUTOINCREMENT, author_id TEXT NOT NULL, author_project TEXT, title TEXT NOT NULL, why TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '收到', status_note TEXT NOT NULL DEFAULT '', card_id TEXT, votes INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_wishes_author ON wishes (author_id, created_at);
 CREATE TABLE IF NOT EXISTS wish_votes (wish_seq INTEGER NOT NULL, participant_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (wish_seq, participant_id));
+CREATE TABLE IF NOT EXISTS skills (
+  id TEXT PRIMARY KEY,                 -- sk_xxx，一個版本一列
+  project TEXT NOT NULL,
+  name TEXT NOT NULL,                  -- 技能名稱＝資料夾名（小寫英數與 -）
+  version INTEGER NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  files TEXT NOT NULL,                 -- JSON [{ path, text }]
+  sha256 TEXT NOT NULL,                -- 整包雜湊（依路徑排序的 [路徑, 內容]）
+  size INTEGER NOT NULL,
+  has_scripts INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,                -- pending | published | rejected | superseded | removed
+  uploaded_by TEXT NOT NULL,
+  uploaded_at TEXT NOT NULL,
+  reviewed_by TEXT,
+  reviewed_at TEXT,
+  review_note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_skills_project ON skills (project, name, version);
+CREATE INDEX IF NOT EXISTS idx_skills_status ON skills (status, project);
+CREATE TABLE IF NOT EXISTS skill_allows (
+  ai_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,              -- 允許的是「這一版」，新版要重新允許
+  by_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (ai_id, skill_id)
+);

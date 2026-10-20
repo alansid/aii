@@ -7,6 +7,7 @@
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
 import { registerCards, teamCards, workFrom, autoArchive } from './cards.js';
 import { registerLogin } from './login.js';
+import { registerSkills } from './skills.js'; // C-346 角色技能庫
 import { optionWarnings } from './questions.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
@@ -71,7 +72,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
   const WATCHER_SHA256 = 'c449804500bffe997c7376529187b5ee0380a5acd93059787192cb5860f9a8ca';
   const WAIT_SHA256 = '6f4c0c67efb66e2bd4c040436f2363d280ed41886b1e58d81c370fd3ade26dc0'; // C-246 等待腳本
-  const SETUP_SHA256 = '8965e58d19946d2d86c5241db8b3449066ba87406aa1479aee99ebdf987fd616'; // C-327 接入檢查腳本 public/aigile-setup.mjs
+  const SETUP_SHA256 = 'd486b13a5d33bca6b52b629565ebddb046ce1f3662b08fc3d30f84cf7f76715b'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
   // C-337 B6：門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
   // 原本 worker 用模組變數記「目前的請求」，並行時會掛到別的（可能已結束的）請求上，門鈴遺失
@@ -905,7 +906,7 @@ ${trial
 ## 四、待命（${trial ? '試用者不待命：被叫醒才跑一輪' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 選第一個做得到的：Claude Code → watcher＋等待腳本；opencode → watcher＋喚醒腳本；Codex → 前景跑等待腳本（要先請 ${owner.name} 開網路，不用完全權限，見規格 3.12）；都不行 → ${owner.name} 手動叫你跑一輪。做法、雜湊不符、被工具擋下（不要繞過、不要換寫法重試）都照規格 3.12。
 - ${autoStandby ? `已同意，不必再問；失敗就照實回報、改用下一種。` : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}簽到不等於已待命：日誌有連線或巡檢紀錄、等待腳本在跑才算成功，不可假稱。
-- 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base}。它核對 Token、下載並核對 watcher、寫好 ${envFile}、印出啟動指令；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
+- 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base} --tool <claude|codex|other＝你的工具>。它核對 Token、下載並核對 watcher、寫好 ${envFile}、同步專案技能、印出啟動指令；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
 - 啟動 watcher 照檢查腳本印的指令（watcher.pid 的程序還在就不要再開${SB_URL && SB_KEY ? '' : '；平台未設定即時通道：每 15 分鐘巡檢'}）。等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110，結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報；Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
 - ${convoLine}
 - 每一輪照規格 4.1：先確認 participantId 是 ${ai.id}（不一致立刻停止）；處理完才 ACK，最後才存游標；沒事不發文。
@@ -978,8 +979,8 @@ ${trial
     return out;
   }
   const JSON_MAX = 256 * 1024;
-  async function readJson(req) {
-    const text = new TextDecoder().decode(await readBody(req, JSON_MAX, '請求內容過大'));
+  async function readJson(req, max = JSON_MAX) { // C-346：上傳技能可放寬（技能包 1 MB，JSON 跳脫會變大）
+    const text = new TextDecoder().decode(await readBody(req, max, '請求內容過大'));
     if (!text) return {};
     try { return JSON.parse(text); } catch { throw invalid('JSON 格式錯誤'); }
   }
@@ -2950,6 +2951,7 @@ ${trial
       if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
     }
   }
+  registerSkills({ route, db, ApiError, invalid, readJson, randId, nowIso, sha256, peopleMap, projectsOf, PROJECTS, nameOf, loadLeaders, adminOf, assertNoSecret, writeDm, myAi, requireHuman }); // C-346
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 
   // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
