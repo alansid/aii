@@ -2720,13 +2720,32 @@ ${trial
     return asks.flatMap(m => recentCache.replies.get(m.id));
   }
 
+  // C-320：待處理通知只讀通知表本身（不再 JOIN 訊息，每則少讀 1 列）。訊息不會改，它的專案與時間記在記憶體、只補讀新的；
+  // 待處理數有自己的快取，不跟著改卡、寫工作記憶、新的 [需確認] 一起失效（網頁 5 分鐘才輪詢一次，晚幾分鐘無妨）
+  let pendCache = { at: 0, rows: null };
+  const msgMeta = new Map(); // message_id → { project, at }；null＝訊息已不在
+  async function pendingRows() {
+    if (pendCache.rows && Date.now() - pendCache.at < TEAM_CACHE_MS) return pendCache.rows;
+    const rows = await db.all("SELECT recipient_id, message_id, reasons, created_at FROM notifications WHERE status = 'pending' ORDER BY created_at");
+    const ids = new Set(rows.map(n => n.message_id));
+    const missing = [...ids].filter(id => !msgMeta.has(id));
+    if (missing.length) {
+      const found = await db.all('SELECT id, project, created_at FROM messages WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(missing));
+      for (const id of missing) msgMeta.set(id, null);
+      for (const m of found) msgMeta.set(m.id, { project: m.project, at: m.created_at });
+    }
+    for (const id of msgMeta.keys()) if (!ids.has(id)) msgMeta.delete(id); // 只留目前待處理用得到的
+    for (const n of rows) { const m = msgMeta.get(n.message_id); n.msg_project = m?.project ?? null; n.msg_at = m ? m.at : null; }
+    pendCache = { at: Date.now(), rows };
+    return rows;
+  }
+
   async function teamStatus(ctx) {
     if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return teamCache.data;
     // C-240：互不相關的查詢同時送（每次查詢都可能要跨洲來回）
     const [people, recent, cardWork, pending, aiRows] = await Promise.all([
       peopleMap(ctx), recentMessages(), teamCards(db),
-      // C-245：待處理通知只讀一次（原本單表一次、JOIN 訊息又一次）；LEFT JOIN 保留訊息已刪的通知，照舊算進待處理數
-      db.all("SELECT n.*, m.project AS msg_project, m.created_at AS msg_at FROM notifications n LEFT JOIN messages m ON m.id = n.message_id WHERE n.status = 'pending' ORDER BY n.created_at"),
+      pendingRows(), // C-245 起只讀一次；C-320 起不 JOIN 訊息（訊息已不在的通知照舊算進待處理數）
       db.all('SELECT participant_id, state, updated_at FROM ai_state'),
     ]);
     const pendRows = pending.filter(n => n.msg_at != null).map(n => ({ recipient_id: n.recipient_id, created_at: n.created_at, project: n.msg_project, msg_at: n.msg_at }));

@@ -61,6 +61,36 @@ try {
   // 索引：在線狀態用
   assert.ok((await raw.all("SELECT name FROM sqlite_master WHERE name = 'idx_participants_seen'")).length, '有 participants(last_seen_at) 索引');
 
+  // C-320：團隊狀態的待處理數不再把通知連同訊息整批讀（每則 2 列 → 1 列）；訊息的專案與時間記在記憶體只補讀新的；
+  // 待處理數有自己的快取，改卡等寫入讓團隊狀態重算時不跟著重讀通知
+  // 修正前：每次都 JOIN 訊息，改一張卡團隊狀態就整批重讀
+  const log = [];
+  const spy = { ...raw, all: (sql, ...a) => { const rows = raw.all(sql, ...a); const s = sql.replace(/\s+/g, ' ').trim(); if (/notifications|FROM messages WHERE id IN/.test(s)) Promise.resolve(rows).then(r => log.push({ s, n: r.length })); return rows; } };
+  const T = createApp({ db: spy, storage: dbStorage(raw), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000', teamCacheMs: '1000' } });
+  const say = i => call(T, liu.token, '/api/messages', 'POST', { project: '平台', requestId: 'pend' + i, recipientIds: [C], text: '[通知] 給陳的第 ' + i + ' 則' });
+  const team = async () => { log.length = 0; const r = await call(T, liu.token, '/api/team-status'); await sleep(5); return r.body.members.find(m => m.participantId === C); };
+  const notifQ = () => log.filter(x => /FROM notifications/.test(x.s) && /status = 'pending'/.test(x.s) && !/recipient_id = \?/.test(x.s));
+  const msgQ = () => log.filter(x => /FROM messages WHERE id IN/.test(x.s));
+  for (let i = 1; i <= 5; i++) await say(i);
+  await sleep(1100);
+  let mb = await team();
+  assert.equal(mb.pendingCount, 5, '待處理數照算');
+  assert.ok(!log.some(x => /notifications n LEFT JOIN messages/.test(x.s)), '不再 JOIN 訊息');
+  assert.deepEqual(notifQ().map(x => x.n), [5], '通知表讀 1 次、5 則');
+  assert.deepEqual(msgQ().map(x => x.n), [5], '第一次補讀 5 則訊息的專案與時間');
+  await sleep(1100);
+  mb = await team();
+  assert.equal(mb.pendingCount, 5);
+  assert.deepEqual(msgQ(), [], '訊息已記住：快取到期重算也不再讀訊息');
+  await say(6); await sleep(1100);
+  mb = await team();
+  assert.equal(mb.pendingCount, 6, '新通知算進去');
+  assert.deepEqual(msgQ().map(x => x.n), [1], '只補讀新的那 1 則訊息');
+  await call(T, liu.token, '/api/cards', 'POST', { requestId: 'pendcard', project: '平台', title: '改卡讓團隊狀態重算' });
+  mb = await team();
+  assert.deepEqual(notifQ(), [], '改卡後團隊狀態重算，待處理數用自己的快取，不重讀通知');
+  assert.equal(mb.pendingCount, 6);
+
   // ① 團隊狀態：網頁 5 分鐘輪詢、伺服器快取 180 秒
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(js, /Date\.now\(\) - lastTeamPoll > 300_000/, '網頁團隊狀態 5 分鐘輪詢一次');
