@@ -69,7 +69,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = '51bc4538f5d1435a5174c368dd4078344dbacf349b6150c14c6615561829c5be';
+  const WATCHER_SHA256 = 'c449804500bffe997c7376529187b5ee0380a5acd93059787192cb5860f9a8ca';
   const WAIT_SHA256 = '407be400a90b6872459b2db21ac4877f9bfb29918603244e08bc06e0dd8167ac'; // C-246 等待腳本
   const SETUP_SHA256 = '8ff6bd8eb3c2b2212215bc92171eb4d71582fe361128d4b632df8074ca439fcf'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
@@ -86,6 +86,11 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     bellPending.add(p);
   }
   const flushBells = () => Promise.allSettled([...bellPending]);
+  // C-341 B：知會類通知不叫醒（留在清單，下次被叫醒時一起看）：對方標了不用你回、只是回覆你、[接單]／[完成]／[進度]。
+  // 私訊、指定要你回覆（replyFrom）一律叫醒
+  const FYI_PREFIX = /^\s*\[(接單|完成|進度)\]/;
+  const needsWake = (ask, reasons, text, dm = false) => dm || ask === true
+    || !(ask === false || (reasons.length === 1 && reasons[0] === 'reply') || FYI_PREFIX.test(text || ''));
   const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 168) * 3600_000; // 預設 7 天
   const HUMAN_TOKEN_TTL_MS = (Number(config.humanTokenTtlHours) || 720) * 3600_000;
   const FILE_TTL_MS = (Number(config.fileTtlHours) || 1) * 3600_000; // 預設保存 1 小時
@@ -321,13 +326,16 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     return rows.filter(n => msgs.has(n.message_id)).map(n => {
       const m = msgs.get(n.message_id);
       const sender = people.get(m.author_id);
+      const ask = (() => { try { return m.reply_from ? JSON.parse(m.reply_from).includes(n.recipient_id) : null; } catch { return null; } })();
+      const reasons = JSON.parse(n.reasons);
       return {
         notificationId: n.id,
-        reasons: JSON.parse(n.reasons),
+        reasons,
         messageId: n.message_id,
         replyToMessageId: m.reply_to,
         project: m.project || null,
-        ask: (() => { try { return m.reply_from ? JSON.parse(m.reply_from).includes(n.recipient_id) : null; } catch { return null; } })(), // C-259：true 要你回覆、false 知會、null 沒標
+        ask, // C-259：true 要你回覆、false 知會、null 沒標
+        wake: needsWake(ask, reasons, m.text, !!m.dm), // C-341 B：false＝知會，watcher 不為它叫醒
         ...(m.dm ? { dm: true } : {}), // C-270：私訊（用 GET /api/dm 讀，GET /api/messages/:id 讀不到）
         sender: { participantId: sender.id, name: sender.name, role: sender.role, shortCode: sender.code },
         preview: m.text.length > 100 ? m.text.slice(0, 100) + '…' : m.text,
@@ -478,7 +486,8 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
         warnings.push(`AI 一則最多指定一位要回覆：保留 ${people.get(ask[0])?.name || ask[0]}，其他改為知會。`);
         ask = ask.slice(0, 1);
       }
-    } else if (recipientIds.size === 1) ask = [...recipientIds];
+    } else if (FYI_PREFIX.test(text)) ask = null; // C-341：[接單]／[完成]／[進度] 是告知，沒指定 replyFrom 就不預設「要回覆」
+    else if (recipientIds.size === 1) ask = [...recipientIds];
     else if (replyAuthor && recipientIds.has(replyAuthor)) ask = [replyAuthor]; // C-277：被回覆的人預設要回覆，其他知會
 
     // 專案（C-172）：只屬一個專案的人沒帶＝自己的專案（回覆全部專案的訊息也一樣，不再繼承「全部專案」）；
@@ -538,7 +547,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       if (again) return { message: await serializeMessage(ctx, again), duplicate: true };
       throw e;
     }
-    ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai'), createdAt);
+    ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai' && needsWake(ask ? ask.includes(rid) : null, reasons.get(rid) || [], text)), createdAt); // C-341 B
     if (inferState(text) === 'waiting') teamCache = { at: 0, data: null }; // C-195：新的 [需確認] 馬上出現在收件匣與「要你處理」（不等 60 秒快取）
     if (replyTo && me.kind === 'human') {
       teamCache = { at: 0, data: null }; // 人類回覆 [需確認] 後，收件匣立即更新

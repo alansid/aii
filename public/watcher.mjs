@@ -20,7 +20,8 @@
 //   BELL_FILE          （C-246）門鈴檔，例如 .aigile/PG/bell.json：有新的待處理通知就寫入筆數與時間，
 //                      每 5 分鐘寫一次本機心跳（不連平台）；aigile-wait.mjs 只盯這個檔，沒事時不連平台
 //   PID_FILE           （C-246）啟動時把自己的程序編號寫進這個檔（例如 .aigile/PG/watcher.pid），結束時刪掉
-//   WAKE_MAX_PER_HOUR  （C-327）每小時最多叫醒幾次，預設 3；WAKE_MAX_PER_DAY 每 24 小時最多幾次，預設 15（0＝不限）
+//   WAKE_MAX_PER_HOUR  （C-327）每小時最多叫醒幾次；WAKE_MAX_PER_DAY 每 24 小時最多幾次（0＝不限）。預設依接法（C-341）：
+//                      WAKE_CMD 是 echo（Claude Code：只寫門鈴，等待腳本醒）每小時 12、每天 60；其他（opencode 等，每次都跑模型）每小時 3、每天 15
 //                      到上限就先不叫醒，時段過了自動補叫，並私訊所屬人類一次；次數記在門鈴檔，重開 watcher 不歸零
 //   WAKE_TIMEOUT_MIN   （C-327）單次喚醒最多跑幾分鐘，預設 10（0＝不限）；超過就把喚醒指令連同它開的程序停掉，並私訊所屬人類
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
@@ -43,7 +44,8 @@ const HEARTBEAT_MS = (Number(env.HEARTBEAT_MIN) || 15) * 60_000;
 const BELL_FILE = env.BELL_FILE || '';
 const PID_FILE = env.PID_FILE || '';
 const num = (v, d) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Math.max(0, Number(v)));
-const MAX_HOUR = num(env.WAKE_MAX_PER_HOUR, 3), MAX_DAY = num(env.WAKE_MAX_PER_DAY, 15);
+const BELL_ONLY = /^\s*echo\b/i.test(WAKE_CMD); // C-341 A：只寫門鈴的接法，叫醒本身不耗模型用量
+const MAX_HOUR = num(env.WAKE_MAX_PER_HOUR, BELL_ONLY ? 12 : 3), MAX_DAY = num(env.WAKE_MAX_PER_DAY, BELL_ONLY ? 60 : 15);
 const TIMEOUT_MS = num(env.WAKE_TIMEOUT_MIN, 10) * 60_000;
 const HOUR_MS = 3_600_000, DAY_MS = 24 * HOUR_MS;
 
@@ -89,7 +91,7 @@ async function unread() {
 async function pendingIds() {
   const r = await fetch(`${BASE}/api/notifications?status=pending&limit=50`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } });
   if (!r.ok) throw new Error(`通知清單 HTTP ${r.status}`);
-  return (await r.json()).items.map(n => n.notificationId);
+  return (await r.json()).items; // C-341 B：帶 wake，知會類（wake: false）不叫醒
 }
 async function check(why) {
   let pending;
@@ -98,8 +100,10 @@ async function check(why) {
   if (WATCH_ONLY && !BELL_FILE) return log(`[${why}] 有 ${pending} 則待處理，只記錄模式，不喚醒`);
   let ids;
   try { ids = await pendingIds(); } catch (e) { return log(`[${why}] 查通知清單失敗：${e.message}`); }
-  const fresh = ids.filter(id => !woken.has(id));
-  if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理，但都已為它們喚醒過，不重複喚醒`); }
+  const fyi = ids.filter(n => n.wake === false).length;
+  const fresh = ids.filter(n => n.wake !== false && !woken.has(n.notificationId)).map(n => n.notificationId);
+  ids = ids.map(n => n.notificationId);
+  if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理${fyi ? `（${fyi} 則只是知會）` : ''}，沒有新的要處理，不叫醒`); }
   if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
   if (running) { queued = true; return log(`[${why}] 有 ${fresh.length} 則新的待處理，但 AI 正在執行，排隊補跑`); }
   const cap = capped();

@@ -96,7 +96,8 @@ try {
 
   // 4) 預設值：每小時 3、每天 15、單次 10 分鐘；規格寫明
   const src = fs.readFileSync(WATCHER, 'utf8');
-  assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, 3\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, 15\)/); assert.match(src, /num\(env\.WAKE_TIMEOUT_MIN, 10\)/);
+  // C-341：會跑模型的接法（這裡的 WAKE_CMD 是 node）維持 3／15；Claude Code（echo）12／60 見 c341-test
+  assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, BELL_ONLY \? 12 : 3\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, BELL_ONLY \? 60 : 15\)/); assert.match(src, /num\(env\.WAKE_TIMEOUT_MIN, 10\)/);
   const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
   assert.match(spec, /每小時最多叫醒 3 次、每天 15 次、單次最多 10 分鐘/, '規格寫明上限');
   console.log('watcher-limit-test：全部通過');
