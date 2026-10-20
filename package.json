@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "0.84.1",
+  "version": "0.84.2",
   "private": true,
   "description": "人類與 AI 助手共用的協作群組（Aigile-Switch 復刻版）",
   "type": "module",
@@ -81,6 +81,7 @@
     "test:watcher-limit": "node scripts/watcher-limit-test.js",
     "test:convo": "node scripts/convo-test.js",
     "test:c337": "node scripts/c337-test.js",
+    "test:c334": "node scripts/c334-test.js",
     "test:token-warn": "node scripts/token-warn-test.js"
   }
 }

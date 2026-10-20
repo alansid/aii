@@ -514,7 +514,9 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     if (audience && project) for (const rid of [...recipientIds]) if (!projectsOf(people.get(rid)).includes(project)) recipientIds.delete(rid);
     const reasons = new Map();
     for (const rid of recipientIds) reasons.set(rid, [audience ? 'all' : 'mention']);
-    if (replyTo && replyTo.author_id !== me.id && (!project || !isolatedFrom(people.get(replyTo.author_id)) || projectsOf(people.get(replyTo.author_id)).includes(project))) {
+    const replyPerson = replyTo && people.get(replyTo.author_id);
+    if (replyTo && replyTo.author_id !== me.id && replyPerson?.status === 'active' && replyPerson.kind !== 'system' // C-334 B5
+      && (!project || !isolatedFrom(replyPerson) || projectsOf(replyPerson).includes(project))) {
       reasons.set(replyTo.author_id, [...(reasons.get(replyTo.author_id) || []), 'reply']);
     }
     const stmts = [[
@@ -637,9 +639,14 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     let rows = await db.all(sql, me.id, ...(scope ? scope.args : []), limit + 1);
     const hasMore = rows.length > limit;
     if (hasMore) rows = rows.slice(0, limit);
+    const items = await serializeNotifications(ctx, rows);
+    if (status === 'pending' && items.length < rows.length) { // C-334 B7
+      const seen = new Set(items.map(x => x.notificationId)), orphans = rows.filter(n => !seen.has(n.id)).map(n => n.id);
+      await db.run("UPDATE notifications SET status = 'acked', acked_at = ? WHERE id IN (SELECT value FROM json_each(?)) AND status = 'pending'", nowIso(), JSON.stringify(orphans));
+    }
     // 超過 limit 時附上總數，讓畫面寫「還有幾則」
     const total = hasMore && status === 'pending' ? (await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join}`, me.id, ...(scope ? scope.args : []))).c : undefined;
-    return { items: await serializeNotifications(ctx, rows), hasMore, ...(total !== undefined ? { total } : {}) };
+    return { items, hasMore, ...(total !== undefined ? { total } : {}) };
   }
 
   async function ackNotifications(me, ids) {
@@ -2948,6 +2955,17 @@ ${trial
   // 對外：處理 /api/*；base 為對外網址（例如 https://xxx.workers.dev）
   handle.cleanupExpired = cleanupExpired;
   handle.flushBells = flushBells; // 排程等門鈴送完（C-337 B6）
+  const AUTO_ACK_DAYS = 7;
+  async function autoAckPending(force = false) {
+    const t = new Date();
+    if (!force && !(t.getUTCHours() === 19 && t.getUTCMinutes() < 10)) return 0; // 排程每 10 分鐘跑；只在台灣 03:00 那次做
+    const r = await db.run(`UPDATE notifications SET status = 'acked', acked_at = ? WHERE status = 'pending' AND (
+      recipient_id IN (SELECT id FROM participants WHERE status != 'active')
+      OR (created_at < ? AND recipient_id IN (SELECT id FROM participants WHERE kind = 'human')))`, nowIso(), new Date(Date.now() - AUTO_ACK_DAYS * 86400_000).toISOString());
+    if (r.changes) { pendCache = { at: 0, rows: null }; teamCache = { at: 0, data: null }; }
+    return r.changes;
+  }
+  handle.autoAckPending = autoAckPending;
   // 排程工作：清除過期文件
   // 網頁（index.html）送出前：把寫死的預設群組名換成真正的，並加上連結預覽（LINE／Messenger 抓 <title> 與 og:*）
   const escHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2963,7 +2981,8 @@ ${trial
   handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db),
     proposalsExpired: (await db.run("UPDATE avatar_proposals SET status = 'expired', data = NULL WHERE status = 'pending' AND created_at < ?", Date.now() - 24 * 3600_000).catch(() => ({ changes: 0 }))).changes, // C-272
     shotsCleaned: (await db.run('UPDATE report_shots SET data = NULL WHERE data IS NOT NULL AND created_at < ?', Date.now() - SHOT_DAYS * 86400_000).catch(() => ({ changes: 0 }))).changes, // C-281 截圖保存 30 天
-    wishDigest: await wishDigest().catch(() => 0) });
+    wishDigest: await wishDigest().catch(() => 0),
+    pendingAutoAcked: await autoAckPending().catch(() => 0) }); // C-334
   return handle;
 
   // C-220：只屬部分專案的人，回應裡別人的 projects、projectRoles 只留看的人自己也在的專案（不露出別專案的名稱或代號）。
