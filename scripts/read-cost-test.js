@@ -65,7 +65,7 @@ try {
   // 待處理數有自己的快取，改卡等寫入讓團隊狀態重算時不跟著重讀通知
   // 修正前：每次都 JOIN 訊息，改一張卡團隊狀態就整批重讀
   const log = [];
-  const spy = { ...raw, all: (sql, ...a) => { const rows = raw.all(sql, ...a); const s = sql.replace(/\s+/g, ' ').trim(); if (/notifications|FROM messages WHERE id IN/.test(s)) Promise.resolve(rows).then(r => log.push({ s, n: r.length })); return rows; } };
+  const spy = { ...raw, all: (sql, ...a) => { const rows = raw.all(sql, ...a); const s = sql.replace(/\s+/g, ' ').trim(); if (/notifications|FROM messages WHERE id IN|card_msgs/.test(s)) Promise.resolve(rows).then(r => log.push({ s, n: r.length })); return rows; } };
   const T = createApp({ db: spy, storage: dbStorage(raw), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000', teamCacheMs: '1000' } });
   const say = i => call(T, liu.token, '/api/messages', 'POST', { project: '平台', requestId: 'pend' + i, recipientIds: [C], text: '[通知] 給陳的第 ' + i + ' 則' });
   const team = async () => { log.length = 0; const r = await call(T, liu.token, '/api/team-status'); await sleep(5); return r.body.members.find(m => m.participantId === C); };
@@ -90,6 +90,31 @@ try {
   mb = await team();
   assert.deepEqual(notifQ(), [], '改卡後團隊狀態重算，待處理數用自己的快取，不重讀通知');
   assert.equal(mb.pendingCount, 6);
+
+  // C-322：卡片「可能過時」檢查：找舊卡只讀未結案的（狀態索引）；關聯訊息讀過就記住，之後只補讀新加的關聯
+  // 修正前：每次重算都把舊卡的全部關聯訊息整批重讀
+  const S = createApp({ db: spy, storage: dbStorage(raw), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000', cardStaleHours: String(1 / 3600) } }); // 門檻 1 秒、快取約 17 毫秒
+  const mkCard = async t => (await call(S, liu.token, '/api/cards', 'POST', { requestId: 'st' + t, project: '平台', title: t })).body;
+  const ca = await mkCard('甲'), cb = await mkCard('乙'), cdone = await mkCard('已完成的');
+  await call(S, liu.token, `/api/cards/${cdone.cardId}`, 'PATCH', { status: '已完成', version: cdone.version });
+  const link = (cid, i) => call(S, liu.token, '/api/messages', 'POST', { project: '平台', requestId: 'sl' + cid + i, cardId: cid, text: '討論 ' + cid + ' 第 ' + i + ' 則' });
+  await sleep(1200);
+  for (let i = 0; i < 3; i++) await link(ca.cardId, i);
+  const hints = async () => { await sleep(30); log.length = 0; const r = await call(S, liu.token, '/api/cards?status=open'); await sleep(5); return new Set(r.body.items.filter(c => c.staleHint).map(c => c.cardId)); };
+  const fullQ = () => log.filter(x => /card_seq IN \(SELECT value FROM json_each/.test(x.s));
+  let h = await hints();
+  assert.ok(h.has(ca.cardId) && !h.has(cb.cardId), '甲有新討論 → 可能過時；乙沒有');
+  const oldPlan = (await raw.all("EXPLAIN QUERY PLAN SELECT seq, updated_at FROM cards WHERE status IN (SELECT value FROM json_each('[\"待處理\"]')) AND updated_at < '9'")).map(r => r.detail).join(' | ');
+  assert.match(oldPlan, /idx_cards_status/, '找舊卡用狀態索引：' + oldPlan);
+  assert.ok(fs.readFileSync(new URL('../src/cards.js', import.meta.url), 'utf8').includes("'SELECT seq, updated_at FROM cards WHERE status IN (SELECT value FROM json_each(?)) AND updated_at < ?'"), '程式用這條找舊卡');
+  h = await hints();
+  assert.ok(h.has(ca.cardId), '標示照舊');
+  assert.deepEqual(fullQ(), [], '關聯訊息讀過就記住，不再整批重讀');
+  await link(cb.cardId, 0);
+  h = await hints();
+  assert.ok(h.has(cb.cardId), '乙的新關聯補讀到 → 乙也可能過時');
+  assert.deepEqual(fullQ(), [], '只補讀新加的關聯');
+  assert.ok(!h.has(cdone.cardId), '已完成的卡不算');
 
   // ① 團隊狀態：網頁 5 分鐘輪詢、伺服器快取 180 秒
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');

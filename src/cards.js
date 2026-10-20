@@ -194,19 +194,34 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   // 可能過時（C-144）：未結案、updated_at 超過門檻，且關聯訊息在 updated_at 之後 1 分鐘以上又有新動態（[通知] 系統訊息不算）
   // C-245：原本每次讀卡片列表都把所有未結案卡的關聯訊息整批 JOIN（一天 300 萬列讀取）。
   // 改成先用 updated_at 索引只挑「夠久沒更新」的未結案卡，再只讀這幾張的關聯訊息；結果在記憶體留一下（門檻 24 小時時為 60 秒）。
-  const STALE_CACHE_MS = Math.min(60_000, STALE_CARD_MS / 60);
+  // C-322：一天還有約 30 萬列。找舊卡改用狀態索引只讀未結案的（原本把已完成、已封存的舊卡也讀進來再丟）；
+  // 關聯訊息第一次讀完記在記憶體，之後只補讀新加的關聯（card_msgs 只會新增、訊息不會改）；快取 1 → 5 分鐘
+  const STALE_CACHE_MS = Math.min(300_000, STALE_CARD_MS / 60);
+  const OPEN_LIST = JSON.stringify(CARD_STATUSES.filter(s => !['已完成', '已封存'].includes(s)));
   let staleCache = { at: 0, map: null };
+  const linkLatest = new Map(); // card_seq → 最新一則非 [通知] 關聯訊息 { id, at }（只留目前「夠久沒更新」的未結卡）
+  let linkRowid = null;          // 讀到哪一筆 card_msgs
+  const bump = (seq, r) => { const cur = linkLatest.get(seq); if (!cur || r.at > cur.at) linkLatest.set(seq, { id: r.id, at: r.at }); };
   async function staleHints() {
     if (staleCache.map && Date.now() - staleCache.at < STALE_CACHE_MS) return staleCache.map;
     const now = Date.now(), out = new Map();
-    const old = await db.all(`SELECT seq, updated_at FROM cards WHERE updated_at < ? AND status NOT IN ${OPEN_STATUSES_SQL}`, new Date(now - STALE_CARD_MS).toISOString());
-    if (old.length) {
-      const latest = new Map();
+    const old = await db.all('SELECT seq, updated_at FROM cards WHERE status IN (SELECT value FROM json_each(?)) AND updated_at < ?', OPEN_LIST, new Date(now - STALE_CARD_MS).toISOString());
+    const oldSeqs = new Set(old.map(c => c.seq));
+    if (linkRowid === null) linkRowid = (await db.get('SELECT COALESCE(MAX(rowid), 0) AS r FROM card_msgs')).r;
+    else {
+      const fresh = await db.all(`SELECT cm.rowid AS rid, cm.card_seq AS seq, m.id AS id, m.created_at AS at, m.text LIKE '[通知]%' AS sys
+        FROM card_msgs cm JOIN messages m ON m.id = cm.message_id WHERE cm.rowid > ?`, linkRowid);
+      for (const r of fresh) { linkRowid = Math.max(linkRowid, r.rid); if (!r.sys && linkLatest.has(r.seq)) bump(r.seq, r); }
+    }
+    for (const seq of linkLatest.keys()) if (!oldSeqs.has(seq)) linkLatest.delete(seq); // 結案或又更新了就不用記
+    const need = old.filter(c => !linkLatest.has(c.seq)).map(c => c.seq);
+    if (need.length) {
+      for (const seq of need) linkLatest.set(seq, null);
       for (const r of await db.all(`SELECT cm.card_seq AS seq, m.id AS id, m.created_at AS at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
-        WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%'`, JSON.stringify(old.map(c => c.seq)))) {
-        const cur = latest.get(r.seq);
-        if (!cur || r.at > cur.at) latest.set(r.seq, r);
-      }
+        WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%'`, JSON.stringify(need))) bump(r.seq, r);
+    }
+    if (old.length) {
+      const latest = linkLatest;
       for (const c of old) {
         const l = latest.get(c.seq);
         if (l && Date.parse(l.at) - Date.parse(c.updated_at) > Math.min(60_000, STALE_CARD_MS)) out.set(c.seq, { lastUpdatedAt: c.updated_at, latestMessageAt: l.at, latestMessageId: l.id });
