@@ -54,8 +54,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     // 設定缺少、Token 錯
     let r = await runWait([], { AIGILE_BASE: '' });
     assert.equal(r.last, 'CONFIG_ERROR'); assert.equal(r.code, 40);
-    r = await runWait([], { AIGILE_TOKEN: 'bad-token' });
+    // Token 檔錯 → UNAUTHORIZED（Token 以檔案為準：10/20 起舊的 AIGILE_TOKEN 環境變數不能蓋掉檔案）
+    const badTok = path.join(dir, 'bad.token'); fs.writeFileSync(badTok, 'bad-token');
+    r = await runWait([], { AIGILE_TOKEN_FILE: badTok });
     assert.equal(r.last, 'UNAUTHORIZED'); assert.equal(r.code, 20, 'Token 錯：UNAUTHORIZED 結束碼 20');
+    r = await runWait(['--max-min=0.02'], { AIGILE_TOKEN: 'bad-token' });
+    assert.notEqual(r.last, 'UNAUTHORIZED', '環境變數是舊的、檔案是對的 → 用檔案');
 
     // 啟動時就有待處理
     await ping();

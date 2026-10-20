@@ -24,7 +24,7 @@ try {
   const ob = async q => (await call(liu.token, `/api/my-ais/${ai.participantId}/onboarding${q}`)).body.text;
 
   const def = await ob('');
-  assert.match(def, /對話接續（劉昱志 選的）：太長才換新，同一個對話叫醒滿 10 次就換新。opencode：WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent PG --mode auto/, '預設太長才換新，WAKE_CMD 照選的方式寫好');
+  assert.match(def, /對話接續（劉昱志 選的）：太長才換新，同一個對話叫醒滿 10 次就換新。opencode：WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent PG_[A-Z0-9]{4} --mode auto/, '預設太長才換新，WAKE_CMD 照選的方式寫好');
   const fr = await ob('?convo=fresh&autoStandby=1');
   assert.match(fr, /對話接續（劉昱志 選的）：每次叫醒開新對話/); assert.match(fr, /--mode fresh/); assert.match(fr, /Claude Code 照規格 3\.12 用 claude -p/);
   assert.match(await ob('?convo=keep'), /一直接續同一個對話.*--mode keep/);

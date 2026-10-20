@@ -130,7 +130,7 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     assert.ok(obPg.indexOf('## 零、你是重新接上，還是第一次？') < obPg.indexOf('## 一、'), '5. 最前面是「零、重新接上還是第一次」');
     assert.match(obPg, /不要重新簽到；游標沿用 state\.json 的 messagesCursor（換了電腦就用 GET \/api\/me\/state 的 messagesCursor、cardsSince）/, 'C-243：零節寫從工作記憶讀回位置');
     assert.match(obPg, /messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間）/, 'C-243：工作記憶段寫出新欄位');
-    assert.match(obPg, /Token 跟 \.aigile\/PG\/\.token 不同才換/);
+    assert.match(obPg, /Token 跟 \.aigile\/PG_[A-Z0-9]{4}\/\.token 不同才換/);
     assert.match(obPg, /watcher\.pid 的程序還在執行就不要再開/, '6. watcher.pid');
     assert.match(spec, /被強制結束時手動刪掉/);
     assert.match(obPg, /- 平台（血汗勞工平台）\n  - 程式庫：https:\/\/github\.com\/alansid\/multiagent，分支 main\n  - 開工前先確認本機的 git remote 和分支跟這裡一致；不一致先問 劉昱志/, '7. API 代號、程式庫、分支');

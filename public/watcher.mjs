@@ -29,7 +29,10 @@ import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 
 const env = process.env;
 const BASE = (env.AIGILE_BASE || '').replace(/\/+$/, '');
-const TOKEN = env.AIGILE_TOKEN || (env.AIGILE_TOKEN_FILE ? readFileSync(env.AIGILE_TOKEN_FILE, 'utf8').trim() : '');
+// 有 AIGILE_TOKEN_FILE 就以檔案為準：舊的 AIGILE_TOKEN 環境變數不能蓋掉剛換好的 Token 檔
+let TOKEN = '';
+try { if (env.AIGILE_TOKEN_FILE) TOKEN = readFileSync(env.AIGILE_TOKEN_FILE, 'utf8').trim(); } catch {}
+TOKEN = TOKEN || env.AIGILE_TOKEN || '';
 const ME = env.AIGILE_ME || '';
 const SB_URL = (env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SB_KEY = env.SUPABASE_KEY || '';

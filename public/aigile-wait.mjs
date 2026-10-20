@@ -44,8 +44,9 @@ let envBase = '';
 try { envBase = /^AIGILE_BASE=(.*)$/m.exec(fs.readFileSync(path.join(DIR, 'watcher.env'), 'utf8'))?.[1].trim() || ''; } catch {}
 const BASE = (process.env.AIGILE_BASE || envBase).replace(/\/+$/, '');
 const tokenFile = process.env.AIGILE_TOKEN_FILE || path.join(DIR, '.token');
-let TOKEN = process.env.AIGILE_TOKEN || '';
-try { if (!TOKEN) TOKEN = fs.readFileSync(tokenFile, 'utf8').trim(); } catch {}
+let TOKEN = '';
+try { TOKEN = fs.readFileSync(tokenFile, 'utf8').trim(); } catch {} // 檔案為準，舊的 AIGILE_TOKEN 環境變數不能蓋掉它
+TOKEN = TOKEN || process.env.AIGILE_TOKEN || '';
 
 const finish = (line, code) => { console.log(line); process.exit(code); };
 const note = line => console.log(`${new Date().toISOString()} ${line}`);

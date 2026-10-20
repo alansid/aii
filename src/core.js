@@ -68,9 +68,9 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = 'c08a492b902b54661ae304bbf6d09b33ce354df89eb64107a621fa795ca8a954';
-  const WAIT_SHA256 = '5db97b93690786bd23a58f6a3bcfe36010cbfc4aedc5f96b15387af7b133dcc8'; // C-246 等待腳本
-  const SETUP_SHA256 = '97ad714051da8229ab0815955454ccfbc0f7dc47e79bd77f4b4d512508fb2128'; // C-327 接入檢查腳本 public/aigile-setup.mjs
+  const WATCHER_SHA256 = '31a0c265a0b904ad692126d9d640c1f2f68f2ee3e828e49b621bcfb836e39946';
+  const WAIT_SHA256 = '407be400a90b6872459b2db21ac4877f9bfb29918603244e08bc06e0dd8167ac'; // C-246 等待腳本
+  const SETUP_SHA256 = '8ff6bd8eb3c2b2212215bc92171eb4d71582fe361128d4b632df8074ca439fcf'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
   const defer = config.defer || (p => p);
   function ringDoorbell(ids, at) {
@@ -860,7 +860,7 @@ ${trial ? `
 - ${base}　Authorization：Bearer ${ai.token}（到期 ${iso(ai.token_expires_at)}；過期請 ${owner.name} 在網頁重發）
 - 不要把 Token 貼到群組、寫進 git、日誌或證據；存成 .aigile/${agent}/.token。
 - .aigile/ 不能進 git：是 git 資料夾就確認 .gitignore 有 .aigile/；不是 git 資料夾 → 略過這步，不算受阻。
-- 代號（--agent）：${agent}。同台電腦的其他 AI 各用自己的代號、Token、狀態檔，絕不共用；撞了改用 ${agent}2。
+- 代號（--agent）：${agent}（平台給的，不會跟別的 AI 重複，不要自己改）。同台電腦的其他 AI 各用自己的代號、Token、狀態檔，絕不共用。
 
 ## 三、初次接入（只做一次）
 省用量：規格與本設定讀一次存本機，之後用搜尋或指定範圍讀，不整份重讀；命令、日誌只看最後 20 行，API 用 brief=1、limit。超過 40 回合還沒接好就停下，告訴 ${owner.name} 卡在哪。
@@ -2504,7 +2504,8 @@ ${trial
     return { text: await onboardingText(base, await myAi(me, params.id), { consent, convo: url.searchParams.get('convo') }) };
   });
   // AI 在本機的資料夾名（.aigile/<代號>/）：角色代碼，自訂角色用 AI
-  const agentDir = ai => (ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI');
+  // 10/20：代號＝角色_短代碼（PG_2URQ）。原本只用角色代碼，同台電腦兩個 PG 共用 .aigile/PG/，Token 互相蓋掉（行內 codex-pg-銀行 401）
+  const agentDir = ai => `${ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI'}_${ai.code}`;
   // C-283 短版接入：一次性連結（15 分鐘、只能讀一次；重產讓舊的失效）。只存雜湊，不快取、不記內容
   const OLINK_TTL = 15 * 60_000;
   route('POST', '/api/my-ais/:id/onboarding-link', async ({ me, params, base, req }) => {

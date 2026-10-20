@@ -23,8 +23,9 @@ try {
   // 各自的資料夾
   const lba = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding-link`, 'POST', {})).body;
   const lpg = (await call(liu.token, `/api/my-ais/${pg.participantId}/onboarding-link`, 'POST', {})).body;
-  assert.equal(lba.agent, 'BA', 'BA 存 .aigile/BA/（修正前沒有，網頁只好用共用檔名）');
-  assert.equal(lpg.agent, 'PG', 'PG 存 .aigile/PG/');
+  // 10/20 起代號＝角色_短代碼（同一個人兩個 PG 不會共用 .aigile/PG/）
+  assert.match(lba.agent, /^BA_[A-Z0-9]{4}$/, 'BA 存 .aigile/BA_xxxx/（修正前沒有，網頁只好用共用檔名）');
+  assert.match(lpg.agent, /^PG_[A-Z0-9]{4}$/, 'PG 存 .aigile/PG_xxxx/');
 
   // 下載下來的設定：開頭有身分核對、接完刪 setup.md
   const text = async url => (await raw(url.replace('http://localhost', ''))).text();
@@ -32,7 +33,7 @@ try {
   assert.match(tBa.slice(0, 400), /這份設定是給「投信需求分析」/, 'BA 的設定開頭寫明是給 BA');
   assert.match(tPg.slice(0, 400), /這份設定是給「投信程式開發」/, 'PG 的設定開頭寫明是給 PG');
   assert.match(tPg, /名字不是這個，就是讀到別的 AI 的檔：停下來/, '身分不符就停');
-  assert.match(tPg, /\.aigile\/PG\/setup\.md 含 Token，存好 \.token 後就刪掉/, '接完刪掉 setup.md');
+  assert.ok(tPg.includes(`.aigile/${lpg.agent}/setup.md 含 Token，存好 .token 後就刪掉`), '接完刪掉 setup.md');
   // 連結只能讀一次（照舊）
   assert.equal((await raw(lpg.url.replace('http://localhost', ''))).status, 410, '連結只能讀一次');
 
