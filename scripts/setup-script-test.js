@@ -105,6 +105,22 @@ try {
   assert.equal(r.code, 1); assert.match(r.out.trim().split('\n').pop(), /^卡在：Token。怎麼辦：.*重發 Token/);
   assert.ok(!fs.existsSync(path.join(c, '.aigile/watcher')), '失敗就不往下做');
 
+  // 3a) C-344：連不上平台（例如 Codex 沙盒沒開網路）→ 最後一行直接寫怎麼開，不用開完全權限
+  //     修正前只說「公司網路多半要代理」，Codex 使用者不知道要改哪裡
+  const nc = work(); putToken(nc);
+  r = await run(nc, pub('aigile-setup.mjs'), ['--agent', AG, '--base', 'http://127.0.0.1:9'], { CODEX_SANDBOX_NETWORK_DISABLED: '1' });
+  let last = r.out.trim().split('\n').pop();
+  assert.equal(r.code, 1);
+  assert.match(r.out, /你在 Codex 沙盒裡，網路沒開/, 'Codex 沙盒認得出來');
+  assert.ok(last.includes('[sandbox_workspace_write] network_access = true') && last.includes("-c 'sandbox_workspace_write.network_access=true'") && last.includes('不用開完全權限'), 'Codex：最後一行寫設定檔與啟動參數兩種開法：' + last);
+  r = await run(nc, pub('aigile-setup.mjs'), ['--agent', AG, '--base', 'http://127.0.0.1:9']);
+  last = r.out.trim().split('\n').pop();
+  assert.ok(last.includes('HTTPS_PROXY') && last.includes('如果你是 Codex') && last.includes('network_access = true'), '看不出是不是 Codex：代理與 Codex 兩種都說：' + last);
+  const spec344 = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  assert.ok(spec344.includes('**Codex 要先開網路**') && spec344.includes("codex --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'") && spec344.includes('**不用開完全權限**'), '規格 3.12 有 Codex 開網路段');
+  assert.ok((await call(liu.token, `/api/my-ais/${ai.participantId}/onboarding`)).body.text.includes('要先請 劉昱志 開網路，不用完全權限'), '接入設定第四節提醒 Codex 先開網路');
+  assert.ok(fs.readFileSync(pub('app.js'), 'utf8').includes("[sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限"), '網頁短版接入寫明確設定');
+
   // 3b) C-329 UX 回報：Token 放在規則教的 AIGILE_TOKEN_<代號> 也讀得到（修正前只讀 AIGILE_TOKEN，說找不到 Token）
   const d = work();
   r = await run(d, pub('aigile-setup.mjs'), ['--agent', AG, '--base', BASE], { [`AIGILE_TOKEN_${AG}`]: tok });

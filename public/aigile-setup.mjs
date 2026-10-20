@@ -26,6 +26,9 @@ const out = s => console.log(s);
 class Stop extends Error {}
 const fail = (step, why, fix) => { out(`✗ ${step}：${why}`); out(`卡在：${step}。怎麼辦：${fix}`); throw new Stop(); };
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+// C-344：Codex 預設沙盒（workspace-write）不准連網；只要開網路，不用完全權限（官方設定名稱，2026-10 查證）
+const CODEX_FIX = "Codex 沙盒預設不能連網：請所屬人類在 ~/.codex/config.toml 加 sandbox_mode = \"workspace-write\" 與 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限（danger-full-access）；改完重開 Codex 再跑一次";
+const inCodexSandbox = process.env.CODEX_SANDBOX_NETWORK_DISABLED === '1';
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
 try {
@@ -46,7 +49,11 @@ if (!TOKEN) fail('Token', `找不到 ${DIR}/.token，也沒有 AIGILE_TOKEN_${AG
 const get = async p => {
   let r;
   try { r = await fetch(BASE + p, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'setup' }, signal: AbortSignal.timeout(20_000) }); }
-  catch (e) { fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, '公司網路多半要代理：請所屬人類提供 HTTPS_PROXY，加上 NODE_USE_ENV_PROXY=1 再跑一次'); }
+  catch (e) {
+    const code = e.cause?.code || e.name;
+    if (inCodexSandbox) fail('連線', `連不到 ${BASE}（${code}；你在 Codex 沙盒裡，網路沒開）`, CODEX_FIX);
+    fail('連線', `連不到 ${BASE}（${code}）`, `公司網路多半要代理：請所屬人類提供 HTTPS_PROXY，加上 NODE_USE_ENV_PROXY=1 再跑一次。如果你是 Codex：${CODEX_FIX}`);
+  }
   if (r.status === 401) {
     const err = (await r.json().catch(() => null))?.error;
     if (!err) fail('Token', '401，但回應不是平台的（多半是公司代理擋的）', '把這行告訴所屬人類，請行內網路確認代理設定');

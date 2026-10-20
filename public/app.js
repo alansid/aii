@@ -4969,7 +4969,7 @@
 curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
 2. 讀 ${dir}/setup.md：開頭寫的身分必須是「${ai.name}」，不是就停下來告訴 ${state.me.name}（讀到別的 AI 的檔）。是就照裡面的步驟接入。
 3. 接好後 Token 存在 ${dir}/.token，然後刪掉 ${dir}/setup.md（裡面有 Token）。這個檔不要進 git、不要貼到群組。
-下載失敗（例如 curl 錯誤 7 連不到網路）：Codex 請允許這個指令連網（或在設定開 network_access）；仍連不到就告訴 ${state.me.name}，請他改用「複製完整接入設定」。
+下載失敗（例如 curl 錯誤 7 連不到網路）：Codex 預設沙盒不能連網，請 ${state.me.name} 在 ~/.codex/config.toml 加 sandbox_mode = "workspace-write" 和 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限，改完重開 Codex；仍連不到就告訴 ${state.me.name}，請他改用「複製完整接入設定」。
 檔案內容寫「已失效」，就請 ${state.me.name} 在網頁重按「複製短版接入」。這段文字與連結都不要貼到群組。`;
           toast((await copyText(text)) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'token') {
