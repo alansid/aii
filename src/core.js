@@ -72,7 +72,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
   const WATCHER_SHA256 = 'c449804500bffe997c7376529187b5ee0380a5acd93059787192cb5860f9a8ca';
   const WAIT_SHA256 = '6f4c0c67efb66e2bd4c040436f2363d280ed41886b1e58d81c370fd3ade26dc0'; // C-246 等待腳本
-  const SETUP_SHA256 = 'd486b13a5d33bca6b52b629565ebddb046ce1f3662b08fc3d30f84cf7f76715b'; // C-327 接入檢查腳本 public/aigile-setup.mjs
+  const SETUP_SHA256 = '0863ae534a28a162ff639218bd872232fbd0a6e24e421d062eb7e5184883cc8f'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
   // C-337 B6：門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
   // 原本 worker 用模組變數記「目前的請求」，並行時會掛到別的（可能已結束的）請求上，門鈴遺失
@@ -1699,7 +1699,7 @@ ${trial
     if (!human || human.status !== 'active') throw new ApiError(404, 'NOT_FOUND', '找不到所屬人類。');
     return { human, ai: me };
   }
-  const dmView = (d, people) => ({ dmId: d.id, seq: d.seq, from: { participantId: d.from_id, name: people.get(d.from_id)?.name || '?' }, text: d.text, project: d.project || null, createdAt: d.created_at });
+  const dmView = (d, people) => ({ dmId: d.id, seq: d.seq, from: { participantId: d.from_id, name: d.from_id === 'system' ? '平台通知' : people.get(d.from_id)?.name || '?' }, text: d.text, project: d.project || null, createdAt: d.created_at });
   // C-270 改版：私訊清單的最後一句（每個 AI 只取最後一則；開頁一次、有私訊通知或打開時才再查）
   route('GET', '/api/dm/summary', async ({ me }) => {
     requireHuman(me);

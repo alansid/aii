@@ -323,7 +323,8 @@ CREATE TABLE IF NOT EXISTS skills (
   files TEXT NOT NULL,                 -- JSON [{ path, text }]
   sha256 TEXT NOT NULL,                -- 整包雜湊（依路徑排序的 [路徑, 內容]）
   size INTEGER NOT NULL,
-  has_scripts INTEGER NOT NULL DEFAULT 0,
+  has_scripts INTEGER NOT NULL DEFAULT 0,  -- 腳本檔數
+  roles TEXT NOT NULL DEFAULT '[]',    -- 給哪些角色的 AI（JSON，空＝全部）
   status TEXT NOT NULL,                -- pending | published | rejected | superseded | removed
   uploaded_by TEXT NOT NULL,
   uploaded_at TEXT NOT NULL,
@@ -340,3 +341,10 @@ CREATE TABLE IF NOT EXISTS skill_allows (
   at TEXT NOT NULL,
   PRIMARY KEY (ai_id, skill_id)
 );
+CREATE TABLE IF NOT EXISTS skill_installs (
+  ai_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,              -- AI 同步後回報裝了哪一版（技能庫的「已裝」）
+  at TEXT NOT NULL,
+  PRIMARY KEY (ai_id, skill_id)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_installs_skill ON skill_installs (skill_id);

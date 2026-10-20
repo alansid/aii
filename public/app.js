@@ -4934,6 +4934,7 @@
       <label class="check"><input type="checkbox" id="ai-auto-standby"${autoStandbyConsent ? ' checked' : ''}> 允許 AI 自動啟動待命（watcher＋等待腳本，簽到後直接啟動再回報；行內／投信仍會先問你）</label>
       <label class="field-inline">對話接續方式 <select id="ai-convo">${CONVO_OPTS.map(([v, l]) => `<option value="${v}"${convoMode === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <p class="muted small" id="ai-convo-hint">${CONVO_HINT[convoMode]}</p>
+      ${(() => { const pjs = PROJECTS.filter(pj => (state.me?.projects || []).includes(pj)); return pjs.length ? `<p class="small">技能庫（給 AI 的做事方法，C-346）：${pjs.map(pj => `<button type="button" class="link small" data-skills-lib="${esc(pj)}">${esc(projName(pj))}</button>`).join('、')}</p>` : ''; })()}
       <div id="ai-list" class="stack"><p class="muted small">載入中…</p></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });
     body.querySelector('#ai-auto-standby').onchange = e => { autoStandbyConsent = e.target.checked; };
     body.querySelector('#ai-convo').onchange = e => { convoMode = e.target.value; body.querySelector('#ai-convo-hint').textContent = CONVO_HINT[convoMode]; };
@@ -5039,7 +5040,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   }
 
   // ---------- C-346 角色技能庫 ----------
-  const SK_ST = { pending: ['待核准', 'yellow'], published: ['已上架', 'green'], rejected: ['已退回', 'red'], removed: ['已下架', 'grey'], superseded: ['舊版', 'grey'] };
+  const SK_ST = { pending: ['等上架核准', 'yellow'], published: ['已上架', 'green'], rejected: ['已退回', 'red'], removed: ['已下架', 'grey'], superseded: ['舊版', 'grey'] };
   const skScript = p => p.startsWith('scripts/') || /\.(sh|bash|zsh|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|php|lua|go|exe|dll|so)$/i.test(p);
   const skDecode = (buf, path) => { try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { throw new Error(`${path} 不是文字檔（技能只收文字）`); } };
   const skSkip = p => p.split('/').some(s => s.startsWith('.') || s === '__MACOSX'); // .git、.DS_Store、Mac 壓縮的附檔
@@ -5085,114 +5086,141 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     while (i < m) out.push(['-', x[i++]]); while (j < n) out.push(['+', y[j++]]);
     return out;
   }
+  // 上傳前先在瀏覽器看一遍：名稱、檔案、腳本數、檢查結果（伺服器還會再檢查一次）
+  function skPreview(files) {
+    const sk = files.find(f => f.path === 'SKILL.md'), fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(sk?.text || '')?.[1] || '';
+    const val = k => (new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(fm)?.[1] || '').replace(/^["']|["']$/g, '').trim();
+    const size = files.reduce((a, f) => a + new TextEncoder().encode(f.text).length, 0);
+    const keyish = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bsk-[A-Za-z0-9_-]{20,}|\bghp_[A-Za-z0-9]{30,}/;
+    return { name: val('name'), description: val('description'), size, scripts: files.filter(f => skScript(f.path)), hasSkill: !!sk, keys: files.filter(f => keyish.test(f.text)).map(f => f.path) };
+  }
   const skFileHtml = (f, prev) => {
     const old = prev?.files.find(o => o.path === f.path);
     const tag = !prev ? '' : !old ? '<span class="pill-tag green">新增</span>' : old.text === f.text ? '<span class="pill-tag grey">沒變</span>' : '<span class="pill-tag yellow">有改</span>';
     const d = old && old.text !== f.text ? skDiff(old.text, f.text) : null;
     const body = d ? d.map(([k, l]) => `<span class="sk-${k === '+' ? 'add' : k === '-' ? 'del' : 'same'}">${esc(k + ' ' + l)}</span>`).join('\n') : esc(f.text);
-    return `<details class="sk-file"${!prev || (old && old.text !== f.text) || !old ? ' open' : ''}><summary><code>${esc(f.path)}</code>${skScript(f.path) ? ' <span class="pill-tag red">腳本</span>' : ''} ${tag}</summary><pre class="sk-pre">${body}</pre></details>`;
+    return `<details class="sk-file"${!prev || !old || old.text !== f.text || skScript(f.path) ? ' open' : ''}><summary><code>${esc(f.path)}</code>${skScript(f.path) ? ' <span class="pill-tag red">腳本</span>' : ''} ${tag}</summary><pre class="sk-pre">${body}</pre></details>`;
   };
+  const skRoles = s => (s.roles?.length ? s.roles.map(r => `<span class="pill-tag blue">${esc(r)}</span>`).join(' ') : '<span class="muted small">所有角色</span>');
   async function openSkillsLib(pj, detailId = null) {
-    const body = openModal(`技能庫 · ${projName(pj)}`, '<p class="muted small">載入中…</p>', { sub: '專案的 AI 主人在「我的 AI › 技能」同步後才會裝到 AI 的電腦；AI 不會自己去查。' });
-    let data;
+    const body = openModal(`技能庫 · ${projName(pj)}`, '<p class="muted small">載入中…</p>', { size: 'wide', sub: '所有成員都看得到；AI 的主人在「我的 AI › 技能」同步後才會裝到 AI 的電腦，AI 不會自己去查。' });
+    let data, pending = null, pickRoles = new Set();
     const load = async () => { data = await api(`/api/projects/${encodeURIComponent(pj)}/skills`); };
     const draw = () => {
-      const me = state.me.participantId, few = data.reviewers.length < 2;
       body.innerHTML = `
-        ${data.canManage ? `<div class="sk-up stack">
-          ${few ? `<p class="notice">含腳本的技能要<b>上傳者以外</b>的 leader 或管理員核准；這個專案目前只有 ${esc(data.reviewers.map(r => r.name).join('、') || '—')}，請先在「成員」分頁多設一位 leader。</p>` : ''}
-          <div class="row"><label class="btn">上傳資料夾<input type="file" id="sk-dir" webkitdirectory multiple hidden></label><label class="btn">上傳 zip<input type="file" id="sk-zip" accept=".zip,application/zip" hidden></label>
-          <span class="muted small">最上層要有 SKILL.md（name、description）；1 MB 內、只收文字。只有說明文件的直接上架，含腳本的要別人核准。</span></div>
-          <p class="error" id="sk-err" role="alert"></p></div>` : ''}
-        <div class="sk-list">${data.items.length ? data.items.map(s => `
-          <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b> <span class="muted small">第 ${s.version} 版</span>
-            <span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || esc(s.status)}</span>${s.hasScripts ? ' <span class="pill-tag red">含腳本</span>' : ''}
-            <div class="muted small">${esc(s.description)} · ${esc(s.uploadedBy.name)} ${esc(fmtTime(s.uploadedAt))}${s.reviewNote ? ` · 審核：${esc(s.reviewNote)}` : ''}</div></div>
-            <div class="row"><button type="button" class="btn small" data-sk-view="${esc(s.skillId)}">${s.status === 'pending' && data.canManage && s.uploadedBy.participantId !== me ? '審核…' : '查看'}</button>
-            ${data.canManage && ['published', 'pending'].includes(s.status) ? `<button type="button" class="btn small" data-sk-rm="${esc(s.name)}">下架</button>` : ''}</div></div>`).join('') : '<p class="muted">這個專案還沒有技能。</p>'}</div>`;
+        ${data.canUpload ? `<div class="row"><label class="btn primary">＋ 上傳技能（資料夾）<input type="file" id="sk-dir" webkitdirectory multiple hidden></label><label class="btn">上傳 zip<input type="file" id="sk-zip" accept=".zip,application/zip" hidden></label>
+          <span class="muted small">最上層要有 SKILL.md（name、description）；1 MB 內、只收文字。</span></div><p class="error" id="sk-err" role="alert"></p>` : ''}
+        <div class="sk-table">
+          <div class="sk-tr sk-th"><span>技能</span><span>給哪些角色</span><span>狀態</span><span>已裝</span></div>
+          ${data.items.length ? data.items.map(s => `
+          <button type="button" class="sk-tr" data-sk-view="${esc(s.skillId)}">
+            <span><b>${esc(s.name)}</b> ${s.hasScripts ? `<span class="pill-tag red">含腳本 ${s.scripts}</span>` : '<span class="pill-tag grey">純文字</span>'}<br><span class="muted small">第 ${s.version} 版 · ${esc(s.uploadedBy.name)} · ${esc(fmtTime(s.uploadedAt))}</span></span>
+            <span>${skRoles(s)}</span>
+            <span><span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || esc(s.status)}</span></span>
+            <span>${s.install ? `${s.install.installed}／${s.install.target}${s.install.waitingOwner ? `<br><span class="small warn-text">${s.install.waitingOwner} 台等主人允許</span>` : ''}` : '—'}</span>
+          </button>`).join('') : '<p class="muted">這個專案還沒有技能。</p>'}
+        </div>`;
+    };
+    // 上傳預覽：選角色、看檢查結果，按送出才上傳
+    const preview = files => {
+      pending = skStrip(files); pickRoles = new Set();
+      const pv = skPreview(pending), bad = !pv.hasSkill || !pv.name || !pv.description || pv.size > 1048576 || pv.keys.length;
+      const direct = !pv.scripts.length || data.canManage;
+      body.innerHTML = `<button type="button" class="link small" data-sk-back>‹ 回技能清單</button>
+        <h3>上傳技能</h3>
+        <div class="sk-chk"><b>${esc(pv.name || '（SKILL.md 沒寫 name）')}</b>（讀自 SKILL.md）<br>
+          ${pv.hasSkill ? 'SKILL.md ✓' : '<span class="error">最上層要有 SKILL.md</span>'} · ${pending.length} 個檔 · ${(pv.size / 1024).toFixed(0)} KB${pv.size > 1048576 ? ' <span class="error">超過 1 MB</span>' : ''}<br>
+          ${pv.scripts.length ? `<span class="warn-text">${esc(pv.scripts.map(f => f.path).join('、'))} → 含腳本 ${pv.scripts.length} 個</span><br>` : '純文字（沒有腳本）<br>'}
+          ${pv.keys.length ? `<span class="error">${esc(pv.keys.join('、'))} 裡有像金鑰的內容，請拿掉</span>` : '✓ 沒看到 Token／金鑰 · ✓ 只有文字檔'}</div>
+        <div><div class="small" style="font-weight:600;margin:8px 0 4px">給哪些角色的 AI（不選＝所有角色）</div>
+          <div class="row">${data.roles.map(r => `<label class="check small"><input type="checkbox" data-sk-role="${esc(r)}"> ${esc(r)}</label>`).join('')}</div></div>
+        <p class="notice">${direct ? (pv.scripts.length ? '你是 leader／管理員：送出就上架；每台電腦還要該 AI 的主人允許才會安裝。' : '純文字：送出就上架。') : '含腳本：要 leader 或管理員核准才會上架；上架後每台電腦還要該 AI 的主人允許才會安裝。'}</p>
+        <p class="error" id="sk-err" role="alert"></p>
+        <div class="row"><button type="button" class="btn" data-sk-back>取消</button><button type="button" class="btn primary" data-sk-send ${bad ? 'disabled' : ''}>${direct ? '送出（上架）' : '送出（等核准）'}</button></div>`;
     };
     const view = async id => {
       const s = await api(`/api/skills/${encodeURIComponent(id)}`);
-      const canReview = s.status === 'pending' && data.canManage && s.uploadedBy.participantId !== state.me.participantId;
       body.innerHTML = `<button type="button" class="link small" data-sk-back>‹ 回技能清單</button>
-        <h3>${esc(s.name)} <span class="muted small">第 ${s.version} 版</span> <span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || ''}</span></h3>
-        <p class="muted small">${esc(s.description)} · 上傳：${esc(s.uploadedBy.name)} ${esc(fmtTime(s.uploadedAt))}${s.previous ? ` · 跟第 ${s.previous.version} 版比較` : ' · 第一版'}</p>
-        ${s.status === 'pending' && !canReview ? `<p class="notice">${s.uploadedBy.participantId === state.me.participantId ? '你是上傳者，要由別的 leader 或管理員核准。' : '等 leader 或管理員核准。'}</p>` : ''}
+        <h3>${esc(s.name)} <span class="muted small">第 ${s.version} 版</span> <span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || ''}</span> ${s.hasScripts ? `<span class="pill-tag red">含腳本 ${s.scripts}</span>` : ''}</h3>
+        <p class="muted small">${esc(s.description)} · 給：${s.roles.length ? esc(s.roles.join('、')) : '所有角色'} · 上傳：${esc(s.uploadedBy.name)} ${esc(fmtTime(s.uploadedAt))}${s.previous ? ` · 跟第 ${s.previous.version} 版比較` : ' · 第一版'}${s.reviewNote ? ` · 審核：${esc(s.reviewNote)}` : ''}</p>
+        ${s.status === 'pending' && !s.canReview ? `<p class="notice">${s.uploadedBy.participantId === state.me.participantId ? '等 leader 或管理員核准。' : '等 leader 或管理員核准。'}</p>` : ''}
         ${s.files.map(f => skFileHtml(f, s.previous)).join('')}
         ${s.previous ? s.previous.files.filter(o => !s.files.some(f => f.path === o.path)).map(o => `<p class="small"><code>${esc(o.path)}</code> <span class="pill-tag red">刪除</span></p>`).join('') : ''}
-        ${canReview ? `<div class="sk-review stack"><label class="field">審核說明（退回必填）<input id="sk-note" maxlength="300"></label>
-          <div class="row"><button type="button" class="btn primary" data-sk-ok="${esc(s.skillId)}">看過全文與差異，核准上架</button><button type="button" class="btn danger" data-sk-no="${esc(s.skillId)}">退回</button></div></div>` : ''}`;
-    };
-    const upload = async files => {
-      const err = body.querySelector('#sk-err');
-      try {
-        const r = await api(`/api/projects/${encodeURIComponent(pj)}/skills`, { method: 'POST', body: { files: skStrip(files) } });
-        toast(r.status === 'published' ? `「${r.name}」第 ${r.version} 版已上架` : `「${r.name}」含腳本，等別的 leader 或管理員核准`);
-        await load(); draw();
-      } catch (e) { if (err) err.textContent = e.message; }
+        ${s.canReview ? `<div class="sk-review stack"><label class="field">審核說明（退回必填）<input id="sk-note" maxlength="300"></label>
+          <div class="row"><button type="button" class="btn danger" data-sk-no="${esc(s.skillId)}">退回（寫原因）</button><button type="button" class="btn primary" data-sk-ok="${esc(s.skillId)}">看過全文與差異，核准上架</button></div></div>` : ''}
+        ${data.canManage && ['published', 'pending'].includes(s.status) ? `<div class="row"><button type="button" class="btn danger small" data-sk-rm="${esc(s.name)}">下架</button></div>` : ''}`;
     };
     body.addEventListener('change', async e => {
       try {
-        if (e.target.id === 'sk-dir' && e.target.files.length) await upload(await skReadFolder(e.target.files));
-        if (e.target.id === 'sk-zip' && e.target.files[0]) await upload(await skReadZip(e.target.files[0]));
-      } catch (err) { const el = body.querySelector('#sk-err'); if (el) el.textContent = err.message; }
-      e.target.value = '';
+        if (e.target.id === 'sk-dir' && e.target.files.length) preview(await skReadFolder(e.target.files));
+        else if (e.target.id === 'sk-zip' && e.target.files[0]) preview(await skReadZip(e.target.files[0]));
+        else if (e.target.dataset?.skRole) { if (e.target.checked) pickRoles.add(e.target.dataset.skRole); else pickRoles.delete(e.target.dataset.skRole); return; }
+        else return;
+      } catch (err) { const el = body.querySelector('#sk-err'); if (el) el.textContent = err.message; else toast(err.message); }
+      if (e.target.type === 'file') e.target.value = '';
     });
     body.addEventListener('click', async e => {
-      const t = e.target.closest('[data-sk-view],[data-sk-back],[data-sk-rm],[data-sk-ok],[data-sk-no]');
+      const t = e.target.closest('[data-sk-view],[data-sk-back],[data-sk-rm],[data-sk-ok],[data-sk-no],[data-sk-send]');
       if (!t) return;
       try {
         if (t.dataset.skView) await view(t.dataset.skView);
-        else if (t.hasAttribute('data-sk-back')) draw();
-        else if (t.dataset.skRm) {
-          if (!await confirmDialog({ title: '下架技能？', message: `「${esc(t.dataset.skRm)}」下架後，主人同步時會從 AI 的技能資料夾移除。`, confirmText: '下架', danger: true })) return;
+        else if (t.hasAttribute('data-sk-back')) { pending = null; draw(); }
+        else if (t.hasAttribute('data-sk-send')) {
+          t.disabled = true;
+          const r = await api(`/api/projects/${encodeURIComponent(pj)}/skills`, { method: 'POST', body: { files: pending, roles: [...pickRoles] } });
+          toast(r.status === 'published' ? `「${r.name}」第 ${r.version} 版已上架，已通知各 AI 的主人` : `「${r.name}」含腳本，等 leader 或管理員核准`);
+          pending = null; await load(); draw();
+        } else if (t.dataset.skRm) {
+          if (!await confirmDialog({ title: '下架技能？', message: `「${esc(t.dataset.skRm)}」下架後，主人按「同步」時會從 AI 的技能資料夾移除。`, confirmText: '下架', danger: true })) return;
           await api(`/api/projects/${encodeURIComponent(pj)}/skills/${encodeURIComponent(t.dataset.skRm)}/remove`, { method: 'POST' });
-          toast('已下架，已私訊各 AI 的主人'); await load(); draw();
+          toast('已下架，已通知各 AI 的主人'); await load(); draw();
         } else {
           const action = t.dataset.skOk ? 'approve' : 'reject', note = body.querySelector('#sk-note')?.value.trim() || '';
           if (action === 'reject' && !note) return toast('退回要寫原因');
           await api(`/api/skills/${encodeURIComponent(t.dataset.skOk || t.dataset.skNo)}/review`, { method: 'POST', body: { action, note } });
-          toast(action === 'approve' ? '已核准上架，已私訊各 AI 的主人' : '已退回'); await load(); draw();
+          toast(action === 'approve' ? '已核准上架，已通知各 AI 的主人' : '已退回'); await load(); draw();
         }
-      } catch (err) { toast(err.message); }
+      } catch (err) { const el = body.querySelector('#sk-err'); if (el) el.textContent = err.message; else toast(err.message); if (t.hasAttribute('data-sk-send')) t.disabled = false; }
     });
     try { await load(); if (detailId) await view(detailId); else draw(); } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   }
   // 我的 AI › 技能：含腳本的這一版要主人允許；「同步」私訊 AI 請它跑一次接入檢查（只同步技能）
   async function openAiSkills(ai) {
-    const body = openModal(`技能 · ${ai.name}`, '<p class="muted small">載入中…</p>', { sub: '只有你按「同步」或 AI 重跑接入檢查時才會下載安裝；AI 不會自己去查。', size: 'narrow' });
+    const body = openModal(`技能 · ${ai.name}`, '<p class="muted small">載入中…</p>', { sub: '只有你按「同步」或 AI 重跑接入檢查時才會下載安裝；AI 不會自己去查、不會自己更新。', size: 'narrow' });
+    const sync = () => api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/sync`, { method: 'POST' });
     const draw = async () => {
       const { items } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills`);
-      const lead = PROJECTS.filter(pj => isAdmin() || myLeadProjects().includes(pj)).filter(pj => (ai.projects || []).includes(pj));
       body.innerHTML = `${items.length ? items.map(s => `
-        <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b> <span class="muted small">${esc(projName(s.project))} · 第 ${s.version} 版</span>${s.hasScripts ? ' <span class="pill-tag red">含腳本</span>' : ''}
-          <div class="muted small">${esc(s.description)}</div></div>
-          ${s.hasScripts ? `<label class="check small"><input type="checkbox" data-sk-allow="${esc(s.skillId)}"${s.allowed ? ' checked' : ''}> 允許這一版</label>` : '<span class="muted small">會安裝</span>'}</div>`).join('')
-        : '<p class="muted">這個 AI 所屬的專案還沒有上架的技能。</p>'}
-        <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能）。</span></div>
-        ${lead.length ? `<p class="small">管理技能庫：${lead.map(pj => `<button type="button" class="link small" data-skills-lib="${esc(pj)}">${esc(projName(pj))}</button>`).join('、')}</p>` : ''}`;
+        <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b> <span class="muted small">${esc(projName(s.project))} · 第 ${s.version} 版</span>${s.hasScripts ? ` <span class="pill-tag red">含腳本 ${s.scripts}</span>` : ''}
+          <div class="muted small">${esc(s.description)} · SHA-256 ${esc(s.sha256.slice(0, 4))}…${esc(s.sha256.slice(-3))} · ${s.installed ? '這台已裝' : '這台還沒裝'}</div></div>
+          ${s.hasScripts ? `<div class="row"><button type="button" class="btn small" data-sk-look="${esc(s.project)}|${esc(s.skillId)}">看腳本</button>${s.allowed ? `<button type="button" class="btn small" data-sk-revoke="${esc(s.skillId)}">收回允許</button>` : `<button type="button" class="btn small primary" data-sk-allow="${esc(s.skillId)}">允許並同步到這台</button>`}</div>` : '<span class="muted small">純文字，會安裝</span>'}</div>`).join('')
+        : '<p class="muted">這個 AI 所屬的專案還沒有給它角色的技能。</p>'}
+        <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能）。</span></div>`;
     };
-    body.addEventListener('change', async e => {
-      const id = e.target.dataset?.skAllow;
-      if (!id) return;
-      try {
-        if (e.target.checked && !await confirmDialog({ title: '允許含腳本的技能？', message: '允許後，AI 同步時會把這一版的腳本放進它的技能資料夾，執行時照它工具本身的權限。新版要重新允許。', confirmText: '允許' })) { e.target.checked = false; return; }
-        await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/${encodeURIComponent(id)}`, { method: 'PUT', body: { allow: e.target.checked } });
-        toast(e.target.checked ? '已允許，按「同步」後安裝' : '已收回，下次同步會移除');
-      } catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
-    });
     body.addEventListener('click', async e => {
-      if (e.target.closest('[data-sk-sync]')) {
-        try { await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/sync`, { method: 'POST' }); toast('已私訊 AI 請它同步技能'); } catch (err) { toast(err.message); }
-      }
+      const t = e.target.closest('[data-sk-sync],[data-sk-allow],[data-sk-revoke],[data-sk-look]');
+      if (!t) return;
+      try {
+        if (t.dataset.skLook) { const [pj, id] = t.dataset.skLook.split('|'); return openSkillsLib(pj, id); }
+        if (t.dataset.skAllow) {
+          if (!await confirmDialog({ title: '允許含腳本的技能？', message: '允許後會請 AI 同步，把這一版的腳本放進它的技能資料夾；執行時照它工具本身的權限。新版要重新允許。', confirmText: '允許並同步' })) return;
+          await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/${encodeURIComponent(t.dataset.skAllow)}`, { method: 'PUT', body: { allow: true } });
+          await sync(); toast('已允許，已私訊 AI 請它同步'); return draw();
+        }
+        if (t.dataset.skRevoke) {
+          await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/${encodeURIComponent(t.dataset.skRevoke)}`, { method: 'PUT', body: { allow: false } });
+          toast('已收回，按「同步」後會從 AI 的電腦移除'); return draw();
+        }
+        await sync(); toast('已私訊 AI 請它同步技能');
+      } catch (err) { toast(err.message); }
     });
     try { await draw(); } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   }
-  // 成員與權限 › 技能分頁：列出自己能管的專案
+  // 成員與權限 › 技能分頁：列出自己所在的專案（所有成員都看得到技能庫）
   function permSkillsHtml() {
-    const mine = PROJECTS.filter(pj => isAdmin() || myLeadProjects().includes(pj));
-    return `<div class="pm-card stack"><p class="muted small">技能是給 AI 用的做事方法（SKILL.md，可附腳本）。leader 或管理員上傳；含腳本的要另一位 leader 或管理員核准，各 AI 的主人允許後才會裝。</p>
-      ${mine.map(pj => `<div class="row"><b>${esc(projName(pj))}</b><span class="grow"></span><button type="button" class="btn small" data-skills-lib="${esc(pj)}">打開技能庫</button></div>`).join('') || '<p class="muted">你不是任何專案的 leader。</p>'}</div>`;
+    const mine = PROJECTS.filter(pj => isAdmin() || (state.me?.projects || []).includes(pj) || myLeadProjects().includes(pj));
+    return `<div class="pm-card stack"><p class="muted small">技能是給 AI 用的做事方法（SKILL.md，可附腳本）。專案成員都能上傳：純文字直接上架；含腳本的，leader／管理員上傳直接上架、其他人上傳要 leader 或管理員核准；各 AI 的主人允許後才會裝。</p>
+      ${mine.map(pj => `<div class="row"><b>${esc(projName(pj))}</b><span class="grow"></span><button type="button" class="btn small" data-skills-lib="${esc(pj)}">打開技能庫</button></div>`).join('') || '<p class="muted">你不在任何專案。</p>'}</div>`;
   }
   document.addEventListener('click', e => { const b = e.target.closest('[data-skills-lib]'); if (b) openSkillsLib(b.dataset.skillsLib); });
 

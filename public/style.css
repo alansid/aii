@@ -2610,3 +2610,10 @@ html, body { overflow-x: clip; }
 .sk-add { background: rgba(34, 197, 94, .18); display: inline-block; width: 100%; }
 .sk-del { background: rgba(239, 68, 68, .18); display: inline-block; width: 100%; text-decoration: line-through; }
 .sk-review { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line, #e5e7eb); }
+
+.sk-table { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.sk-tr { display: grid; grid-template-columns: 1.6fr .9fr .8fr .7fr; gap: 8px; align-items: center; text-align: left; background: var(--card, #fff); border: 1px solid var(--line, #e5e7eb); border-radius: 10px; padding: 8px 10px; font: inherit; color: inherit; cursor: pointer; }
+.sk-th { background: transparent; border: 0; cursor: default; font-size: 12px; color: var(--muted, #6b7280); padding: 0 10px; }
+.sk-chk { border: 1px solid var(--line, #e5e7eb); border-radius: 10px; padding: 8px 10px; font-size: 13px; line-height: 1.8; }
+.pill-tag.blue { background: #e0f2fe; color: #075985; }
+@media (max-width: 640px) { .sk-tr { grid-template-columns: 1fr 1fr; } .sk-th { display: none; } }

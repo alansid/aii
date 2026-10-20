@@ -33,7 +33,9 @@ const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 const CODEX_FIX = "Codex 沙盒預設不能連網：請所屬人類在 ~/.codex/config.toml 加 sandbox_mode = \"workspace-write\" 與 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限（danger-full-access）；改完重開 Codex 再跑一次";
 const inCodexSandbox = process.env.CODEX_SANDBOX_NETWORK_DISABLED === '1';
 const SKILLS_ONLY = args.includes('--skills-only');
-const TOOL = opt('tool') || (process.env.CLAUDECODE === '1' ? 'claude' : process.env.CODEX_SANDBOX_NETWORK_DISABLED !== undefined || process.env.CODEX_HOME ? 'codex' : 'other');
+// 工具：這次有帶 --tool 就用它（並記進 watcher.env 的 SKILL_TOOL）；沒帶就用上次記的；都沒有才自己判斷
+const envTool = (() => { try { return /^SKILL_TOOL=(.*)$/m.exec(fs.readFileSync(path.join('.aigile', AGENT || '_', 'watcher.env'), 'utf8'))?.[1].trim() || ''; } catch { return ''; } })();
+const TOOL = opt('tool') || envTool || (process.env.CLAUDECODE === '1' ? 'claude' : process.env.CODEX_SANDBOX_NETWORK_DISABLED !== undefined || process.env.CODEX_HOME ? 'codex' : 'other');
 // 技能整包雜湊：跟平台同一個算法（依路徑排序的 [路徑, 內容]）
 const canonical = files => JSON.stringify(files.map(x => [x.path, x.text]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
@@ -120,6 +122,16 @@ async function syncSkills() {
   }
   fs.mkdirSync(DIR, { recursive: true });
   fs.writeFileSync(manPath, JSON.stringify(man, null, 1));
+  // 記住工具（之後按「同步」不用再帶 --tool）
+  if (opt('tool') && opt('tool') !== envTool) {
+    const ep = path.join(DIR, 'watcher.env');
+    let t = ''; try { t = fs.readFileSync(ep, 'utf8'); } catch {}
+    t = /^SKILL_TOOL=.*$/m.test(t) ? t.replace(/^SKILL_TOOL=.*$/m, 'SKILL_TOOL=' + TOOL) : (t && !t.endsWith('\n') ? t + '\n' : t) + 'SKILL_TOOL=' + TOOL + '\n';
+    fs.writeFileSync(ep, t);
+  }
+  // 回報裝了哪些版本（技能庫的「已裝」）；同資料夾別的 AI 已裝同一版也算
+  const have = [...want.values()].filter(it => mark(path.join(root, it.name))?.sha256 === it.sha256).map(it => it.skillId);
+  await fetch(BASE + '/api/me/skills/installed', { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'setup' }, body: JSON.stringify({ skillIds: have }), signal: AbortSignal.timeout(20_000) }).catch(() => {});
   out(`✓ 技能（${TOOL} → ${root.replace(/\\/g, '/')}）：新裝 ${add}、更新 ${upd}、移除 ${rm}，共 ${Object.keys(man).length} 個`);
   if (skipped.length) out(`! 沒裝：${skipped.join('；')}`);
 }
