@@ -86,6 +86,7 @@
     "test:c341": "node scripts/c341-test.js",
     "test:skills": "node scripts/skills-test.js",
     "test:skills-ui": "node scripts/skills-ui-test.js",
+    "test:s4": "node scripts/s4-test.js",
     "test:c335": "node scripts/c335-test.js",
     "test:c336": "node scripts/c336-test.js",
     "test:c343": "node scripts/c343-test.js",
