@@ -14,7 +14,7 @@ const BASE = `http://localhost:${PORT}`;
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-proj-'));
 
 const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0' }, stdio: 'pipe',
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, TEAM_CACHE_MS: '0', RATE_LIMIT_PER_MIN: '100000' }, stdio: 'pipe',
 });
 const ready = new Promise((res, rej) => {
   server.stdout.on('data', d => { if (String(d).includes('已啟動')) res(); });
@@ -227,6 +227,18 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     const pc333 = (await call(plat.token, '/api/cards', 'POST', { requestId: 'req_c333_pc', title: '平台自己的卡', project: '平台' })).body;
     assert.equal((await call(plat.token, `/api/cards/${pc333.cardId}/messages`, 'POST', { messageId: bm.messageId })).status, 400, 'B1：看不到的訊息不能掛');
     assert.equal((await call(plat.token, `/api/cards/${pc333.cardId}/messages`, 'POST', { messageId: am.messageId })).status, 200, 'B1：看得到的訊息照常可掛');
+    // B1（UX 10/20 退回）：發文時直接帶 cardId 也要擋——C 號、專案代號（BANK-20 那種）都不能掛別專案的卡
+    const bcKey = (await call(liu.token, `/api/cards/${bc.cardId}`)).body.key;
+    assert.ok(bcKey && bcKey !== bc.cardId, '銀行卡有專案代號：' + bcKey);
+    for (const id of [bc.cardId, bcKey]) {
+      const r = await call(plat.token, '/api/messages', 'POST', { requestId: 'req_c333_m_' + id, project: '平台', cardId: id, text: '[測試] 掛別專案的卡' });
+      assert.equal(r.body.error?.code, 'CARD_FORBIDDEN', `B1：發文帶 ${id === bcKey ? '專案代號' : 'C 號'}也不能掛別專案的卡（修正前 201、cardLinked: true）`);
+    }
+    const cross = (await call(liu.token, '/api/messages', 'POST', { requestId: 'req_c333_m3', project: '平台', cardId: bcKey, text: '平台訊息' })).body;
+    assert.ok(cross.messageId && cross.cardLinked === false && cross.warnings?.some(w => w.includes('沒有掛上卡片')), 'B1：看得到的人把平台訊息帶銀行卡號 → 照發但不掛、回 warnings');
+    assert.ok(!(await call(liu.token, `/api/cards/${bc.cardId}`)).body.messageIds.includes(cross.messageId), 'B1：銀行卡上沒有這則平台訊息');
+    const okLink = await call(liu.token, '/api/messages', 'POST', { requestId: 'req_c333_m4', project: '銀行系統', cardId: bcKey, text: '銀行訊息' });
+    assert.equal(okLink.status, 201); assert.equal(okLink.body.cardLinked, true, 'B1：同專案照常可掛');
     // B1 解決 [需確認]：別專案的不能解決
     const bq = (await msg(bank.token, '[需確認] 銀行要人決定\n\n選項：\n1. 甲\n2. 乙', { project: '銀行系統', replyFrom: [liuId] })).body;
     assert.equal((await call(lone.token, `/api/decisions/${bq.messageId}/resolve`, 'POST')).status, 404, 'B1：只屬平台的人類不能解決銀行的 [需確認]');

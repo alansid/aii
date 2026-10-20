@@ -2421,16 +2421,20 @@ ${trial
   // cardId（選填）：訊息發出時一併關聯到該卡（C-130 待你處理的行內輸入、卡片內回覆用）；一張卡最多 50 則，滿了就略過關聯
   route('POST', '/api/messages', async ({ req, me, ctx }) => {
     const body = await readJson(req);
-    let cardSeq = null, cardClosed = '', card = null;
+    let cardSeq = null, cardClosed = '', card = null, cardMismatch = '';
     if (body.cardId !== undefined && body.cardId !== null && body.cardId !== '') {
       const m = /^C-(\d+)$/i.exec(String(body.cardId));
       cardSeq = m ? Number(m[1]) - 100 : ((await cardSeqByKey(body.cardId)) ?? NaN); // C-310：PLAT-12 也收
-      card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status, owner_id, type FROM cards WHERE seq = ?', cardSeq) : null;
+      card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status, owner_id, type, project FROM cards WHERE seq = ?', cardSeq) : null;
       if (!card) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
-      cardClosed = ['已完成', '已封存'].includes(card.status) ? card.status : ''; // C-276
+      // C-333 B1（UX 退回）：發文帶 cardId 也要套專案隔離——看不到的卡不能掛；訊息專案要跟卡片一樣（平台訊息不能流進別專案的卡）
+      if (isolatedFrom(me) && !projectsOf(me).includes(card.project)) throw new ApiError(403, 'CARD_FORBIDDEN', '這張卡屬於其他專案，你沒有權限查看。');
+      if (card.project && (body.project === undefined || body.project === null || body.project === '')) body.project = card.project; // 沒寫專案就用卡片的
+      if (card.project && body.project !== card.project) { cardMismatch = `${body.cardId} 屬於「${nameOf(card.project)}」，這則訊息的專案不同，已照發但沒有掛上卡片；要掛請把 project 填 ${card.project}。`; cardSeq = null; card = null; }
+      cardClosed = card && ['已完成', '已封存'].includes(card.status) ? card.status : ''; // C-276
     }
     const r = await createMessage(ctx, me, body, { checkProject: true });
-    let cardLinked;
+    let cardLinked = cardMismatch ? false : undefined;
     if (cardSeq) {
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
       if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
@@ -2446,7 +2450,7 @@ ${trial
       teamCache = { at: 0, data: null };
       cardStarted = true;
     }
-    const warnings = [...(r.warnings || [])];
+    const warnings = [...(r.warnings || []), ...(cardMismatch ? [cardMismatch] : [])];
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`); // C-276
     return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(warnings.length ? { warnings } : {}) };
   });
