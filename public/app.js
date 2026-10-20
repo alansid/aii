@@ -159,7 +159,6 @@
       $('#join-form').hidden = !h.setup; // 群組還沒有人：建立群組
       $('#login-main').hidden = !!h.setup;
       $('#join-title').textContent = h.setup ? '建立群組' : '歡迎回來';
-      $('#join-admin').textContent = h.adminName || '管理員';
       $('#room-code-field').hidden = !h.roomCodeRequired;
     } catch {}
   }
@@ -2783,6 +2782,7 @@
     const when = fmtDate(n.createdAt);
     const [text, hint] = n.kind === 'password_login' ? [`有新裝置用你的帳號密碼登入：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它並改密碼。']
       : n.kind === 'rescue_login' ? [`有裝置用主機救援連結登入你的帳號：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並檢查誰有主機部署權限。']
+      : n.kind === 'login_code_read' ? [`有裝置讀取了你的登入碼：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並換一組登入碼（舊的會失效）。'] // C-335 S2
       : [`主機產生了一次性救援登入連結（${n.detail}）· ${when}，15 分鐘內有效。`, '不是你或你的團隊？請檢查誰有主機部署權限。'];
     return `<div class="sec-note" id="sec-${esc(n.id)}"><span class="sec-ico" aria-hidden="true">🔐</span>
       <div class="sec-main"><span>${esc(text)}</span><span class="small">${esc(hint)}</span></div>

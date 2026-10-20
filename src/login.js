@@ -111,6 +111,18 @@ export function registerLogin(d) {
     return until;
   }
   const clearFails = u => db.run('DELETE FROM login_fails WHERE username = ?', u);
+  // C-335 S3：配對碼猜錯次數記在 DB（多份程式共用；記憶體限流各算各的擋不住）。
+  // 猜錯的請求對不到哪一組碼，所以全站 5 分鐘內錯 5 次就把還沒用的配對碼全部作廢，要配對的人重新產生即可。
+  // 鍵用 #pair：帳號只能有英數 . _ -，不會撞到真的帳號。
+  const PAIR_FAIL_KEY = '#pair', PAIR_FAIL_MAX = 5;
+  async function pairFailed(now) {
+    const r = await db.get('SELECT count, last_at FROM login_fails WHERE username = ?', PAIR_FAIL_KEY);
+    const count = r && now - r.last_at < PAIR_TTL_MS ? r.count + 1 : 1;
+    if (count >= PAIR_FAIL_MAX) {
+      await db.run('UPDATE pair_codes SET expires_at = ? WHERE used_at IS NULL AND expires_at > ?', now, now);
+      await clearFails(PAIR_FAIL_KEY);
+    } else await db.run('INSERT INTO login_fails (username, count, last_at, locked_until) VALUES (?,?,?,0) ON CONFLICT(username) DO UPDATE SET count = excluded.count, last_at = excluded.last_at', PAIR_FAIL_KEY, count, now);
+  }
   let dummyHash = null; // 帳號不存在時也算一次雜湊，花的時間一樣
   const dummy = async () => (dummyHash ||= await hashPassword(newToken()));
 
@@ -142,7 +154,7 @@ export function registerLogin(d) {
     await saveCred(me.id, username, password);
     let loggedOut = 0;
     if (cur && password) {
-      const r = await db.run(`UPDATE devices SET revoked_at = ? WHERE participant_id = ? AND revoked_at IS NULL AND label LIKE '${PWD_DEVICE} · %' AND id != ?`, Date.now(), me.id, me.deviceId || '');
+      const r = await db.run('UPDATE devices SET revoked_at = ? WHERE participant_id = ? AND revoked_at IS NULL AND label LIKE ? AND id != ?', Date.now(), me.id, `${PWD_DEVICE} · %`, me.deviceId || ''); // C-335 S10：常數也走參數
       loggedOut = r.changes;
     }
     return { ...credView(await credOf(me.id)), loggedOut };
@@ -292,7 +304,7 @@ export function registerLogin(d) {
     const iv = await validInvite(body.token);
     const people = await peopleMap(ctx);
     const admin = adminOf(people);
-    if (!iv) { failed(req); return { valid: false, adminName: admin?.name || null }; }
+    if (!iv) { failed(req); return { valid: false }; } // C-335 S5：失效連結不回管理員姓名
     return { valid: true, kind: iv.participant_id ? 'reset' : 'new', inviterName: people.get(iv.created_by)?.name || admin?.name || null,
       groupName: await groupName(), name: iv.participant_id ? people.get(iv.participant_id)?.name ?? iv.name : iv.name,
       role: roleText(iv.role), projects: listOf(iv.projects).map(id => ({ id, name: nameOf(id) })), expiresAt: iso(iv.expires_at) };
@@ -321,7 +333,16 @@ export function registerLogin(d) {
   });
 
   // ---------- 登入碼（長期保留） ----------
-  route('GET', '/api/me/login-code', ({ me }) => { requireHuman(me); return { code: me.token }; });
+  // C-335 S2：讀登入碼（長期有效）留安全通知給本人；同一台裝置一天只記一次（編號含裝置與日期，重複寫入會被忽略）
+  route('GET', '/api/me/login-code', async ({ me }) => {
+    requireHuman(me);
+    const dev = me.deviceId ? await db.get('SELECT label FROM devices WHERE id = ?', me.deviceId) : null;
+    const label = dev?.label || (me.authKind === 'code' ? '用登入碼登入的裝置' : '不明裝置');
+    const id = `ntc_code_${me.deviceId || me.id}_${Math.floor(Date.now() / 86_400_000)}`;
+    await db.run('INSERT OR IGNORE INTO account_notices (id, participant_id, kind, detail, created_at) VALUES (?,?,?,?,?)', id, me.id, 'login_code_read', label.slice(0, 200), Date.now())
+      .catch(e => console.error('notice failed:', e.message));
+    return { code: me.token };
+  });
   // 換一組：舊的立刻失效；已登入的裝置不受影響
   route('POST', '/api/me/rotate-code', async ({ me }) => {
     requireHuman(me);
@@ -434,7 +455,7 @@ export function registerLogin(d) {
         if (code.length !== 6) return null;
         const now = Date.now();
         const row = await db.get('SELECT * FROM pair_codes WHERE code = ? AND used_at IS NULL AND expires_at > ?', code, now);
-        if (!row) return null;
+        if (!row) { await pairFailed(now); return null; }
         const r = await db.run('UPDATE pair_codes SET used_at = ? WHERE code = ? AND used_at IS NULL', now, code);
         if (!r.changes) return null;
         return db.get("SELECT * FROM participants WHERE id = ? AND kind = 'human' AND status = 'active'", row.participant_id);

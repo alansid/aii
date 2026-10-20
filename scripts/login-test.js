@@ -39,7 +39,7 @@ const tokenOf = url => url.split('/invite/')[1];
     assert.ok(liu.token, '第一位人類可以自己加入');
     h = (await call(null, '/api/health')).body;
     assert.equal(h.setup, false);
-    assert.equal(h.adminName, '劉昱志', '登入頁顯示管理員名字');
+    assert.equal(h.adminName, undefined, 'C-335 S5：公開端點不回管理員姓名');
     assert.deepEqual(h.loginMethods, ['invite', 'pair', 'code', 'password', 'rescue'], '身分來源是可替換的一層（C-223 加帳號密碼、主機救援）');
     // 9. 拿掉群組密碼自己加入
     const j2 = await call(null, '/api/join', 'POST', { name: '路人', role: 'PG' });
@@ -98,7 +98,7 @@ const tokenOf = url => url.split('/invite/')[1];
     const again = await call(null, '/api/auth/invite', 'POST', { token: t2, name: '王小明2' });
     assert.equal(again.body.error.code, 'INVITE_INVALID');
     const peek2 = (await call(null, '/api/auth/invite/peek', 'POST', { token: t2 })).body;
-    assert.deepEqual(peek2, { valid: false, adminName: '劉昱志' }, '失效只回管理員名字，不說原因');
+    assert.deepEqual(peek2, { valid: false }, '失效不說原因、也不回管理員姓名（C-335 S5）');
     // 4. 通知管理員「X 已加入」
     const notes = (await call(liuDev, '/api/notifications?status=pending&limit=50')).body.items;
     assert.ok(notes.some(n => /王小明 已加入/.test(n.preview)), '管理員收到「王小明 已加入」');

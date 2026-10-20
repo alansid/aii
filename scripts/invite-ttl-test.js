@@ -55,7 +55,7 @@ try {
   const b = await mk('戊', '7d');
   await call(liu.token, `/api/invites/${b.body.invite.id}/cancel`, 'POST');
   let peek = (await call(null, '/api/auth/invite/peek', 'POST', { token: tokenOf(b.body.url) })).body;
-  assert.equal(peek.valid, false, '作廢後失效'); assert.equal(peek.adminName, '劉昱志', '畫面寫得出找誰重發');
+  assert.equal(peek.valid, false, '作廢後失效'); assert.equal(peek.adminName, undefined, 'C-335 S5：失效不回管理員姓名');
   const c = await mk('己', '1h');
   await db.run('UPDATE invites SET expires_at = ? WHERE id = ?', Date.now() - 1, c.body.invite.id);
   assert.equal((await call(null, '/api/auth/invite/peek', 'POST', { token: tokenOf(c.body.url) })).body.valid, false, '過期失效');

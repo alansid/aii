@@ -339,7 +339,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   // ---------- 驗證與限流 ----------
   async function authenticate(req, url) {
     const h = req.headers.get('authorization') || '';
-    const token = h.startsWith('Bearer ') ? h.slice(7).trim() : url.searchParams.get('token');
+    const token = h.startsWith('Bearer ') ? h.slice(7).trim() : ''; // C-335 S1：不收網址 ?token=（會留在瀏覽器歷史、代理日誌）
     if (!token) throw new ApiError(401, 'INVALID_TOKEN', '缺少 Authorization: Bearer <token>');
     // C-202：人類的網頁登入是「裝置」（dv_ 開頭）；AI Token 與人類登入碼照舊
     const { p, dev } = await login.resolve(token);
@@ -960,7 +960,7 @@ ${trial
   // setup＝群組還沒有任何人類，登入頁顯示「建立群組」；adminName 給登入頁「請管理員 X 傳邀請連結」
   route('GET', '/api/health', async ({ ctx }) => {
     const admin = adminOf(await peopleMap(ctx));
-    return { ok: true, roomCodeRequired: !!ROOM_CODE, setup: !admin, openJoin: OPEN_JOIN, adminName: admin?.name || null, loginMethods: login.methods };
+    return { ok: true, roomCodeRequired: !!ROOM_CODE, setup: !admin, openJoin: OPEN_JOIN, loginMethods: login.methods }; // C-335 S5：公開端點不回管理員姓名
   }, { open: true });
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS, environments: ENVIRONMENTS }), { open: true });
   // C-291 版本紀錄與 3 張關鍵流程圖：部署時打包的內容，不讀資料庫；要登入（人類、AI 都能讀，寫影響範圍用）
@@ -1820,6 +1820,7 @@ ${trial
     requireHuman(me);
     const body = await readJson(req);
     const title = shortText(body.title, 100, '標題', true), detail = shortText(body.detail, 2000, '說明');
+    await assertNoSecret(`${title}\n${detail || ''}`); // C-335 S9
     await fbQuota(me);
     const pj = PROJECTS.includes(body.project) && projectsOf(me).includes(body.project) ? body.project : (projectsOf(me).find(x => PROJECTS.includes(x)) || null);
     const ctxJson = JSON.stringify(readContext(body.context)), at = nowIso();
@@ -1910,6 +1911,7 @@ ${trial
     requireHuman(me);
     const body = await readJson(req);
     const title = shortText(body.title, 100, '願望', true), why = shortText(body.why, 1000, '為什麼');
+    await assertNoSecret(`${title}\n${why || ''}`); // C-335 S9：許願全站可見
     await fbQuota(me);
     const pj = PROJECTS.includes(body.project) && projectsOf(me).includes(body.project) ? body.project : (projectsOf(me).find(x => PROJECTS.includes(x)) || null);
     const at = nowIso();
