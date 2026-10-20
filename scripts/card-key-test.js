@@ -96,6 +96,18 @@ try {
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(js, /C-\\d\{3,\}\|\[A-Z\]\{2,5\}-\\d\+/, '訊息內文兩種卡號都認');
   assert.match(js, /\$\{esc\(c\.key \|\| c\.cardId\)\}/, '卡片顯示代號號');
+  // C-324：畫面上寫給人看的卡號都要是代號號（修正前「AI 現況」顯示 C-323，下面訊息卡顯示 BANK-20，對不起來）
+  // 掃 ${…} 裡用到 cardId 卻沒經過 ckey 的地方；屬性值（data-*）、內部用途、刻意並列 C-xxx 的除外
+  const ALLOW = [/'k:' \+ d\.cardId/, /c\.key \|\| c\.cardId/, /c\.key \? `\$\{c\.key\}（\$\{c\.cardId\}）`/, /cid-alt/, /^dcard\.cardId$/, /^mb\.status\.cardId \? `` : ``$/];
+  const raw = [];
+  js.split('\n').forEach((l, i) => {
+    const s = l.replace(/[a-z-]+="\$\{[^}]*\}"/g, '');
+    if (/api\(|\/api\//.test(s)) return;
+    for (const m of s.matchAll(/\$\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g))
+      if (/cardId/.test(m[1]) && !/ckey|cidHtml|capsule/.test(m[1]) && !ALLOW.some(r => r.test(m[1]))) raw.push(`${i + 1}: ${m[1].slice(0, 60)}`);
+  });
+  assert.deepEqual(raw, [], '畫面直接顯示 C-xxx 的地方：\n' + raw.join('\n'));
+  assert.match(js, /在做\$\{x\.now\.cardId \? ' ' \+ ckey\(x\.now\.cardId\)/, 'AI 現況顯示代號號');
   console.log('card-key-test：全部通過');
 } catch (e) {
   console.error('card-key-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('card-key-test.js')) || '').trim());

@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.82.5'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.82.6'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -652,6 +652,7 @@
   // 訊息內的 C-xxx 轉成膠囊：卡號＋狀態文字（不只靠顏色）；清單載入後找不到的卡號灰字不可點
   // C-310：卡號顯示成「專案代號-號碼」（PLAT-12）；C-xxx 留在提示裡、程式內部照舊用 C-xxx
   const ckey = id => work.cards.get(id)?.key || id;
+  const ckeyOf = c => c?.key || ckey(c?.cardId || ''); // 卡片物件自己帶 key 就用，沒帶再查清單
   let keyIdx = null, keyIdxAt = 0;
   function keyToId(k) {
     if (!keyIdx || keyIdxAt !== work.cards.size) { keyIdx = new Map([...work.cards.values()].filter(c => c.key).map(c => [c.key, c.cardId])); keyIdxAt = work.cards.size; }
@@ -1047,7 +1048,7 @@
   function todoItems() {
     const items = [];
     for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId });
-    for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${g.card?.cardId || ''} 改為「${g.to}」`, key: 's:' + g.suggestionId });
+    for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${ckey(g.card?.cardId || '')} 改為「${g.to}」`, key: 's:' + g.suggestionId });
     for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
     for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId });
     for (const n of (work.notes || []).filter(x => x.dm)) items.push({ p: n.project ?? null, kind: '私訊', title: `${n.sender?.name || ''} 回你了`, key: 'n:' + n.notificationId });
@@ -2399,7 +2400,7 @@
       } else if (act === 'sugg-note' || act === 'sugg-skip') {
         const g = (work.sugg || []).find(x => x.suggestionId === id);
         if (!g) throw new Error('這則建議已經被處理過了');
-        const what = g.kind === 'create' ? `建立卡片「${g.create.title}」` : `${g.card?.cardId || ''} 狀態改為「${g.to}」`;
+        const what = g.kind === 'create' ? `建立卡片「${g.create.title}」` : `${ckey(g.card?.cardId || '')} 狀態改為「${g.to}」`;
         if (act === 'sugg-skip') await api(`/api/suggestions/${encodeURIComponent(id)}/skip`, { method: 'POST', body: {} });
         await post({ text: `[回覆] ${act === 'sugg-skip' ? '略過了你的建議' : '關於你的建議'}（${what}）：${text}`, ...(g.card?.cardId ? { cardId: g.card.cardId } : {}), recipientIds: others([g.from?.participantId]) });
       }
@@ -2475,7 +2476,7 @@
     const batchBar = batch ? `<div class="batch-bar" role="group" aria-label="批次處理"><span class="small">已選 <b>${work.sel.size}</b> 則</span><button type="button" class="btn small primary" data-batch="apply" ${work.sel.size ? '' : 'disabled'}>批次採用</button><button type="button" class="btn small" data-batch="skip" ${work.sel.size ? '' : 'disabled'}>批次略過</button><span class="muted small">逐則勾選後才能批次處理，不提供一鍵全部採用</span></div>` : '';
     const what = g => (g.kind === 'create'
       ? `建立${g.create.type}卡片「${esc(g.create.title)}」，負責人 ${esc(g.create.owner?.name || '未指派')}`
-      : `${esc(g.card?.cardId || '')} ${esc(g.card?.title || '')} 狀態改為「${esc(g.to)}」${g.waitFor ? `，等 ${esc(g.waitFor.name)}` : ''}`);
+      : `${esc(ckey(g.card?.cardId || ''))} ${esc(g.card?.title || '')} 狀態改為「${esc(g.to)}」${g.waitFor ? `，等 ${esc(g.waitFor.name)}` : ''}`);
     return `<section class="wsugg"><div class="wsugg-head"><span class="wdot sg"></span><h3>AI 建議</h3><span class="wcount pur">${list.length}</span><span class="muted small">由你採用後才會建立或更新卡片</span></div>
       ${batchBar}
       ${list.map(g => `<div class="sugg-row${g.expired ? ' expired' : ''}" data-sugg-row="${esc(g.suggestionId)}">
@@ -2493,7 +2494,7 @@
   async function suggAction(id, action, body) {
     try {
       const r = await api(`/api/suggestions/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: body || {} });
-      if (action === 'apply') { work.cards.set(r.cardId, r); toast(`已採用，${r.cardId} ${r.status}`); }
+      if (action === 'apply') { work.cards.set(r.cardId, r); toast(`已採用，${ckeyOf(r)} ${r.status}`); }
       else toast('已略過建議');
       await loadSuggestions();
       renderWork();
@@ -3294,7 +3295,7 @@
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && (p.projects || []).includes(d.project));
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
-        <div class="info-box">${esc(d.cardId)} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
+        <div class="info-box">${esc(ckeyOf(d))} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
         <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
         <label>交接說明（必填）<textarea autocomplete="off" autocorrect="on" name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
         <p class="muted small">說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。</p>
@@ -3609,7 +3610,7 @@
         if (srcMsg) rememberLinks({ cardId: c.cardId, messageIds: [srcMsg.messageId] });
         renderWork();
         if (srcMsg) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
-        actionToast(`已建立 ${c.cardId} ·`, '打開', () => openCard(c.cardId));
+        actionToast(`已建立 ${ckeyOf(c)} ·`, '打開', () => openCard(c.cardId));
         flashCard(c.cardId);
       } catch (err) { body.querySelector('#card-new-error').textContent = err.message; }
     });
@@ -3693,10 +3694,10 @@
   function quickHtml(m) {
     const q = quickState(m.messageId);
     const dcard = cardOfConfirm({ messageId: m.messageId });
-    if (dcard?.decision.deferred) return `<div class="auth-row quick" data-q-root="${esc(m.messageId)}"><p class="small muted">決策卡 ${esc(dcard.cardId)} 暫緩中。要繼續請到「工作」打開決策卡按「恢復」。</p></div>`;
+    if (dcard?.decision.deferred) return `<div class="auth-row quick" data-q-root="${esc(m.messageId)}"><p class="small muted">決策卡 ${esc(ckeyOf(dcard))} 暫緩中。要繼續請到「工作」打開決策卡按「恢復」。</p></div>`;
     if (dcard) { // 這則在講一張等我決定的決策卡：只送意見，或暫緩；選項與「同意」到決策卡上按
       const id = esc(m.messageId);
-      return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(dcard.cardId)} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
+      return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(ckeyOf(dcard))} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
       <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>先擱著（暫緩）</button></div>
@@ -4052,7 +4053,7 @@
       .map(mb => ({ mb, now: aiNowOf(mb) }))
       .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
   }
-  const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + x.now.cardId : ''}` : x.now.kind === 'idle' ? '待命' : '離線');
+  const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}` : x.now.kind === 'idle' ? '待命' : '離線');
   const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${esc(aiNowText(x))}</span></button>`;
   function drawAiNow() {
     drawDmSide();
@@ -4170,7 +4171,7 @@
     const focus = document.activeElement?.closest?.('[data-rp-f]') ? { id: document.activeElement.closest('[data-rp-card]').dataset.rpCard, f: document.activeElement.dataset.rpF, s: document.activeElement.selectionStart } : null;
     list.innerHTML = dm.items.map((d, i) => dmBubble(d, dm.items[i + 1])).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
     const mb = state.team?.members.find(m => m.participantId === dm.aiId), now = mb ? aiNowOf(mb) : { kind: 'off' };
-    $('#dm-status').textContent = now.kind === 'work' ? `在做${now.cardId ? ' ' + now.cardId : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '待命，有新私訊會叫醒它' : '目前離線，上線後會看到';
+    $('#dm-status').textContent = now.kind === 'work' ? `在做${now.cardId ? ' ' + ckey(now.cardId) : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '待命，有新私訊會叫醒它' : '目前離線，上線後會看到';
     const ta = $('#dm-input'), sb = $('#dm-send');
     ta.disabled = sb.disabled = !dm.canSend;
     $('#dm-note').textContent = dm.canSend ? '' : dm.reason;
@@ -4431,7 +4432,7 @@
       const sync = `${m.stale ? '◐ 可能離線' : '● 在線'} · ${agoText(s.updatedAt)}同步`;
       return `<details class="astate${ct ? ' on' : ''}"><summary>
         <div>${head}<br><span class="small ${m.stale ? 'warn-text' : 'ok-text'}">${sync}</span></div>
-        <div>${ct ? `${ct.stage ? stagePill(ct.stage) : ''} <span>${esc(ct.title)}</span>${ct.cardId ? ` <button type="button" class="link small" data-open-card="${esc(ct.cardId)}">${esc(ct.cardId)}</button>` : ''}` : '<span class="muted">目前沒有進行中的任務</span>'}${posLine(s)}${m.stale ? '<br><span class="small warn-text">以下是最後同步的狀態，可能已變動。</span>' : ''}</div>
+        <div>${ct ? `${ct.stage ? stagePill(ct.stage) : ''} <span>${esc(ct.title)}</span>${ct.cardId ? ` <button type="button" class="link small" data-open-card="${esc(ct.cardId)}">${esc(ckey(ct.cardId))}</button>` : ''}` : '<span class="muted">目前沒有進行中的任務</span>'}${posLine(s)}${m.stale ? '<br><span class="small warn-text">以下是最後同步的狀態，可能已變動。</span>' : ''}</div>
         <span class="muted small">待辦 ${s.backlog?.length || 0}</span></summary>
         <div class="astate-detail">
           <div class="small"><b>待辦（${s.backlog?.length || 0}）</b></div>
@@ -4599,7 +4600,7 @@
       .filter(x => x.s >= 0.34).sort((x, y) => y.s - x.s || y.w.votes - x.w.votes).slice(0, 3).map(x => x.w);
   }
   const WISH_CLS = { 收到: 's1', 評估中: 's2', 排入: 's5', 已上線: 's3', 先不做: 's4' };
-  const wishSt = w => `<span class="wst ${WISH_CLS[w.status] || ''}">${esc(w.status === '排入' && w.cardId ? `排入 ${w.cardId}` : w.status)}</span>`;
+  const wishSt = w => `<span class="wst ${WISH_CLS[w.status] || ''}">${esc(w.status === '排入' && w.cardId ? `排入 ${ckey(w.cardId)}` : w.status)}</span>`;
   const wishRow = (w, { full = false } = {}) => `<div class="wish${w.status === '先不做' ? ' off' : ''}"><button type="button" class="wish-plus${w.voted ? ' on' : ''}" data-wish-vote="${esc(w.wishId)}" aria-pressed="${w.voted}" aria-label="${esc(`${w.voted ? '取消 +1' : '+1'}：${w.title}，目前 ${w.votes}`)}"><b>${w.voted ? '✓' : '+1'}</b>${w.votes}</button>
     <div class="wish-main"><b>${esc(w.title)}</b> ${wishSt(w)}${full ? `<div class="muted small">${[w.project?.name, mmdd(w.createdAt), w.voted ? '你已 +1' : ''].filter(Boolean).map(esc).join(' · ')}${w.status === '先不做' && w.statusNote ? ` · 原因：${esc(w.statusNote)}` : ''}</div>${w.why ? `<div class="small wish-why">${esc(w.why)}</div>` : ''}` : ''}</div>
     ${full && fb.canEdit ? `<button type="button" class="link small" data-wish-edit="${esc(w.wishId)}">改狀態</button>` : ''}</div>`;
@@ -4742,7 +4743,7 @@
     if (!fb.reports) return '<section id="rep-strip" class="rep-strip"><div class="rep-head"><b>🐞 回報</b><span class="muted small">載入中…</span></div></section>';
     const open = fb.reports.filter(r => r.status === '未整理'), done = fb.reports.filter(r => r.status !== '未整理');
     const ctx = r => [r.reporter.name, r.reporterProject?.name && r.context.page ? r.context.page : r.reporterProject?.name || r.context.page, r.context.device, r.context.version && `v${r.context.version}`, r.context.errorCode && `錯誤 ${r.context.errorCode}`, r.shots.length && `📎${r.shots.length}`].filter(Boolean).map(esc).join(' · ');
-    const row = r => `<div class="rep-row" data-rep="${esc(r.reportId)}"><div class="rep-main"><span class="sev ${SEV_CLS[r.severity] || 'sev-no'}">${esc(r.severity || '未標')}</span> <b>${esc(r.reportId)} ${esc(r.title)}</b>${r.status !== '未整理' ? ` <span class="wst s4">${esc(r.status === '已轉工作卡' || r.status === '已修好' ? `${r.status} ${r.cardId}` : r.status === '已合併' ? `合併到 ${r.mergedInto}` : r.status)}</span>` : ''}
+    const row = r => `<div class="rep-row" data-rep="${esc(r.reportId)}"><div class="rep-main"><span class="sev ${SEV_CLS[r.severity] || 'sev-no'}">${esc(r.severity || '未標')}</span> <b>${esc(r.reportId)} ${esc(r.title)}</b>${r.status !== '未整理' ? ` <span class="wst s4">${esc(r.status === '已轉工作卡' || r.status === '已修好' ? `${r.status} ${ckey(r.cardId)}` : r.status === '已合併' ? `合併到 ${r.mergedInto}` : r.status)}</span>` : ''}
       <div class="muted small">${ctx(r)} · ${esc(fmtTime(r.createdAt))}${r.context.version ? ` · <button type="button" class="link small" data-rel-ver="${esc(r.context.version)}">看 v${esc(r.context.version)} 改了什麼</button>` : ''}</div>${r.detail ? `<div class="small rep-detail">${esc(r.detail)}</div>` : ''}</div>
       <div class="rep-acts">${r.shots.length ? `<button type="button" class="link small" data-rep-shots="${esc(r.reportId)}">看截圖</button>` : ''}${r.status === '未整理' ? `<select data-rep-sev="${esc(r.reportId)}" aria-label="${esc(r.reportId)} 嚴重度">${['', '嚴重', '一般', '小'].map(s => `<option value="${s}"${r.severity === s ? ' selected' : ''}>${s || '標嚴重度'}</option>`).join('')}</select>
         <button type="button" class="link small" data-rep-card="${esc(r.reportId)}">轉工作卡</button><button type="button" class="link small" data-rep-merge="${esc(r.reportId)}">合併到…</button><button type="button" class="link small" data-rep-skip="${esc(r.reportId)}">先不處理</button>` : `<button type="button" class="link small" data-rep-reopen="${esc(r.reportId)}">改回未整理</button>`}</div></div>`;
@@ -4773,7 +4774,7 @@
       const card = await api('/api/cards', { method: 'POST', body: { requestId: newRequestId(), project: fbPj(), type: '工作', title: `${id} ${r.title}`.slice(0, 100), reason } });
       await patchReport(id, { cardId: card.cardId });
       await loadCards().catch(() => {});
-      toast(`已建 ${card.cardId}，${id} 連到這張卡`);
+      toast(`已建 ${ckeyOf(card)}，${id} 連到這張卡`);
     } catch (err) { toast(err.message); }
   }
   function mergeReport(id) {
@@ -6474,7 +6475,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const ps = people.status === 'fulfilled' ? people.value.filter(p => inViewPerson(p.participantId) && [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(ql))).slice(0, 10) : null;
     const sec = (title, list, row, err) => `<section class="sr-sec"><h3>${title}${list ? ` <span class="muted small">${list.length}${list.length >= 10 && title !== '訊息' ? '+' : ''}</span>` : ''}</h3>${
       !list ? `<p class="muted small">${err}</p>` : list.length ? list.map(row).join('') : '<p class="muted small">沒有符合的。</p>'}</section>`;
-    res.innerHTML = sec('卡片', cs, c => `<button type="button" class="sr-row" data-sr-card="${esc(c.cardId)}"><span class="sr-k">${esc(c.cardId)}</span><span class="sr-t">${markHit(c.title, q)}</span><span class="sr-m muted small">${esc(c.status)}${c.project ? ' · ' + esc(projName(c.project)) : ''}</span></button>`, esc(cards.reason?.message || '卡片搜尋失敗，請再按一次 Enter。'))
+    res.innerHTML = sec('卡片', cs, c => `<button type="button" class="sr-row" data-sr-card="${esc(c.cardId)}"><span class="sr-k">${esc(ckeyOf(c))}</span><span class="sr-t">${markHit(c.title, q)}</span><span class="sr-m muted small">${esc(c.status)}${c.project ? ' · ' + esc(projName(c.project)) : ''}</span></button>`, esc(cards.reason?.message || '卡片搜尋失敗，請再按一次 Enter。'))
       + sec('訊息', ms, m => `<button type="button" class="sr-row" data-sr-msg="${esc(m.messageId)}" data-sr-pj="${esc(m.project || '')}"><span class="sr-k">${esc(m.author?.name || '?')}</span><span class="sr-t">${snippet(m.text, q)}</span><span class="sr-m muted small">${esc(fmtTime(m.createdAt).slice(0, -3))}${m.project ? ' · ' + esc(projName(m.project)) : ''}</span></button>`, esc(msgs.reason?.message || '訊息搜尋失敗，請再按一次 Enter。'))
       + sec('成員', ps, p => `<button type="button" class="sr-row" data-sr-person="${esc(p.name)}">${avatarDot(p)}<span class="sr-t">${markHit(p.name, q)}</span><span class="sr-m muted small">${esc(p.role || '')}${p.memberType === 'ai' && p.ownerName ? ' · 所屬 ' + esc(p.ownerName) : ''}</span></button>`, '成員載入失敗。');
   }
