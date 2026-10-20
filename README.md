@@ -34,9 +34,9 @@ npx wrangler@4 secret put ROOM_CODE          # 建議：設定群組密碼，避
 npm run cf:deploy
 ```
 
-升級到新登入（C-202：邀請、裝置、配對碼）：執行 `npm run cf:db:migrate-login`（只新增資料表），再 `npm run cf:deploy`。
+資料表變更（migration）一律用同一個指令帶檔名：`npm run cf:db:migrate -- migrations/<檔名>.sql`，再 `npm run deploy`。例如升級到新登入（C-202：邀請、裝置、配對碼）：`npm run cf:db:migrate -- migrations/0016_login.sql`（只新增資料表）。
 
-既有部署升級到上傳文件功能：執行 `npm run cf:db:migrate-files`，再 `npm run cf:deploy`。升級到「所在環境」：執行 `npm run cf:db:migrate-env`。
+既有部署升級到上傳文件功能：`migrations/0002_files.sql`；升級到「所在環境」：`migrations/0003_env.sql`。
 
 本機模擬 Workers：`npx wrangler@4 d1 execute aigile-switch --local --file=src/schema.sql`，再 `npm run cf:dev`。
 
@@ -49,7 +49,7 @@ npm run cf:deploy
 | 成員名單 | [人類]／AI 所屬、角色、短代碼、30 秒內活躍燈號、主要職責、搜尋、一鍵 @提及 |
 | 我的 AI | 依 **15 種角色範本**預填六題設定（可編輯）、可設定「所在環境」（行內／行外／投信，選取後自動帶入該環境的限制）、複製到我的 AI、重發 Token、停用／啟用、Token 到期提示 |
 | 通知 | 指定給我、回覆我、全體通知的待處理清單 |
-| 團隊狀態列 | 網頁頂部顯示每位成員的連線狀況（最後上線、可能斷線、Token 快到期）與依訊息標籤推斷的目前工作；「等你決定」清單列出尚未有人類回覆的 [需確認]；指派超過 15 分鐘未讀取會標示「尚未回應」；AI 的 Token（預設 7 天）到期前 24 小時、2 小時只在所屬人類的網頁頂部提醒，不發群組訊息；重發後可「只複製 Token」 |
+| 團隊狀態列 | 網頁頂部顯示每位成員的連線狀況（最後上線、可能斷線、Token 快到期）與依訊息標籤推斷的目前工作；「等你決定」清單列出尚未有人類回覆的 [需確認]；指派超過 20 分鐘未讀取會標示「尚未回應」；AI 的 Token（預設 7 天）到期前 24 小時、2 小時只在所屬人類的網頁頂部提醒，不發群組訊息；重發後可「只複製 Token」 |
 | 文件 | 📎 上傳文件（pdf、docx、xlsx、pptx、md、txt、png、jpg，≤2 MB），必須勾選「不含程式碼與客戶個資」聲明；上傳後自動在群組發附檔訊息；1 小時後自動刪除；檔案存在 D1，不需要 R2；檔頭比對防偽裝、Office 巨集阻擋；上傳／下載／刪除全程稽核 |
 | API 資訊 | Base URL、自己的 participantId 與 Token、端點列表、規格文件連結 |
 | 進階設定 | 深淺色、只看與我或我的 AI 相關的訊息、離開群組 |
@@ -101,6 +101,8 @@ scripts/smoke.js   冒煙測試
 ## 測試
 
 ```bash
+npm test                                          # 依序跑全部測試（scripts/*-test.js 與冒煙測試），最後列出沒過的
+npm test -- c341 s4                               # 只跑檔名含這些字的測試
 npm run smoke                                     # 本機
 npm run test:files                                # 上傳文件 v1.1 驗收條件
 npm run test:team                                 # 團隊狀態列
@@ -110,5 +112,5 @@ SMOKE_BASE=http://127.0.0.1:8787 npm run smoke    # 對已啟動的 wrangler dev
 ## 安全注意
 
 - Token 等同密碼。AI 的 Token 保存在資料庫中，讓擁有者能隨時「複製到我的 AI」；請勿分享 `data/` 或資料庫內容。
-- 人類加入要管理員的邀請連結（15 分鐘、一次性）；換裝置用 6 位數配對碼（5 分鐘、一次性，猜錯太多次會被擋 10 分鐘）。不要在正式環境設 `OPEN_JOIN=1`。
+- 人類加入要管理員的邀請連結（一次性；有效時間預設 24 小時，產生時可選 15 分鐘、1 小時、24 小時、7 天）；換裝置用 6 位數配對碼（5 分鐘、一次性，猜錯太多次會被擋 10 分鐘）。不要在正式環境設 `OPEN_JOIN=1`。
 - 裝置登入只存雜湊；登入碼外流時在「API 資訊與登入碼」按「換一組登入碼」，人不在了由管理員在「成員與權限 ▸ 依成員」按「重設登入」。

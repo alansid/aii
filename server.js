@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './src/core.js';
 import { openNodeDb } from './src/db-node.js';
 import { dbStorage } from './src/storage-db.js';
+import { scriptHashes } from './scripts/script-hashes.mjs'; // C-338 C4
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -18,6 +19,7 @@ const handle = createApp({
   storage: dbStorage(db),
   docText: fs.readFileSync(path.join(ROOT, 'docs', 'ai-integration.md'), 'utf8'),
   flowsText: fs.readFileSync(path.join(ROOT, 'docs', 'flows.md'), 'utf8'), // C-291
+  scriptHashes: scriptHashes(), // C-338 C4：從 public/ 現算
   releases: (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'generated', 'releases.json'), 'utf8')); } catch { return null; } })(), // npm run releases 產生
   config: {
     roomCode: process.env.ROOM_CODE,

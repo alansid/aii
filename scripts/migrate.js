@@ -1,4 +1,4 @@
-// 對正式 D1 執行 migration：node scripts/migrate.js migrations/0002_files.sql
+// 對正式 D1 執行 migration：npm run cf:db:migrate -- migrations/0002_files.sql（或 node scripts/migrate.js <檔>）
 // 用 --command 直接送 SQL（wrangler 的 --file 匯入在部分帳號權限下會回 Authentication error）。
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';

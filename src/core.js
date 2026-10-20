@@ -61,7 +61,7 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
 
 // ---------- 應用程式 ----------
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
-export function createApp({ db, docText, flowsText = '', releases = null, config = {}, storage = null }) {
+export function createApp({ db, docText, flowsText = '', releases = null, config = {}, storage = null, scriptHashes = {} }) {
   const ROOM_CODE = config.roomCode || '';
   // C-202：人類改用邀請連結加入；只有群組還沒有人類（建立者）或明確開放（OPEN_JOIN=1，本機測試用）才能自己加入
   const OPEN_JOIN = config.openJoin === true || config.openJoin === '1';
@@ -69,11 +69,12 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_URL = String(config.supabaseUrl || '').replace(/[/]+$/, '');
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
-  // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = 'aec2095ce33abbfb191ec738e45575d8a4cb0391ccada350ce8ee2e841f7cff6';
-  const WAIT_SHA256 = '6f4c0c67efb66e2bd4c040436f2363d280ed41886b1e58d81c370fd3ade26dc0'; // C-246 等待腳本
-  const SETUP_SHA256 = '0863ae534a28a162ff639218bd872232fbd0a6e24e421d062eb7e5184883cc8f'; // C-327 接入檢查腳本 public/aigile-setup.mjs
-  const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
+  // C-338 C4：AI 下載的腳本（watcher、等待、接入檢查、opencode 喚醒）的 SHA-256，寫進接入設定讓 AI 核對。
+  // 不再手寫：部署時 scripts/releases.mjs 算好打包（worker.js），本機 server.js 與測試用 scripts/script-hashes.mjs 現算
+  const WATCHER_SHA256 = scriptHashes['watcher.mjs'] || '';
+  const WAIT_SHA256 = scriptHashes['aigile-wait.mjs'] || '';
+  const SETUP_SHA256 = scriptHashes['aigile-setup.mjs'] || '';
+  const OPENCODE_SHA256 = scriptHashes['aigile-opencode.mjs'] || '';
   // C-337 B6：門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
   // 原本 worker 用模組變數記「目前的請求」，並行時會掛到別的（可能已結束的）請求上，門鈴遺失
   const bellPending = new Set();
