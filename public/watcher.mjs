@@ -20,6 +20,9 @@
 //   BELL_FILE          （C-246）門鈴檔，例如 .aigile/PG/bell.json：有新的待處理通知就寫入筆數與時間，
 //                      每 5 分鐘寫一次本機心跳（不連平台）；aigile-wait.mjs 只盯這個檔，沒事時不連平台
 //   PID_FILE           （C-246）啟動時把自己的程序編號寫進這個檔（例如 .aigile/PG/watcher.pid），結束時刪掉
+//   WAKE_MAX_PER_HOUR  （C-327）每小時最多叫醒幾次，預設 4；WAKE_MAX_PER_DAY 每 24 小時最多幾次，預設 30（0＝不限）
+//                      到上限就先不叫醒，時段過了自動補叫，並私訊所屬人類一次；次數記在門鈴檔，重開 watcher 不歸零
+//   WAKE_TIMEOUT_MIN   （C-327）單次喚醒最多跑幾分鐘，預設 10（0＝不限）；超過就把喚醒指令連同它開的程序停掉，並私訊所屬人類
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
@@ -36,6 +39,10 @@ const WATCH_ONLY = env.WATCH_ONLY === '1';
 const HEARTBEAT_MS = (Number(env.HEARTBEAT_MIN) || 15) * 60_000;
 const BELL_FILE = env.BELL_FILE || '';
 const PID_FILE = env.PID_FILE || '';
+const num = (v, d) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Math.max(0, Number(v)));
+const MAX_HOUR = num(env.WAKE_MAX_PER_HOUR, 4), MAX_DAY = num(env.WAKE_MAX_PER_DAY, 30);
+const TIMEOUT_MS = num(env.WAKE_TIMEOUT_MIN, 10) * 60_000;
+const HOUR_MS = 3_600_000, DAY_MS = 24 * HOUR_MS;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
@@ -45,7 +52,9 @@ if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
 
 let running = false, queued = false;
 // C-246 門鈴檔（寫到暫存檔再改名，讀的一方不會讀到寫一半的內容）
-const bell = { v: 1, seq: 0, pending: 0, bellAt: null, heartbeatAt: null, pid: process.pid };
+const bell = { v: 1, seq: 0, pending: 0, bellAt: null, heartbeatAt: null, pid: process.pid, wakes: [] };
+// C-327：叫醒時間記在門鈴檔，重開 watcher 也接著算（避免反覆重開繞過上限）
+if (BELL_FILE) { try { const old = JSON.parse(readFileSync(BELL_FILE, 'utf8')); bell.seq = old.seq || 0; if (Array.isArray(old.wakes)) bell.wakes = old.wakes.filter(t => Date.now() - t < DAY_MS); } catch {} }
 function writeBell(patch = {}) {
   if (!BELL_FILE) return;
   Object.assign(bell, patch, { heartbeatAt: new Date().toISOString(), pid: process.pid });
@@ -90,18 +99,64 @@ async function check(why) {
   if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理，但都已為它們喚醒過，不重複喚醒`); }
   if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
   if (running) { queued = true; return log(`[${why}] 有 ${fresh.length} 則新的待處理，但 AI 正在執行，排隊補跑`); }
+  const cap = capped();
+  if (cap) return holdForCap(cap, pending, why);
   fresh.forEach(id => woken.add(id));
   for (const id of woken) if (!ids.includes(id)) woken.delete(id); // 已處理掉的不用再記
   wake(pending, why);
 }
 
+// ---------- C-327 叫醒上限 ----------
+function capped() {
+  const now = Date.now();
+  bell.wakes = bell.wakes.filter(t => now - t < DAY_MS);
+  const inHour = bell.wakes.filter(t => now - t < HOUR_MS);
+  if (MAX_DAY > 0 && bell.wakes.length >= MAX_DAY) return { kind: '每天', max: MAX_DAY, until: bell.wakes[bell.wakes.length - MAX_DAY] + DAY_MS };
+  if (MAX_HOUR > 0 && inHour.length >= MAX_HOUR) return { kind: '每小時', max: MAX_HOUR, until: inHour[inHour.length - MAX_HOUR] + HOUR_MS };
+  return null;
+}
+let capTimer = null, capNotified = 0;
+const hhmm = t => new Date(t).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+function holdForCap(cap, pending, why) {
+  writeBell({ pending });
+  log(`[${why}] 有 ${pending} 則待處理，但叫醒已達${cap.kind}上限 ${cap.max} 次，${hhmm(cap.until)} 後再叫醒`);
+  if (!capTimer) capTimer = setTimeout(() => { capTimer = null; check('上限解除'); }, Math.max(1000, cap.until - Date.now() + 1000));
+  if (capNotified < cap.until) { capNotified = cap.until; tellOwner(`[通知] watcher 叫醒已達${cap.kind}上限（${cap.max} 次），先暫停，${hhmm(cap.until)} 後自動恢復；目前有 ${pending} 則待處理。要提早恢復請重開 watcher 並調高 ${cap.kind === '每天' ? 'WAKE_MAX_PER_DAY' : 'WAKE_MAX_PER_HOUR'}。`, 'cap-' + cap.until); }
+}
+// 告訴所屬人類：先私訊；專案沒開私訊就在自己第一個專案發 [通知] 指定他（只是知會）。失敗只記日誌
+async function tellOwner(text, key) {
+  const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'watcher' }, body: JSON.stringify(body) });
+  const requestId = `watcher-${ME}-${key}`;
+  try {
+    const r = await post('/api/dm', { text, requestId });
+    if (r.ok) return log('已私訊所屬人類');
+    const me = await (await fetch(`${BASE}/api/me`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } })).json();
+    const project = me.projects?.[0] || 'all', owner = me.ownerParticipantId;
+    const g = await post('/api/messages', { project, requestId, text, recipientIds: owner ? [owner] : [], replyFrom: [] });
+    log(g.ok ? `私訊沒開放（HTTP ${r.status}），已在 ${project} 發通知給所屬人類` : `通知所屬人類失敗：私訊 HTTP ${r.status}、群組 HTTP ${g.status}`);
+  } catch (e) { log('通知所屬人類失敗：', e.message); }
+}
+// 停掉喚醒指令與它開的所有程序（shell 底下的 AI 工具也要停）
+function killTree(child) {
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => {});
+  else { try { process.kill(-child.pid, 'SIGTERM'); } catch {} setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 5000).unref(); }
+}
+
 function wake(pending, why) {
   running = true;
+  bell.wakes.push(Date.now());
   ring(pending);
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
-  const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', env: { ...env, AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
+  const startedAt = Date.now();
+  const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...env, AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
+  const killer = TIMEOUT_MS > 0 ? setTimeout(() => {
+    log(`喚醒指令跑超過 ${TIMEOUT_MS / 60000} 分鐘，停掉它`);
+    killTree(child);
+    tellOwner(`[通知] 這一輪叫醒跑超過 ${TIMEOUT_MS / 60000} 分鐘，watcher 已停掉它（${hhmm(startedAt)} 開始）。常發生的話請看 AI 是不是卡住或對話太長。`, 'timeout-' + startedAt);
+  }, TIMEOUT_MS) : null;
   child.on('error', e => log('喚醒指令啟動失敗：', e.message));
   child.on('exit', code => {
+    clearTimeout(killer);
     running = false;
     log(`喚醒指令結束（exit ${code}）`);
     if (queued) { queued = false; check('排隊補跑'); }

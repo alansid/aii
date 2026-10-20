@@ -68,7 +68,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = '73e6728b9154f3f3c47d35cb15b31fd612d452e476f26f91ecdba9373ea40358';
+  const WATCHER_SHA256 = 'fb031e382bee34be02f7617550d923c15945abf14c8f48aa802c3cedfab6f5e2';
   const WAIT_SHA256 = '5db97b93690786bd23a58f6a3bcfe36010cbfc4aedc5f96b15387af7b133dcc8'; // C-246 等待腳本
   const SETUP_SHA256 = '73892eba8a3fb0ad75117fe5ff57ddfc5dc5136c5e34202b2032729f9fd2ad7c'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const defer = config.defer || (p => p);
