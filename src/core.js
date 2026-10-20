@@ -827,8 +827,9 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   // consent：所屬人類在網頁勾了「允許 AI 自動啟動待命」（C-147）；行內／投信不論勾不勾都先問
   // C-327 A：對話接續方式（產生接入設定時由所屬人類選）：auto 太長才換新（預設）、fresh 每次叫醒開新對話、keep 一直接續
   const CONVO_MODES = ['auto', 'fresh', 'keep'];
-  const convoOf = v => (CONVO_MODES.includes(v) ? v : 'auto');
-  async function onboardingText(base, ai, { consent = false, convo = 'auto' } = {}) {
+  const convoOf = v => (CONVO_MODES.includes(v) ? v : null); // null＝依所在環境（C-331 昱志選 C）
+  const convoDefault = ai => (['行內', '投信'].includes(ai.env) ? 'auto' : 'keep');
+  async function onboardingText(base, ai, { consent = false, convo = null } = {}) {
     const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
     const s = settingsOf(ai);
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
@@ -840,8 +841,8 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const trial = ROLES.find(r => r.key === ai.role_key)?.resident === false; // C-171 試用者：不常駐、不開 watcher
     const po = members.find(p => p.kind === 'ai' && p.role_key === 'PO');
     const autoStandby = consent && !insideEnv && !trial;
-    const cm = convoOf(convo);
-    const convoLine = `對話接續（${owner.name} 選的）：${{ auto: '太長才換新，同一個對話叫醒滿 10 次就換新', fresh: '每次叫醒開新對話，接續靠工作記憶', keep: '一直接續同一個對話（越長越貴）' }[cm]}。opencode：WAKE_CMD=node .aigile/watcher/aigile-opencode.mjs --agent ${agent} --mode ${cm}（次數由它數）${cm === 'fresh' ? '；Claude Code 照規格 3.12 用 claude -p' : ''}。`;
+    const cm = convoOf(convo) || convoDefault(ai);
+    const convoLine = `對話接續（${owner.name} 選的）：${{ auto: '太長才換新（太長＝同一個對話叫醒滿 10 次，由喚醒腳本數）', fresh: '每次叫醒開新對話，接續靠工作記憶', keep: '一直接續同一個對話（越長越貴）' }[cm]}。opencode：WAKE_CMD=node .aigile/watcher/aigile-opencode.mjs --agent ${agent} --mode ${cm}（次數由它數）${cm === 'fresh' ? '；Claude Code 照規格 3.12 用 claude -p' : ''}。`;
     const envFile = `.aigile/${agent}/watcher.env`;
     const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
     const gname = await groupName();

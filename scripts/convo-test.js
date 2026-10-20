@@ -24,7 +24,17 @@ try {
   const ob = async q => (await call(liu.token, `/api/my-ais/${ai.participantId}/onboarding${q}`)).body.text;
 
   const def = await ob('');
-  assert.match(def, /對話接續（劉昱志 選的）：太長才換新，同一個對話叫醒滿 10 次就換新。opencode：WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent PG_[A-Z0-9]{4} --mode auto/, '預設太長才換新，WAKE_CMD 照選的方式寫好');
+  // C-331 昱志選 C：沒選就依所在環境——行外（含未設定）一直接續、行內／投信 太長才換新
+  assert.match(def, /對話接續（劉昱志 選的）：一直接續同一個對話（越長越貴）。opencode：WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent PG_[A-Z0-9]{4} --mode keep/, '行外預設一直接續');
+  await call(liu.token, `/api/my-ais/${ai.participantId}`, 'PATCH', { environment: '行內' });
+  const inside = await ob('');
+  assert.match(inside, /對話接續（劉昱志 選的）：太長才換新（太長＝同一個對話叫醒滿 10 次，由喚醒腳本數）。opencode：WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent PG_[A-Z0-9]{4} --mode auto/, '行內預設太長才換新，寫明太長＝叫醒滿 10 次');
+  await call(liu.token, `/api/my-ais/${ai.participantId}`, 'PATCH', { environment: '投信' });
+  assert.match(await ob(''), /--mode auto/, '投信預設太長才換新');
+  assert.match(await ob('?convo=keep'), /--mode keep/, '行內也可以改成一直接續');
+  const insideLink = (await call(liu.token, `/api/my-ais/${ai.participantId}/onboarding-link`, 'POST', { autoStandby: true })).body;
+  assert.match(await (await raw(null, new URL(insideLink.url).pathname)).text(), /--mode auto/, '短版接入沒選也依環境');
+  await call(liu.token, `/api/my-ais/${ai.participantId}`, 'PATCH', { environment: '行外' });
   const fr = await ob('?convo=fresh&autoStandby=1');
   assert.match(fr, /對話接續（劉昱志 選的）：每次叫醒開新對話/); assert.match(fr, /--mode fresh/); assert.match(fr, /Claude Code 照規格 3\.12 用 claude -p/);
   assert.match(await ob('?convo=keep'), /一直接續同一個對話.*--mode keep/);
@@ -63,7 +73,7 @@ if (a[0] === 'run') {
   const d4 = fs.mkdtempSync(path.join(dataDir, 'oc-'));
   await wake(d4, 'fresh'); await wake(d4, 'fresh');
   assert.deepEqual(calls(d4), ['fresh_1', 'fresh_2'], 'fresh 每次新對話，不用 -s、不用 --continue');
-  assert.match(await ob('?convo=亂寫'), /太長才換新/, '不認得的值當預設');
+  assert.match(await ob('?convo=亂寫'), /一直接續/, '不認得的值當沒選（行外：一直接續）');
   for (const q of ['', '?convo=fresh', '?convo=keep', '?convo=auto&autoStandby=1']) assert.ok(len(await ob(q)) <= 5000, `接入設定 ≤ 5,000 字（${q || '預設'}）`);
 
   // 短版接入：選的方式跟著一次性連結走
@@ -73,13 +83,13 @@ if (a[0] === 'run') {
 
   // 規格寫三種與「每次新對話」的喚醒寫法；網頁選單預設太長才換新，Claude Code 選每次新對話要提醒
   const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
-  assert.match(spec, /\*\*太長才換新\*\*（預設）/); assert.match(spec, /\*\*每次新對話\*\*/); assert.match(spec, /\*\*一直接續\*\*/);
+  assert.match(spec, /沒選就依所在環境：行內／投信＝太長才換新、行外＝一直接續/); assert.match(spec, /\*\*太長才換新\*\*＝太長是指同一個對話叫醒滿 10 次/); assert.match(spec, /\*\*每次新對話\*\*/); assert.match(spec, /\*\*一直接續\*\*/);
   assert.match(spec, /WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent <代號> --mode/, '規格寫出 opencode 喚醒腳本');
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(js, /let convoMode = 'auto';/, '網頁預設太長才換新');
+  assert.match(js, /let convoMode = '';/, '網頁預設依所在環境'); assert.match(js, /\['', '依所在環境（建議）'\]/); assert.match(js, /太長＝同一個對話叫醒滿 10 次/, '提示寫明太長的意思');
   assert.match(js, /Claude Code 選這個會在背景另開對話，你在畫面上看不到/, 'Claude Code 選每次新對話有提醒');
-  assert.match(js, /onboarding\?convo=\$\{convoMode\}/, '完整接入設定帶選的方式');
-  assert.match(js, /autoStandby: !!autoStandbyConsent, convo: convoMode/, '短版接入帶選的方式');
+  assert.match(js, /convoMode \? \{ convo: convoMode \} : \{\}/, '完整與短版接入：有選才帶');
+
   console.log('convo-test：全部通過');
 } catch (e) {
   console.error('convo-test 失敗：', e.message);
