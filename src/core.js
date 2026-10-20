@@ -2442,17 +2442,13 @@ ${trial
     if (body.cardId !== undefined && body.cardId !== null && body.cardId !== '') {
       const m = /^C-(\d+)$/i.exec(String(body.cardId));
       cardSeq = m ? Number(m[1]) - 100 : ((await cardSeqByKey(body.cardId)) ?? NaN); // C-310：PLAT-12 也收
-      card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status, owner_id, type, project FROM cards WHERE seq = ?', cardSeq) : null;
+      card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status, owner_id, type FROM cards WHERE seq = ?', cardSeq) : null;
       if (!card) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
-      // C-333 退回（UX 第 2890 則）：看不到的卡（C 號或專案代號）不能掛，跟讀卡一樣回 403
-      if (isolatedFrom(me) && !projectsOf(me).includes(card.project)) throw new ApiError(403, 'CARD_FORBIDDEN', '這張卡屬於其他專案，你沒有權限查看。');
       cardClosed = ['已完成', '已封存'].includes(card.status) ? card.status : ''; // C-276
     }
     const r = await createMessage(ctx, me, body, { checkProject: true });
     let cardLinked;
-    const crossProject = card && card.project && r.message.project && r.message.project !== card.project; // 兩邊成員：別專案的訊息不掛進這張卡
-    if (crossProject) cardLinked = false;
-    else if (cardSeq) {
+    if (cardSeq) {
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
       if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
     }
@@ -2468,7 +2464,6 @@ ${trial
       cardStarted = true;
     }
     const warnings = [...(r.warnings || [])];
-    if (crossProject) warnings.push(`${body.cardId} 屬於另一個專案，這則訊息（${nameOf(r.message.project)}）沒有掛上去；要掛請改發到卡片的專案。`);
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`); // C-276
     return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(warnings.length ? { warnings } : {}) };
   });
