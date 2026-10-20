@@ -5,6 +5,7 @@ import { dbStorage } from './src/storage-db.js';
 import docText from './docs/ai-integration.md';
 import flowsText from './docs/flows.md'; // C-291：要登入才讀得到
 import releases from './generated/releases.json'; // C-291：npm run deploy 會先產生
+import scriptHashes from './generated/script-hashes.json'; // C-338 C4：同上，AI 下載腳本的 SHA-256
 
 let handle;
 const app = env => {
@@ -16,6 +17,7 @@ const app = env => {
     docText,
     flowsText,
     releases,
+    scriptHashes,
     config: {
       roomCode: env.ROOM_CODE,
       openJoin: env.OPEN_JOIN,

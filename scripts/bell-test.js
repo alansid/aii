@@ -3,7 +3,6 @@
 // 用法：node scripts/bell-test.js
 import fs from 'node:fs';
 import assert from 'node:assert';
-import crypto from 'node:crypto';
 
 try {
   const src = fs.readFileSync(new URL('../public/watcher.mjs', import.meta.url), 'utf8');
@@ -32,9 +31,7 @@ try {
   assert.equal(r.bell?.seq, 1, 'rename 一直被擋：直接覆寫，門鈴照樣響'); assert.equal(r.tmpLeft, false, '暫存檔清掉');
   assert.equal(r.logs.length, 0, '沒有「寫門鈴檔失敗」');
 
-  // 接入設定裡的雜湊要跟著更新
-  const sha = crypto.createHash('sha256').update(fs.readFileSync(new URL('../public/watcher.mjs', import.meta.url))).digest('hex');
-  assert.ok(fs.readFileSync(new URL('../src/core.js', import.meta.url), 'utf8').includes(`WATCHER_SHA256 = '${sha}'`), 'core.js 的 WATCHER_SHA256 要等於 watcher.mjs 的雜湊');
+  // 接入設定裡的雜湊：C-338 起自動產生（scripts/script-hashes.mjs，c338-test 驗）
   console.log('bell-test：全部通過');
 } catch (e) {
   console.error('bell-test 失敗：', e.message);

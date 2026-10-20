@@ -92,9 +92,7 @@ try {
     assert.equal(watcherSide(a.id, a.tok).bellOk(bells[0]), true, '私訊門鈴驗得過');
   }
 
-  // 6) 接入設定裡的雜湊、規格說明跟著更新
-  const sha = crypto.createHash('sha256').update(fs.readFileSync(new URL('../public/watcher.mjs', import.meta.url))).digest('hex');
-  assert.ok(fs.readFileSync(new URL('../src/core.js', import.meta.url), 'utf8').includes(`WATCHER_SHA256 = '${sha}'`), 'WATCHER_SHA256 等於 watcher.mjs 的雜湊');
+  // 6) 規格說明跟著更新（watcher 雜湊 C-338 起自動產生，c338-test 驗）
   assert.match(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), /watcher 驗不過就略過/, '規格寫到簽章');
   console.log('s4-test：全部通過');
 } catch (e) {
