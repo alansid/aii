@@ -25,7 +25,7 @@ const call = async (token, p, method = 'GET', body) => {
 };
 // 腳本是獨立程序：開本機埠，靜態檔（watcher.mjs 等）直接回 public 裡的檔
 const server = http.createServer(async (req, res) => {
-  const f = /^\/(watcher|aigile-wait|aigile-setup)\.mjs$/.exec(req.url);
+  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const base = `http://${req.headers.host}`;
@@ -48,7 +48,7 @@ try {
   // 端點：只給 AI；內容就是標準 watcher.env 與兩個檔的雜湊
   assert.equal((await call(liu.token, '/api/me/watcher-env')).status, 403, '人類拿不到');
   const cfg = (await call(tok, '/api/me/watcher-env')).body;
-  assert.deepEqual(cfg.files, { 'watcher.mjs': sha(pub('watcher.mjs')), 'aigile-wait.mjs': sha(pub('aigile-wait.mjs')) }, '雜湊跟 public 的檔一致');
+  assert.deepEqual(cfg.files, { 'watcher.mjs': sha(pub('watcher.mjs')), 'aigile-wait.mjs': sha(pub('aigile-wait.mjs')), 'aigile-opencode.mjs': sha(pub('aigile-opencode.mjs')) }, '雜湊跟 public 的檔一致');
   assert.match(cfg.env, /BELL_FILE=\.aigile\/PG\/bell\.json/);
   assert.ok(!cfg.env.includes(tok), 'watcher.env 不放 Token（用 AIGILE_TOKEN_FILE）');
 
@@ -58,6 +58,7 @@ try {
   assert.equal(r.code, 0, r.out);
   assert.equal(sha(path.join(a, '.aigile/watcher/watcher.mjs')), cfg.files['watcher.mjs'], '下載並核對 watcher');
   assert.equal(sha(path.join(a, '.aigile/watcher/aigile-wait.mjs')), cfg.files['aigile-wait.mjs']);
+  assert.equal(sha(path.join(a, '.aigile/watcher/aigile-opencode.mjs')), cfg.files['aigile-opencode.mjs'], 'C-331 opencode 喚醒腳本一起下載核對');
   let env = envOf(a);
   assert.equal(env.BELL_FILE, '.aigile/PG/bell.json'); assert.equal(env.AIGILE_BASE, BASE);
   assert.match(fs.readFileSync(path.join(a, '.gitignore'), 'utf8'), /^\.aigile\/$/m, '補 .gitignore');

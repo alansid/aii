@@ -45,32 +45,42 @@ try {
   // 告訴所屬人類：私訊（專案有開）或群組 [通知]（沒開時退回）；這裡的專案沒開私訊，走群組
   const dmsTo = async ai => [...await db.all('SELECT text FROM dms WHERE from_id = ? ORDER BY seq', ai.id), ...await db.all('SELECT text FROM messages WHERE author_id = ? ORDER BY seq', ai.id)].map(r => r.text);
 
-  // 1) 每小時上限 2：來 4 則新通知，只叫醒 2 次，其他的等時段過了才補；私訊所屬人類一次
+  // 1) 預設每小時上限 3（昱志 10/20 從 4 改 3）：來 4 則新通知，第 4 次被擋，只叫醒 3 次，其他的等時段過了才補；私訊所屬人類一次
   const a = await mk('上限助手'), wa = fs.mkdtempSync(path.join(dataDir, 'a-'));
   const wakeLog = path.join(wa, 'wakes.txt');
   const wakes = () => { try { return fs.readFileSync(wakeLog, 'utf8').trim().split('\n').filter(Boolean).length; } catch { return 0; } };
   const cmd = `"${process.execPath}" -e "require('fs').appendFileSync('wakes.txt','w\\n')"`;
-  let w = startWatcher(wa, a.id, a.tok, { WAKE_CMD: cmd, WAKE_MAX_PER_HOUR: '2', WAKE_MAX_PER_DAY: '30' });
+  let w = startWatcher(wa, a.id, a.tok, { WAKE_CMD: cmd });
   for (let i = 1; i <= 4; i++) {
     await notify(a, i);
     await sleep(2000); // 巡檢每 0.6 秒一次：跨過幾次，讓這則一定被看到
   }
-  assert.equal(wakes(), 2, `只叫醒 2 次（實際 ${wakes()} 次）：\n` + w.log().slice(-600));
-  assert.match(w.log(), /叫醒已達每小時上限 2 次/, '日誌寫原因');
+  assert.equal(wakes(), 3, `只叫醒 3 次（實際 ${wakes()} 次）：\n` + w.log().slice(-600));
+  assert.match(w.log(), /叫醒已達每小時上限 3 次/, '日誌寫原因');
   try { await until(async () => (await dmsTo(a)).length >= 1, 5000, '私訊'); } catch (e) { console.log(w.log().split('\n').filter(l => !/保底巡檢/.test(l)).join('\n').slice(-1500)); throw e; }
   await sleep(1500);
   const dm = await dmsTo(a);
   assert.equal(dm.length, 1, '同一段上限只私訊一次');
-  assert.match(dm[0], /已達每小時上限（2 次）.*自動恢復/);
+  assert.match(dm[0], /已達每小時上限（3 次）.*自動恢復/);
   const bell = JSON.parse(fs.readFileSync(path.join(wa, 'bell.json'), 'utf8'));
-  assert.equal(bell.wakes.length, 2, '叫醒時間記在門鈴檔');
+  assert.equal(bell.wakes.length, 3, '叫醒時間記在門鈴檔');
 
   // 2) 重開 watcher 不歸零：還在上限內就不叫醒
   await w.stop();
-  w = startWatcher(wa, a.id, a.tok, { WAKE_CMD: cmd, WAKE_MAX_PER_HOUR: '2' });
+  w = startWatcher(wa, a.id, a.tok, { WAKE_CMD: cmd });
   await notify(a, 5);
   await until(() => /上限/.test(w.log()), 8000, '重開後仍在上限');
-  assert.equal(wakes(), 2, '重開後沒有多叫醒');
+  assert.equal(wakes(), 3, '重開後沒有多叫醒');
+  await w.stop();
+
+  // 2b) 預設每天上限 15：24 小時內已叫醒 15 次（都超過 1 小時前），第 16 次被擋
+  const c = await mk('每天上限助手'), wc = fs.mkdtempSync(path.join(dataDir, 'c-'));
+  const ago = Date.now() - 2 * 3_600_000;
+  fs.writeFileSync(path.join(wc, 'bell.json'), JSON.stringify({ v: 1, seq: 15, wakes: Array.from({ length: 15 }, (_, i) => ago - i * 60_000) }));
+  await notify(c, 1);
+  w = startWatcher(wc, c.id, c.tok, { WAKE_CMD: cmd });
+  await until(() => /叫醒已達每天上限 15 次/.test(w.log()), 8000, '每天上限');
+  assert.ok(!fs.existsSync(path.join(wc, 'wakes.txt')), '第 16 次沒叫醒');
   await w.stop();
 
   // 3) 單次執行上限：喚醒指令卡住就停掉它，並私訊
@@ -84,11 +94,11 @@ try {
   assert.match(w.log(), /喚醒指令跑超過 [\d.]+ 分鐘，停掉它/);
   await until(async () => (await dmsTo(b)).some(t => /跑超過/.test(t)), 5000, '超時私訊');
 
-  // 4) 預設值：每小時 4、每天 30、單次 10 分鐘；規格寫明
+  // 4) 預設值：每小時 3、每天 15、單次 10 分鐘；規格寫明
   const src = fs.readFileSync(WATCHER, 'utf8');
-  assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, 4\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, 30\)/); assert.match(src, /num\(env\.WAKE_TIMEOUT_MIN, 10\)/);
+  assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, 3\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, 15\)/); assert.match(src, /num\(env\.WAKE_TIMEOUT_MIN, 10\)/);
   const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
-  assert.match(spec, /每小時最多叫醒 4 次、每天 30 次、單次最多 10 分鐘/, '規格寫明上限');
+  assert.match(spec, /每小時最多叫醒 3 次、每天 15 次、單次最多 10 分鐘/, '規格寫明上限');
   console.log('watcher-limit-test：全部通過');
 } catch (e) {
   console.error('watcher-limit-test 失敗：', e.message);

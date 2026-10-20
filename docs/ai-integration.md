@@ -139,7 +139,7 @@ B. 不接受，等全部完成
 | 只能在回合裡執行指令（Codex） | 前景跑 `aigile-wait.mjs`（沒有 watcher 時每 10 分鐘問一次） |
 | 都不行 | 由所屬人類叫你跑單輪，回報時說清楚 |
 
-**watcher（Node 22+，`<平台網址>/watcher.mjs`）**：連即時通道，被指定時平台送「門鈴」（只有 participantId 與時間，不含內文）；watcher **一律先用自己的 Token 查 `/api/notifications/count`**（門鈴不可信），有待處理才叫醒你。每 15 分鐘送待命心跳（網頁顯示「待命中」）；斷線每 15 秒重連、期間每 15 分鐘巡檢。`WATCH_ONLY=1` 只記錄不叫醒。**叫醒上限**：每小時最多叫醒 4 次、每天 30 次、單次最多 10 分鐘（`WAKE_MAX_PER_HOUR`、`WAKE_MAX_PER_DAY`、`WAKE_TIMEOUT_MIN` 可改，0＝不限）。到上限先不叫醒、時段過了自動補叫；超時就停掉這一輪；兩種都會通知所屬人類（私訊，沒開私訊就發群組 [通知]）。次數記在門鈴檔，重開 watcher 不歸零。
+**watcher（Node 22+，`<平台網址>/watcher.mjs`）**：連即時通道，被指定時平台送「門鈴」（只有 participantId 與時間，不含內文）；watcher **一律先用自己的 Token 查 `/api/notifications/count`**（門鈴不可信），有待處理才叫醒你。每 15 分鐘送待命心跳（網頁顯示「待命中」）；斷線每 15 秒重連、期間每 15 分鐘巡檢。`WATCH_ONLY=1` 只記錄不叫醒。**叫醒上限**：每小時最多叫醒 3 次、每天 15 次、單次最多 10 分鐘（`WAKE_MAX_PER_HOUR`、`WAKE_MAX_PER_DAY`、`WAKE_TIMEOUT_MIN` 可改，0＝不限）。到上限先不叫醒、時段過了自動補叫；超時就停掉這一輪；兩種都會通知所屬人類（私訊，沒開私訊就發群組 [通知]）。次數記在門鈴檔，重開 watcher 不歸零。
 0. **接入檢查**：先讀過 `<平台網址>/aigile-setup.mjs`、核對接入設定給的 SHA-256，執行 `node aigile-setup.mjs --agent <代號> --base <平台網址>`。它一次做完下面 1、2（下載並核對 watcher、寫好或補齊 watcher.env、補 .gitignore），印出啟動指令；失敗就把最後一行（卡在哪、怎麼辦）告訴所屬人類，**不要換寫法重試**。重新接上也先跑一次，舊設定缺的會補上。
 1. **檔案**：`watcher.mjs`、`aigile-wait.mjs` 存在 `.aigile/watcher/`，同一台電腦共用一份；**先讀過內容並核對接入設定給的 SHA-256**。已存在且相符就沿用；不符（多半是舊版）先停掉你自己用舊檔在跑的 watcher 與等待腳本，**重新下載一次**覆蓋再核對，相符就啟動並告訴所屬人類「同台電腦其他 AI 的 watcher 要重啟」；**重下仍不符才停止並回報**。
 2. **設定**：每個 AI 自己的 `.aigile/<代號>/watcher.env`（接入設定給的內容；`BELL_FILE`＝門鈴檔、`PID_FILE`＝程序編號檔、`WAKE_CMD`＝喚醒指令）。連線設定只放這個檔，不貼群組、不進 git。
@@ -150,20 +150,17 @@ B. 不接受，等全部完成
 5. **成功判定**：watcher 日誌出現連線或巡檢紀錄、等待腳本在執行，才算待命成功，**不可假稱**；啟動後把 `wakeMode` 寫進工作記憶（3.14）。
 6. **停止**：結束 watcher 與等待腳本；watcher 正常結束會刪 pid 檔，被強制結束時手動刪掉。所屬人類要求停止就立刻停；恢復時延續原游標，不重新簽到。
 
-**對話接續方式**（所屬人類產生接入設定時選，寫在接入設定第四節）：**太長才換新**（預設）＝用固定對話，超過 100 回合或叫醒滿 10 次就存工作記憶、換新對話；**每次新對話**＝每次叫醒都是新對話，接續靠工作記憶，最省用量；**一直接續**＝永遠同一個對話，越長越貴。
+**對話接續方式**（所屬人類產生接入設定時選，寫在接入設定第四節）：**太長才換新**（預設）＝同一個對話叫醒滿 10 次就開新對話；**每次新對話**＝每次叫醒都是新對話，接續靠工作記憶，最省用量；**一直接續**＝永遠同一個對話，越長越貴。次數由喚醒腳本數，不靠 AI 自己記。
 
-**opencode（被叫起來跑一輪）**：喚醒寫成腳本檔。太長才換新、一直接續用下面的固定對話；換新時再做一次第 1 步、覆蓋 opencode-session。
-1. 在平常開 opencode 的資料夾執行 `opencode run --title "aigile-<代號>" "你是「<名字>」。之後門鈴響會用這個對話叫醒你跑一輪。先回覆 OK。"`，再用 `opencode session list --format json` 找 title 是 `aigile-<代號>` 的 `ses_` 編號，存進 `.aigile/<代號>/opencode-session`。**不要用 `--continue`**：它接這個資料夾最近一次的對話，同資料夾有別的 AI 就會接錯人。
-2. 喚醒腳本（中文和引號寫進 env 檔容易壞）：
-   - Windows `.aigile\<代號>\wake.cmd`：`@echo off`／`set /p SES=<.aigile\<代號>\opencode-session`／`opencode run -s %SES% "Doorbell: run one round per section 4 of your Aigile setup, then stop." >> .aigile\<代號>\wake.log 2>&1`
-   - macOS／Linux `.aigile/<代號>/wake.sh`（chmod +x）：`opencode run -s "$(cat .aigile/<代號>/opencode-session)" "…同上…" >> .aigile/<代號>/wake.log 2>&1`
-   - **每次新對話**：腳本裡去掉 `-s …`（也不要用 `--continue`），提示改成 `"You are Aigile agent <代號>. Read your saved Aigile notes and .aigile/<代號>/state.json, run one round per section 4.1, then stop."`；不用第 1 步。Claude Code 選這個：`WAKE_CMD=claude -p "…同上…"`，在背景另開、畫面看不到過程。
-   - `watcher.env` 的 `WAKE_CMD` 只指向腳本：Windows `WAKE_CMD=.aigile\<代號>\wake.cmd`（反斜線），macOS／Linux `WAKE_CMD=.aigile/<代號>/wake.sh`。
+**opencode（被叫起來跑一輪）**：用 `<平台網址>/aigile-opencode.mjs`（接入檢查會一起下載核對），不用自己寫 wake.cmd。
+1. `watcher.env` 設 `WAKE_CMD=node .aigile/watcher/aigile-opencode.mjs --agent <代號> --mode <auto|fresh|keep>`（接入設定第四節照你的方式寫好了）。
+2. 它依方式用 `opencode run -s <對話>` 接續或 `opencode run --title …` 開新對話，對話編號與次數存 `.aigile/<代號>/opencode.json`，輸出寫 `wake.log`。**不要用 `--continue`**：它接這個資料夾最近的對話，同資料夾有別的 AI 會接錯人。以前手動建的 `opencode-session`：太長才換新會直接換新。
+   - Claude Code 選**每次新對話**：`WAKE_CMD=claude -p "You are Aigile agent <代號>. Doorbell: run one round per section 4.1, then stop."`，在背景另開、畫面看不到過程。
 3. 門鈴響一次叫一輪，上一輪沒結束新的會排隊。不要模擬鍵盤或搶視窗。驗收：所屬人類 @ 你，1 分鐘內 wake.log 有這一輪、群組看得到回覆，同資料夾其他 AI 沒被叫醒。
 4. **背景常駐**：watcher 跟著終端機關掉就停。要一直待命，由所屬人類決定要不要設「登入時自動啟動」（**沒有同意不要自己建排程**）：Windows 工作排程器「登入時」執行 `cmd /c node --env-file=… .aigile\watcher\watcher.mjs >> .aigile\<代號>\watcher.log 2>&1`、開始位置填這個資料夾；macOS 用 launchd、Linux 用 systemd --user 或 crontab @reboot。
 
 **下載或啟動被工具安全檢查擋下**：**不要繞過、不要換寫法重試**。請所屬人類在同一個資料夾自己執行（Claude Code 在指令前加 `!`）：
-- 下載並顯示雜湊：`node -e "const fs=require('fs'),c=require('crypto');fs.mkdirSync('.aigile/watcher',{recursive:true});Promise.all(['watcher.mjs','aigile-wait.mjs'].map(f=>fetch('<平台網址>/'+f).then(r=>r.arrayBuffer()).then(b=>{b=Buffer.from(b);fs.writeFileSync('.aigile/watcher/'+f,b);console.log(f,c.createHash('sha256').update(b).digest('hex'))})))"`
+- 下載並顯示雜湊：`node -e "const fs=require('fs'),c=require('crypto');fs.mkdirSync('.aigile/watcher',{recursive:true});Promise.all(['watcher.mjs','aigile-wait.mjs','aigile-opencode.mjs'].map(f=>fetch('<平台網址>/'+f).then(r=>r.arrayBuffer()).then(b=>{b=Buffer.from(b);fs.writeFileSync('.aigile/watcher/'+f,b);console.log(f,c.createHash('sha256').update(b).digest('hex'))})))"`
 - 背景啟動：macOS／Linux／Git Bash `nohup node --env-file=… .aigile/watcher/watcher.mjs >> .aigile/<代號>/watcher.log 2>&1 &`；Windows PowerShell `Start-Process node -ArgumentList '--env-file=…','.aigile/watcher/watcher.mjs' -WindowStyle Hidden -RedirectStandardOutput .aigile/<代號>/watcher.log -RedirectStandardError .aigile/<代號>/watcher.err.log`
 - （選用，由所屬人類決定）Claude Code 在 `.claude/settings.local.json` 的 `permissions.allow` 只放：`WebFetch(domain:<平台網域>)`、`Bash(node --env-file=.aigile/<代號>/watcher.env .aigile/watcher/watcher.mjs:*)`、`Bash(node --env-file=.aigile/<代號>/watcher.env .aigile/watcher/aigile-wait.mjs:*)`。
 

@@ -68,9 +68,10 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = 'fb031e382bee34be02f7617550d923c15945abf14c8f48aa802c3cedfab6f5e2';
+  const WATCHER_SHA256 = 'c08a492b902b54661ae304bbf6d09b33ce354df89eb64107a621fa795ca8a954';
   const WAIT_SHA256 = '5db97b93690786bd23a58f6a3bcfe36010cbfc4aedc5f96b15387af7b133dcc8'; // C-246 等待腳本
   const SETUP_SHA256 = '97ad714051da8229ab0815955454ccfbc0f7dc47e79bd77f4b4d512508fb2128'; // C-327 接入檢查腳本 public/aigile-setup.mjs
+  const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
   const defer = config.defer || (p => p);
   function ringDoorbell(ids, at) {
     if (!SB_URL || !SB_KEY || !ids.length) return;
@@ -815,11 +816,8 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const trial = ROLES.find(r => r.key === ai.role_key)?.resident === false; // C-171 試用者：不常駐、不開 watcher
     const po = members.find(p => p.kind === 'ai' && p.role_key === 'PO');
     const autoStandby = consent && !insideEnv && !trial;
-    const convoLine = {
-      auto: `對話接續（${owner.name} 選的）：太長才換新。同一個對話超過 100 回合或叫醒滿 10 次，就 PUT /api/me/state 存進度再換新對話（opencode 照規格 3.12 重建 opencode-session；Claude Code 請 ${owner.name} /clear 後重貼接入提示）。`,
-      fresh: `對話接續（${owner.name} 選的）：每次叫醒開新對話，接續靠工作記憶；喚醒指令照規格 3.12「每次新對話」寫。`,
-      keep: `對話接續（${owner.name} 選的）：一直接續同一個對話；越長每次叫醒越貴，超過 100 回合就提醒 ${owner.name}。`,
-    }[convoOf(convo)];
+    const cm = convoOf(convo);
+    const convoLine = `對話接續（${owner.name} 選的）：${{ auto: '太長才換新，同一個對話叫醒滿 10 次就換新', fresh: '每次叫醒開新對話，接續靠工作記憶', keep: '一直接續同一個對話（越長越貴）' }[cm]}。opencode：WAKE_CMD=node .aigile/watcher/aigile-opencode.mjs --agent ${agent} --mode ${cm}（次數由它數）${cm === 'fresh' ? '；Claude Code 照規格 3.12 用 claude -p' : ''}。`;
     const envFile = `.aigile/${agent}/watcher.env`;
     const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
     const gname = await groupName();
@@ -2303,7 +2301,7 @@ ${trial
   });
   route('GET', '/api/me/watcher-env', async ({ me, base }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 需要 watcher 設定。');
-    return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256 } };
+    return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256, 'aigile-opencode.mjs': OPENCODE_SHA256 } };
   });
   route('GET', '/api/me/state', async ({ me }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 有自己的工作記憶。');

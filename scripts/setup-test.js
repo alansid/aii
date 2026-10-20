@@ -99,9 +99,9 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     assert.match(obPg, /雜湊不符[^\n]*照規格 3\.12/, '接入設定：雜湊不符照規格 3.12');
     assert.match(spec, /先停掉你自己用舊檔在跑的 watcher[^\n]*重新下載一次[^\n]*重下仍不符才停止並回報/, '規格：舊 watcher 先重下');
     assert.ok(!/不符就停止並告訴/.test(obPg + spec), '不再「一不符就停」');
-    assert.match(spec, /opencode run --title "aigile-<代號>"/, 'opencode：建專用對話');
-    assert.match(spec, /opencode run -s %SES%/, 'opencode：wake.cmd 用固定對話編號');
-    assert.match(spec, /WAKE_CMD=\.aigile\\<代號>\\wake\.cmd/, 'opencode：WAKE_CMD 只指向腳本（Windows 反斜線）');
+    // C-331：opencode 改用 aigile-opencode.mjs（它數次數、接續或開新對話），不用自己寫 wake.cmd
+    assert.match(spec, /WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent <代號> --mode/, 'opencode：WAKE_CMD 指向喚醒腳本');
+    assert.match(spec, /opencode run -s <對話>/, 'opencode：接續用對話編號');
     assert.match(spec, /wake\.log/, 'opencode：輸出寫 wake.log');
     assert.match(spec, /工作排程器/, 'opencode：說明背景常駐');
     assert.ok(!/WAKE_CMD=opencode run --continue/.test(obPg + spec), '不再用 --continue');

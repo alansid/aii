@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.83.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.83.3'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -5011,7 +5011,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   // C-327 A：對話接續方式寫進接入設定；預設「太長才換新」
   const CONVO_OPTS = [['auto', '太長才換新（建議）'], ['fresh', '每次叫醒開新對話'], ['keep', '一直接續同一個對話']];
   const CONVO_HINT = {
-    auto: '同一個對話超過 100 回合或叫醒滿 10 次，AI 就存進度換新對話：省用量，平常也看得到過程。',
+    auto: '同一個對話叫醒滿 10 次就自動換新對話（喚醒腳本會數）：省用量，平常也看得到過程。',
     fresh: '最省用量。注意：Claude Code 選這個會在背景另開對話，你在畫面上看不到它在做什麼。',
     keep: '對話越長，每次叫醒越貴（行內曾一天用完一週用量）；只在需要一路看紀錄時用。',
   };
