@@ -69,7 +69,8 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
   const WATCHER_SHA256 = '73e6728b9154f3f3c47d35cb15b31fd612d452e476f26f91ecdba9373ea40358';
-  const WAIT_SHA256 = '5b8c92808bf06616cf06448457ef729802e11a4a89eb3a5092e1c02ee2351bd9'; // C-246 等待腳本
+  const WAIT_SHA256 = '5db97b93690786bd23a58f6a3bcfe36010cbfc4aedc5f96b15387af7b133dcc8'; // C-246 等待腳本
+  const SETUP_SHA256 = '73892eba8a3fb0ad75117fe5ff57ddfc5dc5136c5e34202b2032729f9fd2ad7c'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const defer = config.defer || (p => p);
   function ringDoorbell(ids, at) {
     if (!SB_URL || !SB_KEY || !ids.length) return;
@@ -793,6 +794,10 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   // C-193：群組名稱存在 app_settings 的 group_name，沒設定時用預設
   const DEFAULT_GROUP_NAME = '昱志的血汗勞工';
   const groupName = async () => (await db.get("SELECT value FROM app_settings WHERE key = 'group_name'").catch(() => null))?.value || DEFAULT_GROUP_NAME;
+  // C-327 C1：watcher.env 標準內容（aigile-setup.mjs 用 GET /api/me/watcher-env 拿）
+  const watcherEnvText = (base, ai) => { const agent = agentDir(ai); return [`AIGILE_BASE=${base}`, `AIGILE_ME=${ai.id}`, `AIGILE_TOKEN_FILE=.aigile/${agent}/.token`,
+    ...(SB_URL && SB_KEY ? [`SUPABASE_URL=${SB_URL}`, `SUPABASE_KEY=${SB_KEY}`, `SUPABASE_TOPIC=${SB_TOPIC}`] : []),
+    'WAKE_CMD=echo WAKE', `BELL_FILE=.aigile/${agent}/bell.json`, `PID_FILE=.aigile/${agent}/watcher.pid`].join('\n'); };
   // 「複製到我的 AI」：貼到 AI 對話即可接入的完整提示詞
   // consent：所屬人類在網頁勾了「允許 AI 自動啟動待命」（C-147）；行內／投信不論勾不勾都先問
   async function onboardingText(base, ai, { consent = false } = {}) {
@@ -808,9 +813,6 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const po = members.find(p => p.kind === 'ai' && p.role_key === 'PO');
     const autoStandby = consent && !insideEnv && !trial;
     const envFile = `.aigile/${agent}/watcher.env`;
-    const watcherEnv = [`AIGILE_BASE=${base}`, `AIGILE_ME=${ai.id}`, `AIGILE_TOKEN_FILE=.aigile/${agent}/.token`,
-      ...(SB_URL && SB_KEY ? [`SUPABASE_URL=${SB_URL}`, `SUPABASE_KEY=${SB_KEY}`, `SUPABASE_TOPIC=${SB_TOPIC}`] : []),
-      'WAKE_CMD=echo WAKE', `BELL_FILE=.aigile/${agent}/bell.json`, `PID_FILE=.aigile/${agent}/watcher.pid`].join('\n');
     const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
     const gname = await groupName();
     // C-229：專案用 API 代號；程式庫；長期授權
@@ -836,7 +838,7 @@ ${trial ? `
 ` : ''}
 ## 零、你是重新接上，還是第一次？
 看 .aigile/${agent}/state.json 或 GET /api/me/state 有沒有資料：
-- 有 → 重新接上：不要重新簽到；游標沿用 state.json 的 messagesCursor（換了電腦就用 GET /api/me/state 的 messagesCursor、cardsSince），不要從頭讀、也不要跳到最新；接著做 currentTask；Token 跟 .aigile/${agent}/.token 不同才換；GET /api/me 讀 grants、repos；然後到第四節${trial ? '（試用者不待命）' : '（watcher.pid 還活著就不要再開）'}。
+- 有 → 重新接上：不要重新簽到；游標沿用 state.json 的 messagesCursor（換了電腦就用 GET /api/me/state 的 messagesCursor、cardsSince），不要從頭讀、也不要跳到最新；接著做 currentTask；Token 跟 .aigile/${agent}/.token 不同才換；GET /api/me 讀 grants、repos；然後到第四節${trial ? '（試用者不待命）' : '：先跑接入檢查補齊舊設定，它說要重開才重開 watcher'}。
 - 沒有 → 第一次，照第三節。找不到 .aigile 是正常的，不算受阻，自己建。
 
 ## 一、你的身分與角色設定
@@ -855,7 +857,8 @@ ${trial ? `
 - 代號（--agent）：${agent}。同台電腦的其他 AI 各用自己的代號、Token、狀態檔，絕不共用；撞了改用 ${agent}2。
 
 ## 三、初次接入（只做一次）
-1. 確認你能呼叫 HTTP API；不能就告訴 ${owner.name}，絕對不可假稱已連線。
+省用量：規格與本設定讀一次存本機，之後用搜尋或指定範圍讀，不整份重讀；命令、日誌只看最後 20 行，API 用 brief=1、limit。超過 40 回合還沒接好就停下，告訴 ${owner.name} 卡在哪。
+1.確認你能呼叫 HTTP API；不能就告訴 ${owner.name}，絕對不可假稱已連線。
 2. 自己建 .aigile/${agent}/，Token 存 .token，處理 .gitignore；短版接入下載的 .aigile/${agent}/setup.md 含 Token，存好 .token 後就刪掉。
 3. 讀規格；GET /api/me 核對身分。
 4. GET /api/messages?limit=1 只記 nextCursor（歷史訊息不是新任務）；既有通知與你無關就靜默 ACK。
@@ -864,19 +867,16 @@ ${trial ? `
 ${trial
   ? `7. 回報 ${owner.name}：接入結果，並說明你是試用者，不常駐、不開 watcher，之後由他叫醒才跑一輪。`
   : autoStandby
-  ? `7. 啟動待命（第四節）：${owner.name} 已在網頁勾選，所屬人類已同意自動啟動待命。確認真的啟動成功後，一次回報：接入結果、用哪種待命、日誌在哪、怎麼停止。`
-  : `7. 回報 ${owner.name}：接入結果、你打算用哪種方式待命（第四節），並詢問是否同意啟動。${askWhy}`}
+  ? `7. 回報 ${owner.name}：接入結果；他已在網頁同意自動待命，換到新對話後直接啟動（第四節），啟動後回報用哪種待命、日誌在哪、怎麼停止。`
+  : `7. 回報 ${owner.name}：接入結果、你打算用哪種方式待命（第四節），並詢問是否同意啟動。${askWhy}`}${trial ? '' : `
+8. 接好就換新對話：PUT /api/me/state 存進度，請 ${owner.name} 開新對話、重新貼接入提示（走第零節）；待命與之後的工作都在新對話，接入對話不再用。`}
 
 ## 四、待命（${trial ? '試用者不待命：被叫醒才跑一輪' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 選第一個做得到的：Claude Code → watcher＋等待腳本；opencode → watcher＋喚醒腳本；Codex → 前景跑等待腳本；都不行 → ${owner.name} 手動叫你跑一輪。做法、雜湊不符、被工具擋下（不要繞過、不要換寫法重試）都照規格 3.12。
 - ${autoStandby ? `已同意，不必再問；失敗就照實回報、改用下一種。` : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}簽到不等於已待命：日誌有連線或巡檢紀錄、等待腳本在跑才算成功，不可假稱。
-- 檔案（Node 22 以上，存 .aigile/watcher/，先讀過內容）：${base}/watcher.mjs（SHA-256 ${WATCHER_SHA256}）、${base}/aigile-wait.mjs（SHA-256 ${WAIT_SHA256}）。
-- ${envFile}（不貼群組、不進 git）：
-\`\`\`
-${watcherEnv}
-\`\`\`
+- 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base}。它核對 Token、下載並核對 watcher、寫好 ${envFile}、印出啟動指令；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
 - watcher.pid 的程序還在執行就不要再開。啟動：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '（平台未設定即時通道：每 15 分鐘巡檢）'}
-- 等待：node .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110；結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報。Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
+- 等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110；結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報。Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
 - 每一輪照規格 4.1：先確認 participantId 是 ${ai.id}（不一致立刻停止）；處理完才 ACK，最後才存游標；沒事不發文。
 - ${owner.name} 要求停止就立刻停 watcher、等待腳本與排程。401 INVALID_TOKEN／TOKEN_EXPIRED → 立刻停止所有排程並告訴他；429 RATE_LIMITED → 依 Retry-After；403 READ_ONLY → 停下告訴他，不重試、不繞過。
 
@@ -921,7 +921,7 @@ ${grantLines}${canGrant
 ${trial
   ? `請從「初次接入」第 1 步開始，做到第 7 步後回報 ${owner.name}；之後等他叫醒再跑一輪。`
   : autoStandby
-  ? `請從「初次接入」第 1 步開始，做到第 7 步（啟動待命）後，一次回報 ${owner.name}。`
+  ? `請從「初次接入」第 1 步開始，做到第 8 步。`
   : `請先回覆 ${owner.name}：你是否具備 HTTP 與背景執行（watcher）或排程能力，然後從「初次接入」第 1 步開始。`}`;
   }
 
@@ -2291,6 +2291,10 @@ ${trial
     await db.run('INSERT INTO ai_state (participant_id, state, updated_at) VALUES (?,?,?) ON CONFLICT(participant_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at', me.id, json, at);
     teamCache = { at: 0, data: null }; // 團隊狀態快取一起失效
     return { state, updatedAt: at, unchanged: false };
+  });
+  route('GET', '/api/me/watcher-env', async ({ me, base }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 需要 watcher 設定。');
+    return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256 } };
   });
   route('GET', '/api/me/state', async ({ me }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 有自己的工作記憶。');

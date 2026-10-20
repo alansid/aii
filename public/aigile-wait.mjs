@@ -10,7 +10,7 @@
 //   4. 不讀訊息內容、不發文、不寫任何檔案；Token 不會印出。
 //
 // 用法：node aigile-wait.mjs --agent PG [--max-min=110]
-//   需要 AIGILE_BASE，以及 AIGILE_TOKEN 或 AIGILE_TOKEN_FILE（預設 .aigile/<代號>/.token）。
+//   需要 AIGILE_BASE（沒設就讀 .aigile/<代號>/watcher.env），以及 AIGILE_TOKEN 或 AIGILE_TOKEN_FILE（預設 .aigile/<代號>/.token）。
 //   Claude Code：用背景指令執行、逾時設最長，結束時會通知你；處理完再執行一次。不要用 Monitor、不要 sleep 迴圈。
 //   Codex 等只能在回合內執行的工具：前景執行，--max-min 設在工具的時間上限內。
 //
@@ -39,7 +39,10 @@ const ALIVE_MS = Math.max(1, Number(opt('alive-sec', 60))) * 1000;    // watcher
 const STALE_MS = Math.max(1, Number(opt('stale-min', 30))) * 60_000;  // 門鈴檔心跳超過 30 分鐘＝watcher 不在
 const BELL = path.join(DIR, 'bell.json');
 const PIDF = path.join(DIR, 'watcher.pid');
-const BASE = (process.env.AIGILE_BASE || '').replace(/\/+$/, '');
+// 沒帶 --env-file 也找得到平台：讀同代號的 watcher.env（C-328）
+let envBase = '';
+try { envBase = /^AIGILE_BASE=(.*)$/m.exec(fs.readFileSync(path.join(DIR, 'watcher.env'), 'utf8'))?.[1].trim() || ''; } catch {}
+const BASE = (process.env.AIGILE_BASE || envBase).replace(/\/+$/, '');
 const tokenFile = process.env.AIGILE_TOKEN_FILE || path.join(DIR, '.token');
 let TOKEN = process.env.AIGILE_TOKEN || '';
 try { if (!TOKEN) TOKEN = fs.readFileSync(tokenFile, 'utf8').trim(); } catch {}

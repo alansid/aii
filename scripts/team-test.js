@@ -210,11 +210,16 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(!ob.includes('平台通知'), '名冊不含系統身分');
     // C-147：勾選「允許自動啟動待命」才寫已同意；行內／投信不論勾不勾都先問
     const obIn = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding?autoStandby=1`)).body.text;
-    assert.ok(!obIn.includes('所屬人類已同意自動啟動待命') && obIn.includes('公司電腦可能不允許背景程式'), '行內勾選仍先問');
-    assert.ok(!ob.includes('所屬人類已同意自動啟動待命') && ob.includes('並詢問是否同意啟動'), '沒帶參數照舊先問');
-    const watcherSha = createHash('sha256').update(fs.readFileSync(path.join(__dirname, '..', 'public', 'watcher.mjs'))).digest('hex');
-    assert.ok(ob.includes(watcherSha), '接入設定的 watcher SHA-256 與 public/watcher.mjs 一致');
-    for (const s of ['/watcher.mjs', 'Node 22', 'watcher.env', `AIGILE_ME=${ba.participantId}`, '要求停止', '401 INVALID_TOKEN', '429 RATE_LIMITED']) {
+    assert.ok(!obIn.includes('已在網頁同意自動待命') && obIn.includes('公司電腦可能不允許背景程式'), '行內勾選仍先問');
+    assert.ok(!ob.includes('已在網頁同意自動待命') && ob.includes('並詢問是否同意啟動'), '沒帶參數照舊先問');
+    // C-327：watcher 雜湊與 watcher.env 改由接入檢查腳本向 GET /api/me/watcher-env 拿；接入設定只附腳本的雜湊
+    const shaOf = f => createHash('sha256').update(fs.readFileSync(path.join(__dirname, '..', 'public', f))).digest('hex');
+    assert.ok(ob.includes(shaOf('aigile-setup.mjs')), '接入設定的檢查腳本 SHA-256 與 public/aigile-setup.mjs 一致');
+    const baTok = ba.token;
+    const wenv = (await call(baTok, '/api/me/watcher-env')).body;
+    assert.deepEqual(wenv.files, { 'watcher.mjs': shaOf('watcher.mjs'), 'aigile-wait.mjs': shaOf('aigile-wait.mjs') }, 'watcher、等待腳本的 SHA-256 與 public 一致');
+    assert.ok(wenv.env.includes(`AIGILE_ME=${ba.participantId}`) && wenv.env.includes('BELL_FILE=') && wenv.env.includes('PID_FILE='), 'watcher.env 有身分與門鈴檔');
+    for (const s of ['/aigile-setup.mjs', 'Node 22', 'watcher.env', '要求停止', '401 INVALID_TOKEN', '429 RATE_LIMITED']) {
       assert.ok(ob.includes(s), `接入設定含 ${s}`);
     }
     // C-249：空資料夾第一次接入不算受阻；不是 git 資料夾就略過 .gitignore
@@ -222,8 +227,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(!ob.includes('已被 .gitignore 排除'), '不再假設 .aigile/ 已被 .gitignore 排除');
     assert.ok(ob.includes('第一段只寫一句給人看的白話結論') && ob.includes('空一行之後才寫細節'), 'C-260：接入設定要求結論在前');
     assert.ok(ob.includes('用 replyFrom 標出「要回覆」的人，一則最多一位') && ob.includes('[需確認] 一定要用 replyFrom'), 'C-259：接入設定說明 replyFrom');
-    const waitSha = createHash('sha256').update(fs.readFileSync(path.join(__dirname, '..', 'public', 'aigile-wait.mjs'))).digest('hex');
-    assert.ok(ob.includes(waitSha) && ob.includes('aigile-wait.mjs --agent') && ob.includes('不要用 Monitor') && ob.includes('BELL_FILE=') && ob.includes('PID_FILE='), 'C-246：接入設定用等待腳本、門鈴檔');
+    assert.ok(ob.includes('aigile-wait.mjs --agent') && ob.includes('不要用 Monitor'), 'C-246：接入設定用等待腳本');
     assert.ok(ob.includes('私訊（規格 3.15）') && ob.includes('GET /api/dm') && ob.includes('私訊不能拿來授權 commit、push、部署'), 'C-270：接入設定有私訊');
     assert.ok(!ob.includes('${owner') && !ob.includes('${agent') && !ob.includes('${base'), '接入設定沒有沒替換的變數');
     assert.ok(ob.includes('新工作開新卡'), 'C-276：接入設定提醒新工作開新卡');
@@ -234,9 +238,9 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.equal(upd.environment, '行外', '可修改環境');
     assert.equal((await call(liu.token, `/api/my-ais/${ba.participantId}`, 'PATCH', { environment: 'x'.repeat(21) })).body.error.code, 'INVALID_REQUEST', '環境上限 20 字');
     const obOut = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding?autoStandby=1`)).body.text;
-    assert.ok(obOut.includes('所屬人類已同意自動啟動待命') && obOut.includes('做到第 7 步（啟動待命）後'), '行外勾選 → 自動啟動待命');
+    assert.ok(obOut.includes('已在網頁同意自動待命，換到新對話後直接啟動') && obOut.includes('做到第 8 步'), '行外勾選 → 自動啟動待命（C-327：換新對話後啟動）');
     const obOutNo = (await call(liu.token, `/api/my-ais/${ba.participantId}/onboarding`)).body.text;
-    assert.ok(!obOutNo.includes('所屬人類已同意自動啟動待命') && obOutNo.includes('沒有預先同意自動啟動'), '行外沒勾 → 先問');
+    assert.ok(!obOutNo.includes('已在網頁同意自動待命') && obOutNo.includes('沒有預先同意自動啟動'), '行外沒勾 → 先問');
     const msg = await post(ba.token, '[AI 簽到] 我是 BA');
     assert.equal(msg.author.environment, '行外', '訊息作者帶環境');
 
