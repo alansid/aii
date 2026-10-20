@@ -43,7 +43,7 @@ try {
   assert.equal((await img(liu.token, '/api/reports/R-1/shots', png(10))).status, 404, '只有回報的人能傳截圖');
   r = await img(huang.token, '/api/reports/R-1/shots', png(10));
   assert.equal(r.status, 201); const shot = r.body.id;
-  assert.equal((await img(huang.token, '/api/reports/R-1/shots', png(1024 * 1024 + 1))).status, 400, '超過 1 MB 擋');
+  assert.equal((await img(huang.token, '/api/reports/R-1/shots', png(1024 * 1024 + 1))).status, 413, '超過 1 MB 擋，回 413（C-343 S6）');
   assert.equal((await img(huang.token, '/api/reports/R-1/shots', new Uint8Array([1, 2, 3]))).status, 400, '不是圖片擋');
   await img(huang.token, '/api/reports/R-1/shots', png(5)); await img(huang.token, '/api/reports/R-1/shots', png(6));
   assert.equal((await img(huang.token, '/api/reports/R-1/shots', png(7))).status, 400, '最多 3 張');

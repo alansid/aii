@@ -239,6 +239,11 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.ok(!(await call(liu.token, `/api/cards/${bc.cardId}`)).body.messageIds.includes(cross.messageId), 'B1：銀行卡上沒有這則平台訊息');
     const okLink = await call(liu.token, '/api/messages', 'POST', { requestId: 'req_c333_m4', project: '銀行系統', cardId: bcKey, text: '銀行訊息' });
     assert.equal(okLink.status, 201); assert.equal(okLink.body.cardLinked, true, 'B1：同專案照常可掛');
+    // C-333 退回（UX 第 2890 則）：掛訊息 API 不准跨專案（發文帶 cardId 那段由 RVVW 修、測）
+    const xl = (await msg(liu.token, '[回覆] 平台的訊息', { project: '平台' })).body;
+    assert.equal((await call(liu.token, `/api/cards/${bc.cardId}/messages`, 'POST', { messageId: xl.messageId })).status, 400, '掛訊息 API：平台訊息不能掛到銀行的卡');
+    const xb = (await msg(liu.token, '[回覆] 銀行的訊息', { project: '銀行系統' })).body;
+    assert.equal((await call(liu.token, `/api/cards/${bc.cardId}/messages`, 'POST', { messageId: xb.messageId })).status, 200, '掛訊息 API：同專案照常可掛');
     // B1 解決 [需確認]：別專案的不能解決
     const bq = (await msg(bank.token, '[需確認] 銀行要人決定\n\n選項：\n1. 甲\n2. 乙', { project: '銀行系統', replyFrom: [liuId] })).body;
     assert.equal((await call(lone.token, `/api/decisions/${bq.messageId}/resolve`, 'POST')).status, 404, 'B1：只屬平台的人類不能解決銀行的 [需確認]');
