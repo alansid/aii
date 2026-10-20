@@ -2669,8 +2669,8 @@ ${trial
   const STANDBY_STALE_MS = 60 * 60_000;
   const STALE_MS = (Number(config.staleMinutes) || 20) * 60_000;       // AI 超過這段時間沒出現 → 可能斷線
   const UNANSWERED_MS = (Number(config.unansweredMinutes) || 20) * 60_000; // 指派超過這段時間沒讀取 → 尚未回應
-  const TOKEN_WARN_MS = 2 * 3600_000;
-  const TEAM_CACHE_MS = config.teamCacheMs !== undefined ? Number(config.teamCacheMs) : TEAM_CACHE_MS_DEFAULT;                                   // Token 到期前 2 小時提醒
+  const TOKEN_WARN_MS = (Number(config.tokenWarnHours) || 24) * 3600_000; // C-321：到期前 24 小時標「快到期」（原 2 小時常落在半夜沒人看到）；TOKEN_WARN_HOURS 可覆寫
+  const TEAM_CACHE_MS = config.teamCacheMs !== undefined ? Number(config.teamCacheMs) : TEAM_CACHE_MS_DEFAULT;
 
   // 依訊息開頭的標籤推斷狀態，例如 [接單]、[UX 完成・請核准 commit]
   function inferState(text) {
@@ -2824,7 +2824,7 @@ ${trial
       decisions.push({ messageId: null, cardId: d.cardId, sequence: null, title: d.title, createdAt: d.createdAt, project: d.project,
         author: identity(people.get(d.proposerId) || { id: d.proposerId, name: '?', kind: 'ai' }, people), replyCount: 0, deciderId: d.deciderId });
     }
-    const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, members, unanswered, decisions };
+    const data = { now: iso(now), staleMinutes: STALE_MS / 60_000, unansweredMinutes: UNANSWERED_MS / 60_000, tokenWarnHours: TOKEN_WARN_MS / 3600_000, members, unanswered, decisions };
     // C-235：只屬部分專案的人看團隊狀態時，目前工作／張數／待處理則數要依他的專案重算，原始資料留在這裡（不回傳）
     teamCache = { at: Date.now(), data, priv: { cards: cardWork.open, stateMsgs, pendRows } };
     return data;

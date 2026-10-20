@@ -25,6 +25,7 @@ const app = env => {
       fileTtlHours: env.FILE_TTL_HOURS,
       staleMinutes: env.STALE_MINUTES,
       unansweredMinutes: env.UNANSWERED_MINUTES,
+      tokenWarnHours: env.TOKEN_WARN_HOURS,
       cardStaleHours: env.CARD_STALE_HOURS,
       supabaseUrl: env.SUPABASE_URL,
       supabaseKey: env.SUPABASE_KEY,
