@@ -68,19 +68,23 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = '31a0c265a0b904ad692126d9d640c1f2f68f2ee3e828e49b621bcfb836e39946';
+  const WATCHER_SHA256 = '51bc4538f5d1435a5174c368dd4078344dbacf349b6150c14c6615561829c5be';
   const WAIT_SHA256 = '407be400a90b6872459b2db21ac4877f9bfb29918603244e08bc06e0dd8167ac'; // C-246 等待腳本
   const SETUP_SHA256 = '8ff6bd8eb3c2b2212215bc92171eb4d71582fe361128d4b632df8074ca439fcf'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
-  const defer = config.defer || (p => p);
+  // C-337 B6：門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
+  // 原本 worker 用模組變數記「目前的請求」，並行時會掛到別的（可能已結束的）請求上，門鈴遺失
+  const bellPending = new Set();
   function ringDoorbell(ids, at) {
     if (!SB_URL || !SB_KEY || !ids.length) return;
-    defer(fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
+    const p = fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
       method: 'POST',
       headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: [{ topic: SB_TOPIC, event: 'doorbell', payload: { ids, at }, private: false }] }),
-    }).catch(e => console.error('doorbell failed:', e.message)));
+    }).catch(e => console.error('doorbell failed:', e.message)).finally(() => bellPending.delete(p));
+    bellPending.add(p);
   }
+  const flushBells = () => Promise.allSettled([...bellPending]);
   const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 168) * 3600_000; // 預設 7 天
   const HUMAN_TOKEN_TTL_MS = (Number(config.humanTokenTtlHours) || 720) * 3600_000;
   const FILE_TTL_MS = (Number(config.fileTtlHours) || 1) * 3600_000; // 預設保存 1 小時
@@ -881,8 +885,7 @@ ${trial
 - 選第一個做得到的：Claude Code → watcher＋等待腳本；opencode → watcher＋喚醒腳本；Codex → 前景跑等待腳本；都不行 → ${owner.name} 手動叫你跑一輪。做法、雜湊不符、被工具擋下（不要繞過、不要換寫法重試）都照規格 3.12。
 - ${autoStandby ? `已同意，不必再問；失敗就照實回報、改用下一種。` : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}簽到不等於已待命：日誌有連線或巡檢紀錄、等待腳本在跑才算成功，不可假稱。
 - 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base}。它核對 Token、下載並核對 watcher、寫好 ${envFile}、印出啟動指令；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
-- watcher.pid 的程序還在執行就不要再開。啟動：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '（平台未設定即時通道：每 15 分鐘巡檢）'}
-- 等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110；結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報。Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
+- 啟動 watcher 照檢查腳本印的指令（watcher.pid 的程序還在就不要再開${SB_URL && SB_KEY ? '' : '；平台未設定即時通道：每 15 分鐘巡檢'}）。等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110，結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報；Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
 - ${convoLine}
 - 每一輪照規格 4.1：先確認 participantId 是 ${ai.id}（不一致立刻停止）；處理完才 ACK，最後才存游標；沒事不發文。
 - ${owner.name} 要求停止就立刻停 watcher、等待腳本與排程。401 INVALID_TOKEN／TOKEN_EXPIRED → 立刻停止所有排程並告訴他；429 RATE_LIMITED → 依 Retry-After；403 READ_ONLY → 停下告訴他，不重試、不繞過。
@@ -2944,6 +2947,7 @@ ${trial
 
   // 對外：處理 /api/*；base 為對外網址（例如 https://xxx.workers.dev）
   handle.cleanupExpired = cleanupExpired;
+  handle.flushBells = flushBells; // 排程等門鈴送完（C-337 B6）
   // 排程工作：清除過期文件
   // 網頁（index.html）送出前：把寫死的預設群組名換成真正的，並加上連結預覽（LINE／Messenger 抓 <title> 與 og:*）
   const escHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2979,7 +2983,11 @@ ${trial
     };
     return walk(out);
   }
-  async function handle(req, base) {
+  async function handle(req, base, wctx = null) {
+    try { return await handleInner(req, base); }
+    finally { if (wctx && bellPending.size) wctx.waitUntil(flushBells()); } // C-337 B6
+  }
+  async function handleInner(req, base) {
     const url = new URL(req.url);
     if (url.pathname === '/api/docs/ai-integration' || url.pathname === '/docs/ai-integration.md') {
       return new Response(docText.replaceAll('{{BASE_URL}}', base), {

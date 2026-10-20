@@ -15,7 +15,7 @@
 //   SUPABASE_KEY       Supabase 的 anon key
 //   SUPABASE_TOPIC     頻道名稱，要與平台設定相同（預設 aigile-switch）
 //   WAKE_CMD           喚醒指令（依你的 AI 而定，例如 claude -p "請收訊息並處理"、codex exec "…"）；只記錄模式可不設
-//   WATCH_ONLY=1       只記錄模式：連線、查未讀數、送待命心跳、寫日誌，但不執行任何喚醒指令
+//   WATCH_ONLY=1       只記錄模式：連線、查未讀數、送待命心跳、寫日誌，不執行喚醒指令；有 BELL_FILE 時仍寫門鈴（等待腳本會醒）
 //   HEARTBEAT_MIN      巡檢／心跳間隔，預設 15 分鐘
 //   BELL_FILE          （C-246）門鈴檔，例如 .aigile/PG/bell.json：有新的待處理通知就寫入筆數與時間，
 //                      每 5 分鐘寫一次本機心跳（不連平台）；aigile-wait.mjs 只盯這個檔，沒事時不連平台
@@ -157,7 +157,14 @@ function wake(pending, why) {
     killTree(child);
     tellOwner(`[通知] 這一輪叫醒跑超過 ${TIMEOUT_MS / 60000} 分鐘，watcher 已停掉它（${hhmm(startedAt)} 開始）。常發生的話請看 AI 是不是卡住或對話太長。`, 'timeout-' + startedAt);
   }, TIMEOUT_MS) : null;
-  child.on('error', e => log('喚醒指令啟動失敗：', e.message));
+  // C-337 B10：啟動失敗不會有 exit 事件，要在這裡收尾，否則 running 一直是 true，之後每次門鈴都只「排隊補跑」
+  child.on('error', e => {
+    log('喚醒指令啟動失敗：', e.message);
+    clearTimeout(killer);
+    if (!running) return;
+    running = false;
+    if (queued) { queued = false; check('排隊補跑'); }
+  });
   child.on('exit', code => {
     clearTimeout(killer);
     running = false;
