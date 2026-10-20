@@ -65,25 +65,39 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const ROOM_CODE = config.roomCode || '';
   // C-202：人類改用邀請連結加入；只有群組還沒有人類（建立者）或明確開放（OPEN_JOIN=1，本機測試用）才能自己加入
   const OPEN_JOIN = config.openJoin === true || config.openJoin === '1';
-  // 即時喚醒門鈴（Supabase Realtime Broadcast）：沒設 URL／金鑰就完全不動作。只送 AI 的 ID 與時間，不帶人名與內文
+  // 即時喚醒門鈴（Supabase Realtime Broadcast）：沒設 URL／金鑰就完全不動作。只送 AI 的 ID、時間與簽章，不帶人名與內文
   const SB_URL = String(config.supabaseUrl || '').replace(/[/]+$/, '');
   const SB_KEY = config.supabaseKey || '';
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
-  const WATCHER_SHA256 = 'c449804500bffe997c7376529187b5ee0380a5acd93059787192cb5860f9a8ca';
+  const WATCHER_SHA256 = 'aec2095ce33abbfb191ec738e45575d8a4cb0391ccada350ce8ee2e841f7cff6';
   const WAIT_SHA256 = '6f4c0c67efb66e2bd4c040436f2363d280ed41886b1e58d81c370fd3ade26dc0'; // C-246 等待腳本
   const SETUP_SHA256 = '0863ae534a28a162ff639218bd872232fbd0a6e24e421d062eb7e5184883cc8f'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
   // C-337 B6：門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
   // 原本 worker 用模組變數記「目前的請求」，並行時會掛到別的（可能已結束的）請求上，門鈴遺失
   const bellPending = new Set();
+  // C-343 S4：頻道是公開的，拿到 anon key 就能假造門鈴。每位收件 AI 附一個簽章：用它自己的 Token 對
+  // 「doorbell|id|at|n」算 HMAC-SHA256（取前 32 個十六進位字）；n 每次門鈴不同，watcher 用它擋重播。
+  // watcher 驗不過就略過、不打平台。ids 照舊送，舊版 watcher 不受影響
+  const bellSig = async (token, id, at, n) => {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', enc.encode(token), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`doorbell|${id}|${at}|${n}`)));
+    return Array.from(mac.slice(0, 16), b => b.toString(16).padStart(2, '0')).join('');
+  };
   function ringDoorbell(ids, at) {
+    ids = [...new Set(ids)];
     if (!SB_URL || !SB_KEY || !ids.length) return;
-    const p = fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
-      method: 'POST',
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ topic: SB_TOPIC, event: 'doorbell', payload: { ids, at }, private: false }] }),
-    }).catch(e => console.error('doorbell failed:', e.message)).finally(() => bellPending.delete(p));
+    const p = (async () => {
+      const n = randId('bell', 12), sigs = {};
+      for (const r of await db.all(`SELECT id, token FROM participants WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids)) sigs[r.id] = await bellSig(r.token, r.id, at, n);
+      await fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
+        method: 'POST',
+        headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ topic: SB_TOPIC, event: 'doorbell', payload: { ids, at, n, sigs }, private: false }] }),
+      });
+    })().catch(e => console.error('doorbell failed:', e.message)).finally(() => bellPending.delete(p));
     bellPending.add(p);
   }
   const flushBells = () => Promise.allSettled([...bellPending]);

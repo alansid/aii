@@ -2,8 +2,9 @@
 // Aigile-Switch watcher：零 Token 待機，被指定時才喚醒 AI。零依賴，需要 Node 22+（內建 WebSocket）。
 //
 // 運作：
-//   1. 連 Supabase Realtime 的頻道待機，收到「門鈴」（只含 AI 的 ID 與時間，不含內文）。
-//   2. 門鈴不可信：命中自己之後，一律先用「自己的 Token」查未讀通知數；有待處理才執行喚醒指令。
+//   1. 連 Supabase Realtime 的頻道待機，收到「門鈴」（只含 AI 的 ID、時間與簽章，不含內文）。
+//   2. 門鈴要有平台用「自己的 Token」簽的章才算數（C-343 S4，不符就略過、不打平台）；
+//      命中自己之後，仍一律先用自己的 Token 查未讀通知數，有待處理才執行喚醒指令。
 //   3. 每 15 分鐘做一次保底巡檢（同一個未讀數呼叫，也是待命心跳，標頭 X-Aigile-Source: watcher）。
 //   4. 連線失敗會記錄原因並每 15 秒重試；期間仍會每 15 分鐘巡檢，不會靜默失效。
 //
@@ -27,6 +28,7 @@
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 const env = process.env;
 const BASE = (env.AIGILE_BASE || '').replace(/\/+$/, '');
@@ -177,6 +179,29 @@ function wake(pending, why) {
   });
 }
 
+// ---------- C-343 S4 門鈴簽章 ----------
+// 頻道是公開的，任何拿到 anon key 的人都能送門鈴。平台用「我的 Token」對 doorbell|我的ID|at|n 簽 HMAC；
+// 沒簽章、簽章不符、同一個 n 第二次出現（重播）都略過，不打平台。略過的保底巡檢照樣會補到
+const seenBells = new Set();
+function bellOk(p) {
+  const sig = p?.sigs?.[ME];
+  if (typeof sig !== 'string' || typeof p.at !== 'string' || typeof p.n !== 'string') return false;
+  const want = createHmac('sha256', TOKEN).update(`doorbell|${ME}|${p.at}|${p.n}`).digest('hex').slice(0, 32);
+  if (sig.length !== want.length || !timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return false;
+  if (seenBells.has(p.n)) return false;
+  seenBells.add(p.n);
+  if (seenBells.size > 500) seenBells.delete(seenBells.values().next().value);
+  return true;
+}
+let badBells = 0, badBellLogAt = 0;
+function badBell() { // 被灌假門鈴時日誌不洗版：最多每 10 分鐘記一行
+  badBells++;
+  if (Date.now() - badBellLogAt < 10 * 60_000) return;
+  badBellLogAt = Date.now();
+  log(`收到 ${badBells} 個簽章不符的門鈴，已略過（平台還沒更新、Token 剛換過、或有人假造門鈴）；保底巡檢照常`);
+  badBells = 0;
+}
+
 // ---------- Supabase Realtime（Phoenix 協定）----------
 let ws = null, hb = null, retry = null, refN = 0;
 function connect() {
@@ -196,8 +221,9 @@ function connect() {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     if (m.event === 'phx_reply' && m.payload?.status === 'error') return log('加入頻道被拒：', JSON.stringify(m.payload.response).slice(0, 200));
     if (m.event === 'broadcast' && m.payload?.event === 'doorbell') {
-      const ids = m.payload.payload?.ids;
-      if (Array.isArray(ids) && ids.includes(ME)) { log('收到門鈴，命中自己'); check('門鈴'); }
+      const p = m.payload.payload;
+      if (!Array.isArray(p?.ids) || !p.ids.includes(ME)) return;
+      if (bellOk(p)) { log('收到門鈴，命中自己'); check('門鈴'); } else badBell();
     }
   };
   ws.onerror = e => log('即時通道錯誤：', e.message || e.type);
