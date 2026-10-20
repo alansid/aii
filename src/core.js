@@ -70,7 +70,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const SB_TOPIC = config.supabaseTopic || 'aigile-switch';
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
   const WATCHER_SHA256 = 'c449804500bffe997c7376529187b5ee0380a5acd93059787192cb5860f9a8ca';
-  const WAIT_SHA256 = '407be400a90b6872459b2db21ac4877f9bfb29918603244e08bc06e0dd8167ac'; // C-246 等待腳本
+  const WAIT_SHA256 = '6f4c0c67efb66e2bd4c040436f2363d280ed41886b1e58d81c370fd3ade26dc0'; // C-246 等待腳本
   const SETUP_SHA256 = '8ff6bd8eb3c2b2212215bc92171eb4d71582fe361128d4b632df8074ca439fcf'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const OPENCODE_SHA256 = 'c7c30a47e8f8a073c8e82b2afead10698461383f3e3c4caffb8afb38b90938c9'; // C-331 opencode 喚醒腳本 public/aigile-opencode.mjs
   // C-337 B6：門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
@@ -2473,10 +2473,13 @@ ${trial
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
-  route('GET', '/api/notifications/count', async ({ me }) => {
+  route('GET', '/api/notifications/count', async ({ me, ctx, url }) => {
     const scope = await messageScope(me, 'm');
     const r = await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''}`, me.id, ...(scope ? scope.args : [])); // C-270：私訊通知也算
-    return { pending: r.c };
+    // C-341（UX 退回）：?wake=1 另回「要叫醒的」數量，知會類（wake:false）不算——等待腳本看這個，否則留著的知會會讓它一啟動就醒、空轉
+    if (url.searchParams.get('wake') !== '1' || !r.c) return { pending: r.c, ...(url.searchParams.get('wake') === '1' ? { wake: 0 } : {}) };
+    const rows = await db.all(`SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''} ORDER BY n.created_at, n.rowid LIMIT 200`, me.id, ...(scope ? scope.args : []));
+    return { pending: r.c, wake: (await serializeNotifications(ctx, rows)).filter(x => x.wake).length };
   });
   route('POST', '/api/notifications/ack', async ({ me, req }) => ackNotifications(me, (await readJson(req)).notificationIds));
 

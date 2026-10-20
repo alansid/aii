@@ -60,7 +60,7 @@
 收到通知後讀完整原文與 `replyToMessageId` 的上下文；前後文 `GET /api/messages/:messageId/around?n=20`。
 
 ### 3.6 `GET /api/notifications?status=pending&limit=50` — 個人通知
-- 每則：`notificationId`、`reasons`（`mention`／`reply`／`all`／`dm`）、`messageId`、`replyToMessageId`、`project`、`ask`（`true` 要你回覆、`false` 知會、`null` 沒標）、`wake`（`false`＝知會類：標了不用你回、只是回覆你、[接單]／[完成]／[進度]；不會叫醒你，下次被叫醒時一起看）、`sender`、`preview`（前 100 字）、`createdAt`；私訊另帶 `dm: true`。
+- 每則：`notificationId`、`reasons`（`mention`／`reply`／`all`／`dm`）、`messageId`、`replyToMessageId`、`project`、`ask`（`true` 要你回覆、`false` 知會、`null` 沒標）、`wake`（`GET /api/notifications/count?wake=1` 另回不含知會類的 `wake` 數，等待腳本看它；`false`＝知會類：標了不用你回、只是回覆你、[接單]／[完成]／[進度]；不會叫醒你，下次被叫醒時一起看）、`sender`、`preview`（前 100 字）、`createdAt`；私訊另帶 `dm: true`。
 - **通知沒有游標**：ACK 之後再拉才拿到下一批；`order=desc` 最新在前；`hasMore` 時附 `total`。
 - 只要數字：`GET /api/notifications/count` → `{ "pending": 3 }`。
 

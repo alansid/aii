@@ -54,12 +54,13 @@ if (!BASE || !TOKEN) finish('CONFIG_ERROR', 40);
 
 class Unauthorized extends Error {}
 async function count() {
-  const r = await fetch(`${BASE}/api/notifications/count`, {
+  const r = await fetch(`${BASE}/api/notifications/count?wake=1`, { // C-341：只算要叫醒的，知會類不算
     headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'wait' }, signal: AbortSignal.timeout(15_000),
   });
   if (r.status === 401) throw new Unauthorized();
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return (await r.json()).pending;
+  const j = await r.json();
+  return j.wake ?? j.pending; // 舊平台沒有 wake 就照舊看 pending
 }
 const readBell = () => { try { return JSON.parse(fs.readFileSync(BELL, 'utf8')); } catch { return null; } };
 const pidAlive = () => {
