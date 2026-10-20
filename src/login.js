@@ -395,8 +395,15 @@ export function registerLogin(d) {
           const ts = nowIso();
           invalidatePeople();
           const roles = rolesOf(iv.role);
-          await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)`, pid, 'human', name, roles ? Object.values(roles)[0] || '' : iv.role || '', await newCode(), newToken(), 0, ts, ts, now, listOf(iv.projects).join(','));
+          try {
+            await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?)`, pid, 'human', name, roles ? Object.values(roles)[0] || '' : iv.role || '', await newCode(), newToken(), 0, ts, ts, now, listOf(iv.projects).join(','));
+          } catch (e) {
+            // C-337 B8：檢查名稱到建人之間，名稱被別人用掉（UNIQUE 失敗）→ 把邀請還回去，換個名稱就能重試（原本邀請已用掉、人沒建、回 500）
+            await db.run('UPDATE invites SET used_at = NULL WHERE id = ? AND used_at = ? AND used_by IS NULL', iv.id, now);
+            await assertNameFree(name);
+            throw e;
+          }
           await setInitialRoles(pid, roles || Object.fromEntries(listOf(iv.projects).map(pj => [pj, iv.role || ''])));
           if (roOf(iv.role).length) await setInitialReadOnly(pid, roOf(iv.role)); // C-294
           created = true;

@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.84.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.84.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4931,7 +4931,7 @@
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI 助手</button>
         <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a>
       </div>
-      <label class="check"><input type="checkbox" id="ai-auto-standby"${autoStandbyConsent ? ' checked' : ''}> 允許 AI 自動啟動待命（watcher／wait-for-bell，簽到後直接啟動再回報；行內／投信仍會先問你）</label>
+      <label class="check"><input type="checkbox" id="ai-auto-standby"${autoStandbyConsent ? ' checked' : ''}> 允許 AI 自動啟動待命（watcher＋等待腳本，簽到後直接啟動再回報；行內／投信仍會先問你）</label>
       <label class="field-inline">對話接續方式 <select id="ai-convo">${CONVO_OPTS.map(([v, l]) => `<option value="${v}"${convoMode === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <p class="muted small" id="ai-convo-hint">${CONVO_HINT[convoMode]}</p>
       <div id="ai-list" class="stack"><p class="muted small">載入中…</p></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });

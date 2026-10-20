@@ -7,7 +7,6 @@ import flowsText from './docs/flows.md'; // C-291：要登入才讀得到
 import releases from './generated/releases.json'; // C-291：npm run deploy 會先產生
 
 let handle;
-let currentCtx = null; // 背景送門鈴要用這次請求的 waitUntil
 const app = env => {
   if (handle) return handle;
   const db = wrapD1(env.DB);
@@ -30,7 +29,6 @@ const app = env => {
       supabaseUrl: env.SUPABASE_URL,
       supabaseKey: env.SUPABASE_KEY,
       supabaseTopic: env.SUPABASE_TOPIC,
-      defer: p => (currentCtx ? currentCtx.waitUntil(p) : p),
     },
   });
   return handle;
@@ -38,7 +36,6 @@ const app = env => {
 
 export default {
   async fetch(request, env, ctx) {
-    currentCtx = ctx;
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/') && url.pathname !== '/docs/ai-integration.md') {
       // 網頁頁面（沒有副檔名的網址，wrangler.toml 的 run_worker_first）：換上群組名與連結預覽；其他靜態檔照舊
@@ -50,10 +47,10 @@ export default {
       h.delete('content-length'); h.delete('etag'); h.set('cache-control', 'no-cache');
       return new Response(await app(env).pageHtml(await res.text(), url.origin), { status: res.status, headers: h });
     }
-    return app(env)(request, url.origin);
+    return app(env)(request, url.origin, ctx); // C-337 B6：門鈴用這次請求自己的 waitUntil
   },
   // 排程（每 10 分鐘）：清除過期文件、Token 到期提醒
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(app(env).runScheduled());
+    ctx.waitUntil(app(env).runScheduled().then(() => app(env).flushBells()));
   },
 };
