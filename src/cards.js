@@ -153,7 +153,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
 
   // me 有給時套用 C-146 A 隔離：不屬於卡片專案的成員視為找不到
   // C-310：新卡在所屬專案拿下一個號（先寫 NULL 再補，唯一索引不會撞）
-  const assignProjNo = uid => db.run('UPDATE cards SET proj_no = (SELECT COALESCE(MAX(c2.proj_no), 0) + 1 FROM cards c2 WHERE c2.project = cards.project) WHERE uid = ? AND proj_no IS NULL', uid);
+  const ASSIGN_PROJ_NO_SQL = 'UPDATE cards SET proj_no = (SELECT COALESCE(MAX(c2.proj_no), 0) + 1 FROM cards c2 WHERE c2.project = cards.project) WHERE uid = ? AND proj_no IS NULL';
+  const assignProjNo = uid => db.run(ASSIGN_PROJ_NO_SQL, uid);
   async function load(no, me = null) {
     const c = await db.get('SELECT * FROM cards WHERE seq = ?', parseNo(no));
     if (!c) throw notFound();
@@ -354,17 +355,20 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       if (found.length !== messageIds.length) throw invalid('messageIds 有不存在的訊息');
     }
     const at = nowIso(), uid = randId('card');
-    await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at,
-      decider_id, proposer_id, question, recommendation, options, impact, after_next, project)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, type, title, text(body, 'reason') ?? '', owner, status, text(body, 'next') ?? '', text(body, 'blocker') ?? '',
-      waitFor, text(body, 'criteria') ?? '', me.id, requestId, at, at,
-      dec.decider_id, dec.proposer_id, dec.question, dec.recommendation, dec.options, dec.impact, dec.after_next, project);
-    await assignProjNo(uid); // C-310
-    const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
+    // C-343 B11：建卡、專案內編號（C-310）、紀錄、關聯訊息放同一個交易；中途失敗不會留下沒有編號的卡
+    const seqOf = '(SELECT seq FROM cards WHERE uid = ?)';
     await db.batch([
-      ...logStmt(c.seq, me, [`建立卡片（類型：${type}）`, ...(type === '決策' ? [`等 ${people.get(dec.decider_id)?.name} 決定`] : [])], at),
-      ...messageIds.map(m => ['INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', [c.seq, m]]),
+      [`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at,
+      decider_id, proposer_id, question, recommendation, options, impact, after_next, project)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [uid, type, title, text(body, 'reason') ?? '', owner, status, text(body, 'next') ?? '', text(body, 'blocker') ?? '',
+        waitFor, text(body, 'criteria') ?? '', me.id, requestId, at, at,
+        dec.decider_id, dec.proposer_id, dec.question, dec.recommendation, dec.options, dec.impact, dec.after_next, project]],
+      [ASSIGN_PROJ_NO_SQL, [uid]],
+      ...[`建立卡片（類型：${type}）`, ...(type === '決策' ? [`等 ${people.get(dec.decider_id)?.name} 決定`] : [])]
+        .map(t => [`INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (${seqOf},?,?,?,?)`, [uid, at, me.id, me.kind === 'human' ? '網頁' : 'API', t]]),
+      ...messageIds.map(m => [`INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (${seqOf},?)`, [uid, m]]),
     ]);
+    const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
     // C-155：建卡時指定了別人（負責人、等誰、決策者）就通知對方，和交接一樣會叫醒 AI
     const who = [owner && `負責人 ${people.get(owner)?.name}`, waitFor && (type === '決策' ? `等 ${people.get(waitFor)?.name} 決定` : `等 ${people.get(waitFor)?.name}`)].filter(Boolean).join('；');
     if (type !== NOTE) await notifyCard(ctx, me, c, [owner, waitFor], `建立卡片${who ? '，' + who : ''}`, 'create'); // 人類紀錄不發群組訊息
@@ -665,6 +669,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const mid = String((await readJson(req)).messageId || '');
     const m = await db.get('SELECT id, project, created_at FROM messages WHERE id = ?', mid);
     if (!m || !(await canSeeMessage(me, m))) throw invalid('找不到這則訊息'); // 看不到的訊息不能掛
+    if (m.project && c.project && m.project !== c.project) throw invalid('這則訊息屬於另一個專案，不能掛到這張卡'); // C-333 退回：訊息不跨專案掛卡
     const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', c.seq)).n;
     if (n >= 50) throw invalid('一張卡片最多關聯 50 則訊息');
     await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, mid);

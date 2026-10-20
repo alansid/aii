@@ -647,7 +647,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const desc = url.searchParams.get('order') === 'desc';
     const sql = status === 'pending'
       ? `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${join} ORDER BY ${desc ? 'n.created_at DESC, n.rowid DESC' : 'n.created_at, n.rowid'} LIMIT ?` // C-316：rowid 讓索引順序可用，讀到 LIMIT 就停
-      : `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'acked'${join} ORDER BY n.acked_at DESC LIMIT ?`;
+      : `SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'acked'${join} ORDER BY n.created_at DESC, n.rowid DESC LIMIT ?`; // C-343 R2：依建立時間（走 idx_notif_recipient，讀到 LIMIT 就停）；原依 acked_at 要把整個人的已確認通知讀出來排序
     let rows = await db.all(sql, me.id, ...(scope ? scope.args : []), limit + 1);
     const hasMore = rows.length > limit;
     if (hasMore) rows = rows.slice(0, limit);
@@ -708,9 +708,10 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const ts = nowIso();
     invalidatePeople();
     // 新加入的人類：群組裡第一位（建立者）預設所有專案；之後加入的預設沒有專案，只看得到「全部專案」，等被指派（C-146 B）
-    const first = !(await db.get("SELECT id FROM participants WHERE kind = 'human' AND status = 'active' LIMIT 1"));
+    // C-343 B11：「是不是第一位」在同一條 INSERT 裡判斷，兩人同時建群只有一位拿到所有專案
     await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, 'human', name, role, await newCode(), token, Date.now() + HUMAN_TOKEN_TTL_MS, ts, ts, Date.now(), first ? PROJECTS.join(',') : '');
+      SELECT ?,?,?,?,?,?,?,?,?,?, CASE WHEN EXISTS (SELECT 1 FROM participants WHERE kind = 'human' AND status = 'active') THEN '' ELSE ? END`,
+    id, 'human', name, role, await newCode(), token, Date.now() + HUMAN_TOKEN_TTL_MS, ts, ts, Date.now(), PROJECTS.join(','));
     const p = await db.get('SELECT * FROM participants WHERE id = ?', id);
     return { token, participant: publicParticipant(p, await peopleMap(ctx)) };
   }
@@ -955,9 +956,29 @@ ${trial
   }
 
   // ---------- 路由 ----------
+  // C-343 S6：本文先看 content-length，超過上限直接 413；沒帶長度就邊讀邊數，超過立刻中止（不把整包讀進記憶體）
+  async function readBody(req, max, message, code = 'PAYLOAD_TOO_LARGE') {
+    const tooBig = () => new ApiError(413, code, message);
+    const len = Number(req.headers.get('content-length'));
+    if (Number.isFinite(len) && len > max) throw tooBig();
+    if (!req.body) return new Uint8Array(0);
+    const reader = req.body.getReader(), chunks = [];
+    let n = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.length;
+      if (n > max) { await reader.cancel().catch(() => {}); throw tooBig(); }
+      chunks.push(value);
+    }
+    const out = new Uint8Array(n);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    return out;
+  }
+  const JSON_MAX = 256 * 1024;
   async function readJson(req) {
-    const text = await req.text();
-    if (text.length > 256 * 1024) throw invalid('請求內容過大');
+    const text = new TextDecoder().decode(await readBody(req, JSON_MAX, '請求內容過大'));
     if (!text) return {};
     try { return JSON.parse(text); } catch { throw invalid('JSON 格式錯誤'); }
   }
@@ -1003,9 +1024,8 @@ ${trial
     return null;
   }
   async function putAvatar(ctx, target, req) {
-    const bytes = new Uint8Array(await req.arrayBuffer());
+    const bytes = await readBody(req, AVATAR_MAX, '頭像圖片超過 200 KB，請先縮小');
     if (!bytes.length) throw invalid('沒有收到圖片');
-    if (bytes.length > AVATAR_MAX) throw invalid('頭像圖片超過 200 KB，請先縮小');
     const mime = avatarMime(bytes);
     if (!mime) throw invalid('頭像只接受 png、jpg、webp 圖片');
     const ts = nowIso();
@@ -1850,9 +1870,8 @@ ${trial
     if (['行內', '投信'].includes(me.env) && url.searchParams.get('declared') !== '1') throw invalid('請先勾選「我確認截圖不含內部資料、程式碼、客戶個資」。');
     const n = (await db.get('SELECT COUNT(*) AS n FROM report_shots WHERE report_seq = ?', r.seq)).n;
     if (n >= SHOTS_PER_REPORT) throw invalid(`每則回報最多 ${SHOTS_PER_REPORT} 張截圖`);
-    const bytes = new Uint8Array(await req.arrayBuffer());
+    const bytes = await readBody(req, SHOT_MAX, '截圖超過 1 MB，請縮小後再傳');
     if (!bytes.length) throw invalid('沒有收到圖片');
-    if (bytes.length > SHOT_MAX) throw invalid('截圖超過 1 MB，請縮小後再傳');
     const mime = avatarMime(bytes);
     if (!mime) throw invalid('截圖只接受 png、jpg、webp');
     const id = randId('shot');
@@ -2147,9 +2166,8 @@ ${trial
     const forSelf = url.searchParams.get('for') === 'self';
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 能提頭像提案；人類請直接在個人設定換頭像。');
     const { human, ai } = await dmPair(ctx, me);
-    const bytes = new Uint8Array(await req.arrayBuffer());
+    const bytes = await readBody(req, AVATAR_MAX, '頭像圖片超過 200 KB，請先縮小（256×256）');
     if (!bytes.length) throw invalid('沒有收到圖片');
-    if (bytes.length > AVATAR_MAX) throw invalid('頭像圖片超過 200 KB，請先縮小（256×256）');
     const mime = avatarMime(bytes);
     if (!mime) throw invalid('頭像只接受 png、jpg、webp 圖片');
     const open = await dmProjects(human, ai);
@@ -2312,8 +2330,7 @@ ${trial
   }
   route('PUT', '/api/me/state', async ({ me, req }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '工作記憶是 AI 寫自己的；人類請用網頁查看。');
-    const text = await req.text();
-    if (new TextEncoder().encode(text).length > STATE_MAX_BYTES) throw invalid('state 超過 16KB');
+    const text = new TextDecoder().decode(await readBody(req, STATE_MAX_BYTES, 'state 超過 16KB'));
     let raw; try { raw = JSON.parse(text); } catch { throw invalid('JSON 格式錯誤'); }
     const state = normalizeState(raw, me);
     const json = JSON.stringify(state);
@@ -2425,13 +2442,17 @@ ${trial
     if (body.cardId !== undefined && body.cardId !== null && body.cardId !== '') {
       const m = /^C-(\d+)$/i.exec(String(body.cardId));
       cardSeq = m ? Number(m[1]) - 100 : ((await cardSeqByKey(body.cardId)) ?? NaN); // C-310：PLAT-12 也收
-      card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status, owner_id, type FROM cards WHERE seq = ?', cardSeq) : null;
+      card = Number.isInteger(cardSeq) && cardSeq >= 1 ? await db.get('SELECT seq, status, owner_id, type, project FROM cards WHERE seq = ?', cardSeq) : null;
       if (!card) throw new ApiError(404, 'NOT_FOUND', '找不到 cardId 這張卡片');
+      // C-333 退回（UX 第 2890 則）：看不到的卡（C 號或專案代號）不能掛，跟讀卡一樣回 403
+      if (isolatedFrom(me) && !projectsOf(me).includes(card.project)) throw new ApiError(403, 'CARD_FORBIDDEN', '這張卡屬於其他專案，你沒有權限查看。');
       cardClosed = ['已完成', '已封存'].includes(card.status) ? card.status : ''; // C-276
     }
     const r = await createMessage(ctx, me, body, { checkProject: true });
     let cardLinked;
-    if (cardSeq) {
+    const crossProject = card && card.project && r.message.project && r.message.project !== card.project; // 兩邊成員：別專案的訊息不掛進這張卡
+    if (crossProject) cardLinked = false;
+    else if (cardSeq) {
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
       if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
     }
@@ -2447,6 +2468,7 @@ ${trial
       cardStarted = true;
     }
     const warnings = [...(r.warnings || [])];
+    if (crossProject) warnings.push(`${body.cardId} 屬於另一個專案，這則訊息（${nameOf(r.message.project)}）沒有掛上去；要掛請改發到卡片的專案。`);
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`); // C-276
     return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(warnings.length ? { warnings } : {}) };
   });
@@ -2579,11 +2601,13 @@ ${trial
     const q = url.searchParams;
     const name = cleanFileName(q.get('name'));
     const declared = ['true', '1', 'yes'].includes(String(q.get('declared')).toLowerCase());
-    const bytes = new Uint8Array(await req.arrayBuffer());
-    const reject = async (status, code, message) => {
-      await audit('reject', me, null, { name: name || null, size: bytes.length, declared: declared ? 1 : 0, detail: code });
+    let bytes = new Uint8Array(0);
+    const reject = async (status, code, message, size = bytes.length) => {
+      await audit('reject', me, null, { name: name || null, size, declared: declared ? 1 : 0, detail: code });
       return new ApiError(status, code, message);
     };
+    try { bytes = await readBody(req, MAX_FILE_BYTES, `檔案超過 ${MAX_FILE_BYTES / 1048576} MB 上限`, 'FILE_TOO_LARGE'); } // C-343 S6
+    catch (e) { if (e instanceof ApiError && e.status === 413) throw await reject(413, e.code, e.message, Number(req.headers.get('content-length')) || MAX_FILE_BYTES + 1); throw e; }
     if (!name) throw await reject(400, 'INVALID_REQUEST', '請用 ?name= 提供檔名（含副檔名）');
     if (!declared) {
       throw await reject(400, 'DECLARATION_REQUIRED', '上傳前必須聲明檔案不含程式碼與客戶個資（declared=true）');
@@ -2906,7 +2930,7 @@ ${trial
   }, opts);
   async function cardGuard(path, { me, req, params }) {
     await loadReadOnly();
-    const body = req ? await req.clone().json().catch(() => ({})) : {};
+    const body = req ? await readJson(req.clone()).catch(() => ({})) : {}; // C-343 S6：也受大小上限
     await assertNoSecret(JSON.stringify(body)); // C-301：卡片各欄位、交接說明、紀錄都不能含接入連結或 Token
     let pj = null;
     if (params?.id && path.startsWith('/api/cards/:id')) {
@@ -2972,7 +2996,13 @@ ${trial
   route('POST', '/api/leave', async ({ me }) => {
     requireHuman(me);
     invalidatePeople();
-    await db.run("UPDATE participants SET status = 'disabled', updated_at = ? WHERE id = ? OR owner_id = ?", nowIso(), me.id, me.id);
+    const at = nowIso();
+    // C-343 B11：比照刪除 AI：一併登出所有裝置、清掉本人與他的 AI 的待處理通知（不留殘留資料）
+    await db.batch([
+      ["UPDATE participants SET status = 'disabled', updated_at = ? WHERE id = ? OR owner_id = ?", [at, me.id, me.id]],
+      ['UPDATE devices SET revoked_at = ? WHERE participant_id = ? AND revoked_at IS NULL', [Date.now(), me.id]],
+      ["UPDATE notifications SET status = 'acked', acked_at = ? WHERE status = 'pending' AND recipient_id IN (SELECT id FROM participants WHERE id = ? OR owner_id = ?)", [at, me.id, me.id]],
+    ]);
     return { ok: true };
   });
 

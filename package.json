@@ -85,6 +85,7 @@
     "test:c341": "node scripts/c341-test.js",
     "test:c335": "node scripts/c335-test.js",
     "test:c336": "node scripts/c336-test.js",
+    "test:c343": "node scripts/c343-test.js",
     "test:token-warn": "node scripts/token-warn-test.js"
   }
 }

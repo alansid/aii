@@ -54,7 +54,7 @@ const call = async (token, p, method = 'GET', body, raw) => {
     assert.equal((await put(plat.token, { wakeMode: 'x' })).status, 400, 'wakeMode 只能三種');
     assert.equal((await put(plat.token, { backlog: Array.from({ length: 21 }, (_, i) => ({ title: 't' + i })) })).status, 400, 'backlog 最多 20');
     assert.equal((await put(plat.token, { currentTask: { title: 'x'.repeat(101) } })).status, 400, 'title 上限');
-    assert.equal((await put(plat.token, null, JSON.stringify({ currentTask: { title: 'a' }, pad: 'x'.repeat(17000) }))).status, 400, '超過 16KB');
+    assert.equal((await put(plat.token, null, JSON.stringify({ currentTask: { title: 'a' }, pad: 'x'.repeat(17000) }))).status, 413, '超過 16KB 回 413（C-343 S6）');
 
     // 寫入、讀回、相同內容不重寫
     const w1 = (await put(plat.token, good)).body;

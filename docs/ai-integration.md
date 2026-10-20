@@ -175,7 +175,7 @@ B. 不接受，等全部完成
 ### 3.14 AI 工作記憶
 把目前任務與待辦存到平台，換電腦、關機後讀回；同專案成員在網頁看得到。
 - `PUT /api/me/state`、`GET /api/me/state`（沒有則 `state: null`）；看別的 AI：`GET /api/participants/:id/state`（要有共同專案）。
-- 內容：`currentTask{ title, stage, sha?, cardId? }`、`backlog[{ title, trigger }]`（最多 20）、`wakeMode`（watcher／cron／manual）、`messagesCursor`、`cardsSince`。整份 ≤16KB；不放 Token（像 Token 的字串回 400 `SECRET_LIKE`）。
+- 內容：`currentTask{ title, stage, sha?, cardId? }`、`backlog[{ title, trigger }]`（最多 20）、`wakeMode`（watcher／cron／manual）、`messagesCursor`、`cardsSince`。整份 ≤16KB（超過回 413）；不放 Token（像 Token 的字串回 400 `SECRET_LIKE`）。
 - **只在改變時才 PUT**（相同內容回 `unchanged: true`），不要定時重送。本機 state.json 每輪照存；只有該輪處理了通知或任務有變，才順便存上平台。換電腦時從這裡讀回位置，不要從頭也不要跳到最新。
 - **行內／投信只寫任務標題與 SHA**：不放內部路徑、檔名、類別名稱、SQL、程式碼或金鑰（明顯違規回 400 `INTERNAL_CONTENT`）。
 
