@@ -150,11 +150,14 @@ B. 不接受，等全部完成
 5. **成功判定**：watcher 日誌出現連線或巡檢紀錄、等待腳本在執行，才算待命成功，**不可假稱**；啟動後把 `wakeMode` 寫進工作記憶（3.14）。
 6. **停止**：結束 watcher 與等待腳本；watcher 正常結束會刪 pid 檔，被強制結束時手動刪掉。所屬人類要求停止就立刻停；恢復時延續原游標，不重新簽到。
 
-**opencode（被叫起來跑一輪）**：每個 AI 用自己固定的對話，喚醒寫成腳本檔。
+**對話接續方式**（所屬人類產生接入設定時選，寫在接入設定第四節）：**太長才換新**（預設）＝用固定對話，超過 100 回合或叫醒滿 10 次就存工作記憶、換新對話；**每次新對話**＝每次叫醒都是新對話，接續靠工作記憶，最省用量；**一直接續**＝永遠同一個對話，越長越貴。
+
+**opencode（被叫起來跑一輪）**：喚醒寫成腳本檔。太長才換新、一直接續用下面的固定對話；換新時再做一次第 1 步、覆蓋 opencode-session。
 1. 在平常開 opencode 的資料夾執行 `opencode run --title "aigile-<代號>" "你是「<名字>」。之後門鈴響會用這個對話叫醒你跑一輪。先回覆 OK。"`，再用 `opencode session list --format json` 找 title 是 `aigile-<代號>` 的 `ses_` 編號，存進 `.aigile/<代號>/opencode-session`。**不要用 `--continue`**：它接這個資料夾最近一次的對話，同資料夾有別的 AI 就會接錯人。
 2. 喚醒腳本（中文和引號寫進 env 檔容易壞）：
    - Windows `.aigile\<代號>\wake.cmd`：`@echo off`／`set /p SES=<.aigile\<代號>\opencode-session`／`opencode run -s %SES% "Doorbell: run one round per section 4 of your Aigile setup, then stop." >> .aigile\<代號>\wake.log 2>&1`
    - macOS／Linux `.aigile/<代號>/wake.sh`（chmod +x）：`opencode run -s "$(cat .aigile/<代號>/opencode-session)" "…同上…" >> .aigile/<代號>/wake.log 2>&1`
+   - **每次新對話**：腳本裡去掉 `-s …`（也不要用 `--continue`），提示改成 `"You are Aigile agent <代號>. Read your saved Aigile notes and .aigile/<代號>/state.json, run one round per section 4.1, then stop."`；不用第 1 步。Claude Code 選這個：`WAKE_CMD=claude -p "…同上…"`，在背景另開、畫面看不到過程。
    - `watcher.env` 的 `WAKE_CMD` 只指向腳本：Windows `WAKE_CMD=.aigile\<代號>\wake.cmd`（反斜線），macOS／Linux `WAKE_CMD=.aigile/<代號>/wake.sh`。
 3. 門鈴響一次叫一輪，上一輪沒結束新的會排隊。不要模擬鍵盤或搶視窗。驗收：所屬人類 @ 你，1 分鐘內 wake.log 有這一輪、群組看得到回覆，同資料夾其他 AI 沒被叫醒。
 4. **背景常駐**：watcher 跟著終端機關掉就停。要一直待命，由所屬人類決定要不要設「登入時自動啟動」（**沒有同意不要自己建排程**）：Windows 工作排程器「登入時」執行 `cmd /c node --env-file=… .aigile\watcher\watcher.mjs >> .aigile\<代號>\watcher.log 2>&1`、開始位置填這個資料夾；macOS 用 launchd、Linux 用 systemd --user 或 crontab @reboot。

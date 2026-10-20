@@ -2596,3 +2596,7 @@ html, body { overflow-x: clip; }
 /* C-310：卡號顯示專案代號號，旁邊小字 C-xxx */
 .cid-alt { margin-left: 6px; font-size: 11px; }
 .ht-tag.ver { background: var(--ok-bg); color: var(--ok-text); } /* C-314：等你驗收 */
+/* C-327 A：我的 AI「對話接續方式」 */
+.field-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.field-inline select { width: auto; max-width: 100%; }
+#ai-convo-hint { margin-top: -4px; }

@@ -10,7 +10,7 @@
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
 // 用法：node aigile-setup.mjs --agent PG --base https://平台網址
-//   Token 讀 .aigile/<代號>/.token（或環境變數 AIGILE_TOKEN）。代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1。
+//   Token 讀環境變數 AIGILE_TOKEN_<代號>（例 AIGILE_TOKEN_PG）或 AIGILE_TOKEN，都沒有就讀 .aigile/<代號>/.token。代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1。
 // 結束碼：0 全部完成；1 某一步失敗（最後一行寫卡在哪、怎麼辦，照著告訴所屬人類，不要自己換寫法重試）
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,9 +31,9 @@ const major = Number(process.versions.node.split('.')[0]);
 if (major < 22) fail('Node 版本', `目前 ${process.versions.node}，要 22 以上`, '請所屬人類安裝 Node 22 以上');
 out(`✓ Node ${process.versions.node}`);
 
-let TOKEN = process.env.AIGILE_TOKEN || '';
+let TOKEN = process.env[`AIGILE_TOKEN_${AGENT}`] || process.env.AIGILE_TOKEN || '';
 try { if (!TOKEN) TOKEN = fs.readFileSync(path.join(DIR, '.token'), 'utf8').trim(); } catch {}
-if (!TOKEN) fail('Token', `找不到 ${DIR}/.token`, `先把接入設定裡的 Token 存成 ${DIR}/.token`);
+if (!TOKEN) fail('Token', `找不到 ${DIR}/.token，也沒有 AIGILE_TOKEN_${AGENT}`, `先把接入設定裡的 Token 存成 ${DIR}/.token`);
 
 const get = async p => {
   let r;

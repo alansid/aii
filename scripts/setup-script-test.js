@@ -86,6 +86,11 @@ try {
   assert.equal(r.code, 1); assert.match(r.out.trim().split('\n').pop(), /^卡在：Token。怎麼辦：.*重發 Token/);
   assert.ok(!fs.existsSync(path.join(c, '.aigile/watcher')), '失敗就不往下做');
 
+  // 3b) C-329 UX 回報：Token 放在規則教的 AIGILE_TOKEN_<代號> 也讀得到（修正前只讀 AIGILE_TOKEN，說找不到 Token）
+  const d = work();
+  r = await run(d, pub('aigile-setup.mjs'), ['--agent', 'PG', '--base', BASE], { AIGILE_TOKEN_PG: tok });
+  assert.equal(r.code, 0, '讀 AIGILE_TOKEN_PG：' + r.out.trim().split('\n').pop());
+
   // 4) C-328：等待腳本沒帶 --env-file（舊 setup.md 的寫法）也找得到平台，不再 CONFIG_ERROR
   r = await run(a, path.join(a, '.aigile/watcher/aigile-wait.mjs'), ['--agent', 'PG', '--max-min=0.02']);
   assert.ok(!/CONFIG_ERROR/.test(r.out), '讀同代號 watcher.env：' + r.out.trim());

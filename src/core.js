@@ -70,7 +70,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   // public/watcher.mjs 的 SHA-256，寫進接入設定讓 AI 核對；改 watcher.mjs 時要一起更新（team-test 會比對）
   const WATCHER_SHA256 = 'fb031e382bee34be02f7617550d923c15945abf14c8f48aa802c3cedfab6f5e2';
   const WAIT_SHA256 = '5db97b93690786bd23a58f6a3bcfe36010cbfc4aedc5f96b15387af7b133dcc8'; // C-246 等待腳本
-  const SETUP_SHA256 = '73892eba8a3fb0ad75117fe5ff57ddfc5dc5136c5e34202b2032729f9fd2ad7c'; // C-327 接入檢查腳本 public/aigile-setup.mjs
+  const SETUP_SHA256 = '97ad714051da8229ab0815955454ccfbc0f7dc47e79bd77f4b4d512508fb2128'; // C-327 接入檢查腳本 public/aigile-setup.mjs
   const defer = config.defer || (p => p);
   function ringDoorbell(ids, at) {
     if (!SB_URL || !SB_KEY || !ids.length) return;
@@ -800,7 +800,10 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     'WAKE_CMD=echo WAKE', `BELL_FILE=.aigile/${agent}/bell.json`, `PID_FILE=.aigile/${agent}/watcher.pid`].join('\n'); };
   // 「複製到我的 AI」：貼到 AI 對話即可接入的完整提示詞
   // consent：所屬人類在網頁勾了「允許 AI 自動啟動待命」（C-147）；行內／投信不論勾不勾都先問
-  async function onboardingText(base, ai, { consent = false } = {}) {
+  // C-327 A：對話接續方式（產生接入設定時由所屬人類選）：auto 太長才換新（預設）、fresh 每次叫醒開新對話、keep 一直接續
+  const CONVO_MODES = ['auto', 'fresh', 'keep'];
+  const convoOf = v => (CONVO_MODES.includes(v) ? v : 'auto');
+  async function onboardingText(base, ai, { consent = false, convo = 'auto' } = {}) {
     const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
     const s = settingsOf(ai);
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
@@ -812,6 +815,11 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const trial = ROLES.find(r => r.key === ai.role_key)?.resident === false; // C-171 試用者：不常駐、不開 watcher
     const po = members.find(p => p.kind === 'ai' && p.role_key === 'PO');
     const autoStandby = consent && !insideEnv && !trial;
+    const convoLine = {
+      auto: `對話接續（${owner.name} 選的）：太長才換新。同一個對話超過 100 回合或叫醒滿 10 次，就 PUT /api/me/state 存進度再換新對話（opencode 照規格 3.12 重建 opencode-session；Claude Code 請 ${owner.name} /clear 後重貼接入提示）。`,
+      fresh: `對話接續（${owner.name} 選的）：每次叫醒開新對話，接續靠工作記憶；喚醒指令照規格 3.12「每次新對話」寫。`,
+      keep: `對話接續（${owner.name} 選的）：一直接續同一個對話；越長每次叫醒越貴，超過 100 回合就提醒 ${owner.name}。`,
+    }[convoOf(convo)];
     const envFile = `.aigile/${agent}/watcher.env`;
     const askWhy = insideEnv ? `你的所在環境是「${ai.env}」，公司電腦可能不允許背景程式或對外連線，所以要先問。` : `${owner.name} 沒有預先同意自動啟動，所以要先問。`;
     const gname = await groupName();
@@ -877,6 +885,7 @@ ${trial
 - 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base}。它核對 Token、下載並核對 watcher、寫好 ${envFile}、印出啟動指令；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
 - watcher.pid 的程序還在執行就不要再開。啟動：node --env-file=${envFile} .aigile/watcher/watcher.mjs >> .aigile/${agent}/watcher.log 2>&1${SB_URL && SB_KEY ? '' : '（平台未設定即時通道：每 15 分鐘巡檢）'}
 - 等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110；結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報。Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
+- ${convoLine}
 - 每一輪照規格 4.1：先確認 participantId 是 ${ai.id}（不一致立刻停止）；處理完才 ACK，最後才存游標；沒事不發文。
 - ${owner.name} 要求停止就立刻停 watcher、等待腳本與排程。401 INVALID_TOKEN／TOKEN_EXPIRED → 立刻停止所有排程並告訴他；429 RATE_LIMITED → 依 Retry-After；403 READ_ONLY → 停下告訴他，不重試、不繞過。
 
@@ -2494,7 +2503,7 @@ ${trial
   route('GET', '/api/my-ais/:id/onboarding', async ({ me, params, base, url }) => {
     requireHuman(me);
     const consent = ['1', 'true'].includes(url.searchParams.get('autoStandby'));
-    return { text: await onboardingText(base, await myAi(me, params.id), { consent }) };
+    return { text: await onboardingText(base, await myAi(me, params.id), { consent, convo: url.searchParams.get('convo') }) };
   });
   // AI 在本機的資料夾名（.aigile/<代號>/）：角色代碼，自訂角色用 AI
   const agentDir = ai => (ai.role_key && ai.role_key !== 'custom' ? ai.role_key : 'AI');
@@ -2507,7 +2516,7 @@ ${trial
     if (ai.token_expires_at < Date.now()) throw new ApiError(409, 'TOKEN_EXPIRED', 'Token 已過期，請先按「重發 Token」。');
     const body = await readJson(req).catch(() => ({}));
     const secret = newToken(), exp = Date.now() + OLINK_TTL;
-    await setJson('olink:' + ai.id, { h: await sha256(secret), exp, consent: body.autoStandby === true });
+    await setJson('olink:' + ai.id, { h: await sha256(secret), exp, consent: body.autoStandby === true, convo: convoOf(body.convo) });
     return { url: `${base}/api/setup/${ai.id}.${secret}`, expiresAt: iso(exp), agent: agentDir(ai) }; // C-309：短版存 .aigile/<代號>/setup.md
   });
   route('GET', '/api/setup/:key', async ({ params, base }) => {
@@ -2520,7 +2529,7 @@ ${trial
     if ((await db.run('DELETE FROM app_settings WHERE key = ? AND value = ?', 'olink:' + aiId, JSON.stringify(rec))).changes !== 1) return gone();
     const ai = await db.get('SELECT * FROM participants WHERE id = ?', aiId);
     if (!ai || ai.kind !== 'ai' || ai.status !== 'active') return gone();
-    return new Response(await onboardingText(base, ai, { consent: !!rec.consent }), { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
+    return new Response(await onboardingText(base, ai, { consent: !!rec.consent, convo: rec.convo }), { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
   }, { open: true });
   // ---------- 上傳文件（需求 v1.1） ----------
   const requireStorage = () => {

@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.83.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.83.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4932,8 +4932,11 @@
         <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a>
       </div>
       <label class="check"><input type="checkbox" id="ai-auto-standby"${autoStandbyConsent ? ' checked' : ''}> 允許 AI 自動啟動待命（watcher／wait-for-bell，簽到後直接啟動再回報；行內／投信仍會先問你）</label>
+      <label class="field-inline">對話接續方式 <select id="ai-convo">${CONVO_OPTS.map(([v, l]) => `<option value="${v}"${convoMode === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <p class="muted small" id="ai-convo-hint">${CONVO_HINT[convoMode]}</p>
       <div id="ai-list" class="stack"><p class="muted small">載入中…</p></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });
     body.querySelector('#ai-auto-standby').onchange = e => { autoStandbyConsent = e.target.checked; };
+    body.querySelector('#ai-convo').onchange = e => { convoMode = e.target.value; body.querySelector('#ai-convo-hint').textContent = CONVO_HINT[convoMode]; };
     let items = [];
     const open = new Set();
     async function draw() {
@@ -4957,7 +4960,7 @@
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'short') { // C-283：3～4 行、不含 Token，連結 15 分鐘、只能讀一次
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
-          const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!autoStandbyConsent } });
+          const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!autoStandbyConsent, convo: convoMode } });
           // 改成終端機指令＋讀本機檔：很多 AI 不肯「照網頁上寫的去做」，但會照使用者交代的指令與檔案做（昱志 10/19 codex 實測讀不到）
           // C-309：每個 AI 存自己的 .aigile/<代號>/setup.md；一定要下載覆蓋、核對身分、接完刪掉
           const dir = `.aigile/${r.agent || 'AI'}`;
@@ -5005,7 +5008,15 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
 
   // C-147：「允許 AI 自動啟動待命」預設勾選；勾選才在接入設定寫明已同意，沒勾照舊先問
   let autoStandbyConsent = true;
-  const onboardingUrl = ai => `/api/my-ais/${ai.participantId}/onboarding${autoStandbyConsent ? '?autoStandby=1' : ''}`;
+  // C-327 A：對話接續方式寫進接入設定；預設「太長才換新」
+  const CONVO_OPTS = [['auto', '太長才換新（建議）'], ['fresh', '每次叫醒開新對話'], ['keep', '一直接續同一個對話']];
+  const CONVO_HINT = {
+    auto: '同一個對話超過 100 回合或叫醒滿 10 次，AI 就存進度換新對話：省用量，平常也看得到過程。',
+    fresh: '最省用量。注意：Claude Code 選這個會在背景另開對話，你在畫面上看不到它在做什麼。',
+    keep: '對話越長，每次叫醒越貴（行內曾一天用完一週用量）；只在需要一路看紀錄時用。',
+  };
+  let convoMode = 'auto';
+  const onboardingUrl = ai => `/api/my-ais/${ai.participantId}/onboarding?convo=${convoMode}${autoStandbyConsent ? '&autoStandby=1' : ''}`;
 
   // 重發後：只需把新 Token 換進 AI 的環境，不用重讀整份接入設定
   function openTokenOnly(ai) {
