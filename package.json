@@ -71,6 +71,7 @@
     "test:c343": "node scripts/c343-test.js",
     "test:token-warn": "node scripts/token-warn-test.js",
     "test:c348": "node scripts/c348-test.js",
-    "test:c349": "node scripts/c349-test.js"
+    "test:c349": "node scripts/c349-test.js",
+    "test:c355": "node scripts/c355-test.js"
   }
 }

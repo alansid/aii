@@ -9,6 +9,7 @@ import { registerCards, teamCards, workFrom, autoArchive, claimsOf, CLAIM_LOG } 
 import { registerLogin } from './login.js';
 import { registerSkills } from './skills.js'; // C-346 角色技能庫
 import { optionWarnings } from './questions.js';
+import { mcpDispatch } from './mcp.js'; // C-355 平台 MCP
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
 
 const ACTIVE_WINDOW_MS = 90_000;           // 人類：前景網頁 60 秒寫一次在線時間（C-336，原 30 秒門檻配 20 秒寫入）
@@ -75,6 +76,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const WAIT_SHA256 = scriptHashes['aigile-wait.mjs'] || '';
   const SETUP_SHA256 = scriptHashes['aigile-setup.mjs'] || '';
   const OPENCODE_SHA256 = scriptHashes['aigile-opencode.mjs'] || '';
+  const MCP_SHA256 = scriptHashes['aigile-mcp.mjs'] || ''; // C-355 MCP 轉接
   // C-337 B6：門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
   // 原本 worker 用模組變數記「目前的請求」，並行時會掛到別的（可能已結束的）請求上，門鈴遺失
   const bellPending = new Set();
@@ -921,7 +923,7 @@ ${trial
 ## 四、待命（${trial ? '試用者不待命：被叫醒才跑一輪' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 選第一個做得到的：Claude Code → watcher＋等待腳本；opencode → watcher＋喚醒腳本；Codex → 前景跑等待腳本（網路見第三節 1，不用完全權限）；都不行 → ${owner.name} 手動叫你跑一輪。做法、雜湊不符、被工具擋下（不要繞過、不要換寫法重試）都照規格 3.12。
 - ${autoStandby ? `已同意，不必再問；失敗就照實回報、改用下一種。` : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}簽到不等於已待命：日誌有連線或巡檢紀錄、等待腳本在跑才算成功，不可假稱。
-- 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base} --tool <claude|codex|other＝你的工具>。它核對 Token、下載並核對 watcher、寫好 ${envFile}、同步專案技能、印出啟動指令；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
+- 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base} --tool <claude|codex|other＝你的工具>。它核對 Token、下載並核對 watcher、寫好 ${envFile}、同步專案技能、印出啟動指令與 MCP 指令（有就裝）；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
 - 啟動 watcher 照檢查腳本印的指令（watcher.pid 的程序還在就不要再開${SB_URL && SB_KEY ? '' : '；平台未設定即時通道：每 15 分鐘巡檢'}）。等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110，結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報；Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
 - ${convoLine}
 - 每一輪照規格 4.1：先確認 participantId 是 ${ai.id}（不一致立刻停止）；處理完才 ACK，最後才存游標；沒事不發文。
@@ -2361,7 +2363,7 @@ ${trial
   });
   route('GET', '/api/me/watcher-env', async ({ me, base }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 需要 watcher 設定。');
-    return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256, 'aigile-opencode.mjs': OPENCODE_SHA256 } };
+    return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256, 'aigile-opencode.mjs': OPENCODE_SHA256, ...(MCP_SHA256 ? { 'aigile-mcp.mjs': MCP_SHA256 } : {}) } };
   });
   route('GET', '/api/me/state', async ({ me }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 有自己的工作記憶。');
@@ -3115,8 +3117,32 @@ ${trial
     try { return await handleInner(req, base); }
     finally { if (wctx && bellPending.size) wctx.waitUntil(flushBells()); } // C-337 B6
   }
+  // C-355 平台 MCP：POST /api/mcp（放在 /api/ 底下，Worker 與本機 server 不用改分流；JSON-RPC 2.0、無狀態、只回 JSON）。工具用同一個 Token 轉呼叫現有 API，權限與限流都一樣
+  async function handleMcp(req, url, base) {
+    if (req.method !== 'POST') return new Response(null, { status: 405, headers: { Allow: 'POST' } });
+    let me;
+    try { await loadProjects(); me = await authenticate(req, url); } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
+      return json(e.status, { error: { code: e.code, message: e.message } });
+    }
+    if (me.kind !== 'ai') return json(403, { error: { code: 'FORBIDDEN', message: 'MCP 給 AI 用；人類請用網頁' } });
+    const raw = await req.text();
+    if (raw.length > 256 * 1024) return json(413, { jsonrpc: '2.0', id: null, error: { code: -32600, message: '請求太大' } });
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return json(400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'JSON 解析失敗' } }); }
+    const auth = req.headers.get('authorization');
+    const api = async (method, path, body) => {
+      const r = await handleInner(new Request(base + path, { method, headers: { Authorization: auth, 'Content-Type': 'application/json', 'X-Aigile-Source': 'mcp' }, body: body === undefined ? undefined : JSON.stringify(body) }), base);
+      return { status: r.status, body: await r.json().catch(() => null) };
+    };
+    const one = m => mcpDispatch(m, { api, me });
+    const out = Array.isArray(msg) ? (await Promise.all(msg.map(one))).filter(Boolean) : await one(msg);
+    if (!out || (Array.isArray(out) && !out.length)) return new Response(null, { status: 202 }); // 只有通知，不用回
+    return json(200, out);
+  }
   async function handleInner(req, base) {
     const url = new URL(req.url);
+    if (url.pathname === '/api/mcp') return handleMcp(req, url, base);
     if (url.pathname === '/api/docs/ai-integration' || url.pathname === '/docs/ai-integration.md') {
       return new Response(docText.replaceAll('{{BASE_URL}}', base), {
         headers: { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'no-store' },
