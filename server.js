@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './src/core.js';
 import { openNodeDb } from './src/db-node.js';
 import { dbStorage } from './src/storage-db.js';
+import { dirStorage } from './src/storage-dir.js'; // C-365 本機的專案文件區（不需要 R2）
 import { scriptHashes } from './scripts/script-hashes.mjs'; // C-338 C4
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -17,6 +18,7 @@ const db = openNodeDb(path.join(DATA_DIR, 'switch.db'));
 const handle = createApp({
   db,
   storage: dbStorage(db),
+  docStorage: dirStorage(path.join(DATA_DIR, 'docs')),
   docText: fs.readFileSync(path.join(ROOT, 'docs', 'ai-integration.md'), 'utf8'),
   flowsText: fs.readFileSync(path.join(ROOT, 'docs', 'flows.md'), 'utf8'), // C-291
   scriptHashes: scriptHashes(), // C-338 C4：從 public/ 現算
@@ -30,6 +32,7 @@ const handle = createApp({
     humanTokenTtlHours: process.env.HUMAN_TOKEN_TTL_HOURS,
     fileTtlHours: process.env.FILE_TTL_HOURS,
     fileMaxTotalMb: process.env.FILE_MAX_TOTAL_MB,
+    docMaxTotalMb: process.env.DOC_MAX_TOTAL_MB,
     staleMinutes: process.env.STALE_MINUTES,
     unansweredMinutes: process.env.UNANSWERED_MINUTES,
     teamCacheMs: process.env.TEAM_CACHE_MS,

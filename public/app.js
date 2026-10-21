@@ -5842,9 +5842,10 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       </div>`;
   }
 
-  async function downloadFile(id, name) {
+  const downloadFile = (id, name) => downloadFrom(`/api/files/${encodeURIComponent(id)}`, name);
+  async function downloadFrom(path, name) { // C-365：專案文件區也用這支
     try {
-      const r = await fetch(`/api/files/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } });
+      const r = await fetch(path, { headers: { Authorization: `Bearer ${state.token}` } });
       if (!r.ok) {
         const e = await r.json().catch(() => ({}));
         throw new Error(e?.error?.message || `HTTP ${r.status}`);
@@ -5982,12 +5983,21 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     });
   }
 
-  // 文件：目前檔案、容量、稽核
+  // 文件頁（C-365）：在專案裡分兩個分頁——「專案文件」（長期保存、資料夾、可多選上傳）與「訊息附件」（1 小時後刪除）
+  // 總覽、跨專案頻道沒有專案文件區，只有訊息附件
+  const filesUi = { tab: 'docs', folder: null, pj: null, data: null };
+  const DOC_MAX = 20 * 1024 * 1024;
   async function openFiles() {
-    const body = openModal('文件', '<div id="files-list" class="stack"></div>', {
-      sub: '上傳 1 小時後自動刪除',
-      actions: '<button class="btn small" type="button" id="files-up">上傳</button>',
+    const pj = projectView(), hasDocs = PROJECTS.includes(pj);
+    if (filesUi.pj !== pj) { filesUi.pj = pj; filesUi.folder = null; }
+    const tab = hasDocs ? filesUi.tab : 'att';
+    const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
+    const body = openModal('文件', `${tabs}<div id="files-list" class="stack"></div>`, {
+      sub: tab === 'docs' ? `${esc(projName(pj))} 的共用文件，不會自動刪除` : '上傳 1 小時後自動刪除',
+      actions: tab === 'docs' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>',
     });
+    body.querySelectorAll('[data-files-tab]').forEach(b => { b.onclick = () => { filesUi.tab = b.dataset.filesTab; openFiles(); }; });
+    if (tab === 'docs') return drawDocs(body, pj);
     body.modal.querySelector('#files-up').onclick = () => $('#file-input').click();
     try {
       const d = await api('/api/files');
@@ -6013,7 +6023,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
         const box = body.querySelector('#audit-list');
         try {
           const a = await api('/api/files/audit?limit=200');
-          const label = { upload: '上傳', download: '下載', delete: '刪除', reject: '拒絕', expire: '到期清除' };
+          const label = { upload: '上傳', download: '下載', delete: '刪除', reject: '拒絕', expire: '到期清除', rename: '改名', move: '搬移' };
           box.innerHTML = (a.scope === 'mine' ? '<p class="muted small">只顯示你所屬專案的檔案紀錄與你自己的操作；全站稽核限群組管理員。</p>' : '') + (a.items.length ? `<div class="table-scroll"><table class="audit-table"><thead><tr><th>時間</th><th>動作</th><th>操作者</th><th>檔名</th><th>大小</th><th>SHA-256</th><th>聲明</th><th>備註</th></tr></thead><tbody>${
             a.items.map(x => `<tr><td>${fmtTime(x.at)}</td><td>${label[x.action] || x.action}</td>
               <td>${esc(x.actor.name || x.actor.participantId || '')}${x.actor.memberType === 'ai' ? '（AI）' : x.actor.memberType === 'human' ? '（人類）' : ''}</td>
@@ -6025,6 +6035,152 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     } catch (err) {
       body.querySelector('#files-list').innerHTML = `<p class="error">${esc(err.message)}</p>`;
     }
+  }
+
+  // ---------- C-365 專案文件區 ----------
+  const docFolderPath = (folders, id) => { const f = folders.find(x => x.folderId === id); if (!f) return []; const p = f.parentId ? folders.find(x => x.folderId === f.parentId) : null; return p ? [p, f] : [f]; };
+  async function drawDocs(body, pj) {
+    const box = body.querySelector('#files-list');
+    let d;
+    try { d = filesUi.data = await api(`/api/projects/${encodeURIComponent(pj)}/docs`); }
+    catch (err) { box.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+    if (filesUi.folder && !d.folders.some(f => f.folderId === filesUi.folder)) filesUi.folder = null;
+    const cur = filesUi.folder, trail = docFolderPath(d.folders, cur);
+    const subs = d.folders.filter(f => (f.parentId || null) === cur);
+    const docs = d.items.filter(x => (x.folderId || null) === cur);
+    const count = id => d.items.filter(x => x.folderId === id).length + d.folders.filter(f => f.parentId === id).length;
+    const crumbs = [cur ? `<button type="button" class="link" data-doc-go="">${esc(projName(pj))}</button>` : `<b>${esc(projName(pj))}</b>`,
+      ...trail.map((f, i) => (i === trail.length - 1 ? `<b>${esc(f.name)}</b>` : `<button type="button" class="link" data-doc-go="${esc(f.folderId)}">${esc(f.name)}</button>`))];
+    const acts = (kind, id) => (d.canWrite ? ['rename', 'move', 'delete'].map(a => `<button class="btn small${a === 'delete' ? ' danger-outline' : ''}" type="button" data-doc-act="${a}" data-kind="${kind}" data-id="${esc(id)}">${{ rename: '改名', move: '搬移', delete: '刪除' }[a]}</button>`).join('') : '');
+    box.innerHTML = `
+      ${d.enabled ? '' : '<div class="warn-box">這個環境還沒開通專案文件區的儲存空間（Cloudflare R2），暫時不能上傳。請群組管理員開通。</div>'}
+      ${d.canWrite ? '' : '<p class="muted small">你在這個專案是唯讀：可以看、下載，不能上傳或整理。</p>'}
+      <div class="docs-bar">
+        <nav class="docs-crumbs" aria-label="資料夾位置">${crumbs.join('<span class="crumb-sep" aria-hidden="true">▸</span>')}</nav>
+        <span class="docs-btns">${d.canWrite && d.enabled ? '<button class="btn small primary" type="button" data-doc-act="upload">上傳（可多選）</button>' : ''}${d.canWrite && trail.length < d.maxFolderDepth ? '<button class="btn small" type="button" data-doc-act="mkdir">新資料夾</button>' : ''}</span>
+      </div>
+      <input type="file" id="docs-input" multiple accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
+      <div class="file-list">
+        ${subs.map(f => `<div class="file-row doc-row">
+          <span class="file-icon" aria-hidden="true">📁</span>
+          <button type="button" class="file-info doc-open" data-doc-go="${esc(f.folderId)}"><b class="file-name">${esc(f.name)}</b><span class="muted small">${count(f.folderId)} 項</span></button>
+          <span class="doc-acts">${acts('folder', f.folderId)}</span></div>`).join('')}
+        ${docs.map(x => `<div class="file-row doc-row">
+          <span class="file-icon" aria-hidden="true">${fileIcon(x.ext)}</span>
+          <div class="file-info"><b class="file-name">${esc(x.name)}</b>
+            <span class="muted small">${fmtBytes(x.size)} · ${esc(x.uploader?.name || '?')}${x.uploader?.memberType === 'ai' ? '（AI）' : ''} · ${fmtTime(x.updatedAt)}</span></div>
+          <span class="doc-acts"><button class="btn small" type="button" data-doc-act="download" data-kind="doc" data-id="${esc(x.docId)}">下載</button>${acts('doc', x.docId)}</span></div>`).join('')}
+        ${subs.length || docs.length ? '' : `<p class="muted">${cur ? '這個資料夾是空的。' : '還沒有文件。'}${d.canWrite && d.enabled ? '按「上傳（可多選）」一次放多個檔。' : ''}</p>`}
+      </div>
+      <p class="muted small">只有本專案成員看得到。單檔 ${fmtBytes(d.maxFileBytes)} 以內，只收 pdf、docx、xlsx、pptx、md、txt、png、jpg，禁止程式碼與客戶個資；資料夾最多 ${d.maxFolderDepth} 層。這個專案已用 ${fmtBytes(d.projectBytes)}（全部專案 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}）。</p>
+      <details class="audit"><summary>異動紀錄</summary><div id="docs-log" class="muted small">載入中…</div></details>`;
+    box.querySelector('#docs-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files); });
+    box.querySelector('details.audit').addEventListener('toggle', async e => {
+      if (!e.target.open) return;
+      const log = box.querySelector('#docs-log');
+      try {
+        const ev = (await api(`/api/projects/${encodeURIComponent(pj)}/events?limit=100`)).items.filter(x => /文件|資料夾/.test(x.text));
+        log.innerHTML = ev.length ? `<ul class="docs-log">${ev.map(x => `<li>${fmtTime(x.at)}　${esc(x.text)}</li>`).join('')}</ul>` : '還沒有紀錄。';
+      } catch (err) { log.textContent = err.message; }
+    });
+    box.onclick = e => {
+      const go = e.target.closest('[data-doc-go]');
+      if (go) { filesUi.folder = go.dataset.docGo || null; return openFiles(); }
+      const b = e.target.closest('[data-doc-act]');
+      if (b) docAction(pj, b.dataset.docAct, b.dataset.kind, b.dataset.id);
+    };
+  }
+  async function docAction(pj, act, kind, id) {
+    const d = filesUi.data, base = `/api/projects/${encodeURIComponent(pj)}`;
+    const item = kind === 'folder' ? d.folders.find(f => f.folderId === id) : d.items.find(x => x.docId === id);
+    const path = kind === 'folder' ? `${base}/doc-folders/${encodeURIComponent(id)}` : `${base}/docs/${encodeURIComponent(id)}`;
+    try {
+      if (act === 'upload') return $('#docs-input').click();
+      if (act === 'download') return downloadFrom(item.downloadUrl, item.name);
+      if (act === 'mkdir') {
+        const name = await promptName('新資料夾', '', { label: '資料夾名稱', max: 50, hint: filesUi.folder ? '建在目前的資料夾裡（最多兩層）' : '建在最上層' });
+        if (!name) return;
+        await api(`${base}/doc-folders`, { method: 'POST', body: { name, parentId: filesUi.folder } });
+        toast('已建立資料夾');
+      } else if (act === 'rename') {
+        const name = await promptName(kind === 'folder' ? '資料夾改名' : '文件改名', item.name, { label: '新名稱', max: kind === 'folder' ? 50 : 120, hint: kind === 'folder' ? '' : '副檔名不能改，沒寫會自動補上' });
+        if (!name || name === item.name) return;
+        await api(path, { method: 'PATCH', body: { name } });
+        toast('已改名');
+      } else if (act === 'move') {
+        const to = await pickFolder(kind, item, d);
+        if (to === undefined) return;
+        await api(path, { method: 'PATCH', body: kind === 'folder' ? { parentId: to } : { folderId: to } });
+        toast('已搬移');
+      } else if (act === 'delete') {
+        if (!await confirmDialog({ title: kind === 'folder' ? '刪除資料夾？' : '刪除文件？', confirmText: '刪除', danger: true,
+          message: kind === 'folder' ? `刪除資料夾「${esc(item.name)}」。資料夾要先清空才能刪。` : `刪除「${esc(item.name)}」後，專案成員都無法再下載（異動紀錄會留著）。` })) return;
+        await api(path, { method: 'DELETE' });
+        toast('已刪除');
+      }
+      openFiles();
+    } catch (err) { toast(err.message); }
+  }
+  // 搬到哪裡：文件可放最上層或任一資料夾；資料夾只能放最上層或第一層資料夾（裡面還有資料夾的只能放最上層）
+  function pickFolder(kind, item, d) {
+    const label = f => docFolderPath(d.folders, f.folderId).map(x => x.name).join(' ▸ ');
+    const curId = (kind === 'folder' ? item.parentId : item.folderId) || null;
+    const hasSub = kind === 'folder' && d.folders.some(f => f.parentId === item.folderId);
+    const opts = [{ id: null, label: '最上層' }, ...d.folders.filter(f => kind === 'doc' || (!hasSub && !f.parentId && f.folderId !== item.folderId)).map(f => ({ id: f.folderId, label: label(f) }))].filter(o => o.id !== curId);
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: `搬移「${esc(item.name)}」`, size: 'narrow',
+        body: opts.length ? `<div class="pick-list" role="radiogroup" aria-label="搬到">${opts.map((o, i) => `<label class="pick-row"><input type="radio" name="pf" value="${i}"${i ? '' : ' checked'}>${esc(o.label)}</label>`).join('')}</div>${hasSub ? '<p class="muted small">裡面還有資料夾，只能放最上層（最多兩層）。</p>' : ''}` : '<p class="muted">沒有其他可以放的地方。</p>',
+        foot: `<button class="btn" type="button" data-pf="0">取消</button>${opts.length ? '<button class="btn primary" type="button" data-pf="1">搬移</button>' : ''}` });
+      document.body.appendChild(host);
+      holdBackdrop(host.firstElementChild);
+      const done = ok => { const i = Number(host.querySelector('input[name=pf]:checked')?.value); host.remove(); resolve(ok && opts[i] ? opts[i].id : undefined); };
+      host.addEventListener('click', e => { const b = e.target.closest('[data-pf]'); if (b) done(b.dataset.pf === '1'); else if (e.target.closest('[data-close]')) done(false); });
+      host.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+      (host.querySelector('input[name=pf]') || host.querySelector('[data-pf]')).focus();
+    });
+  }
+  // 多選上傳：先在本機擋掉類型、大小不對的，勾一次聲明，一個一個送，每個檔旁邊寫成功或失敗原因
+  function uploadDocs(pj, files) {
+    const folder = filesUi.folder, d = filesUi.data;
+    const where = folder ? docFolderPath(d.folders, folder).map(f => f.name).join(' ▸ ') : '最上層';
+    const extOf = f => (f.name.includes('.') ? f.name.split('.').pop() : '').toLowerCase();
+    const pre = files.map(f => ({ f, problem: !FILE_EXTS.includes(extOf(f)) ? `不允許的類型「.${extOf(f)}」` : !f.size ? '檔案是空的' : f.size > d.maxFileBytes ? `${fmtBytes(f.size)} 超過 ${fmtBytes(d.maxFileBytes)} 上限` : '' }));
+    const okN = pre.filter(x => !x.problem).length;
+    const body = openModal('上傳到專案文件', `
+      <p>放到 <b>${esc(projName(pj))} ▸ ${esc(where)}</b>，共 ${files.length} 個檔${okN < files.length ? `（${files.length - okN} 個不能上傳，原因寫在旁邊）` : ''}。</p>
+      <ul class="up-list">${pre.map((x, i) => `<li data-up="${i}"><span class="file-icon" aria-hidden="true">${fileIcon(extOf(x.f))}</span><span class="up-name">${esc(x.f.name)}</span><span class="muted small">${fmtBytes(x.f.size)}</span><span class="up-st${x.problem ? ' bad' : ''}">${x.problem ? '✗ ' + esc(x.problem) : '等待上傳'}</span></li>`).join('')}</ul>
+      ${okN ? `<div class="warn-box">專案文件長期保存、不會自動刪除，本專案成員都能下載。</div>
+      <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認這些檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>` : ''}
+      <p class="small" id="up-sum" role="status"></p>`, {
+      foot: okN ? `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" id="up-go" disabled>上傳 ${okN} 個檔</button>` : '<button class="btn" type="button" data-close>關閉</button>',
+    });
+    const go = body.modal.querySelector('#up-go');
+    if (!go) return;
+    const declare = body.querySelector('#up-declare');
+    declare.addEventListener('change', () => { go.disabled = !declare.checked; });
+    go.addEventListener('click', async () => {
+      go.disabled = true; declare.disabled = true; go.textContent = '上傳中…';
+      let good = 0, bad = 0;
+      for (const [i, x] of pre.entries()) {
+        if (x.problem) { bad++; continue; }
+        const st = body.querySelector(`[data-up="${i}"] .up-st`);
+        st.textContent = '上傳中…';
+        try {
+          const q = new URLSearchParams({ name: x.f.name, declared: 'true' });
+          if (folder) q.set('folderId', folder);
+          const r = await fetch(`/api/projects/${encodeURIComponent(pj)}/docs?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: x.f });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+          st.textContent = '✓ 完成'; st.className = 'up-st good'; good++;
+        } catch (err) { st.textContent = '✗ ' + err.message; st.className = 'up-st bad'; bad++; }
+      }
+      body.querySelector('#up-sum').textContent = `上傳完成 ${good} 個${bad ? `，${bad} 個沒有上傳（原因寫在檔名旁）` : ''}。`;
+      go.remove();
+      const c = body.modal.querySelector('.modal-foot [data-close]'); if (c) c.textContent = '關閉';
+      if (state.page === 'files') openFiles();
+    });
   }
 
   // API 資訊

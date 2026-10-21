@@ -2728,3 +2728,24 @@ html, body { overflow-x: clip; }
   .ma-hint { margin-left: 0; }
   .ma-f > b { width: 100%; }
 }
+
+/* C-365 專案文件區 */
+.docs-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.docs-crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+.docs-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.doc-row { flex-wrap: wrap; }
+.doc-open { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.doc-open:hover .file-name, .doc-open:focus-visible .file-name { text-decoration: underline; }
+.doc-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.file-row .file-name { overflow-wrap: anywhere; }
+.up-list { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 6px; max-height: 45vh; overflow: auto; }
+.up-list li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.up-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.up-st { font-size: 13px; }
+.up-st.good { color: #15803d; }
+.up-st.bad { color: #b91c1c; }
+.pick-list { display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
+.pick-row { display: flex; gap: 8px; align-items: center; cursor: pointer; padding: 4px 0; }
+.pick-row input { width: 20px; height: 20px; flex: none; margin: 0; }
+.docs-log { padding-left: 18px; margin: 6px 0; display: grid; gap: 2px; }
+@media (max-width: 600px) { .doc-acts { width: 100%; } }

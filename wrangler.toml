@@ -32,6 +32,12 @@ binding = "DB"
 database_name = "aigile-switch"
 database_id = "3f3bf09a-b531-4e72-8625-6aa85243d8ee"
 
+# C-365 專案文件區：檔案本體存 R2（單檔 20 MB，不自動過期）。昱志在 Cloudflare 開通 R2、建好 bucket 後才打開這三行再部署；
+# 沒綁定時文件區回 503「還沒開通」，其他功能照常。
+# [[r2_buckets]]
+# binding = "DOCS"
+# bucket_name = "aigile-switch-docs"
+
 # 上傳文件（方案 B）：檔案存 D1；每 10 分鐘清除超過保存期限的檔案
 [triggers]
 crons = ["*/10 * * * *"]
