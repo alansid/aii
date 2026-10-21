@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.87.0'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.87.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4933,6 +4933,8 @@
     : ai.isOnline ? ['on', '在線'] : ai.standby ? ['standby', '待命中']
     : ai.lastSeenAt && Date.now() - Date.parse(ai.lastSeenAt) < 24 * 3600_000 ? ['idle', '閒置'] : ['', '離線'];
   const maWhen = t => { const d = new Date(t), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); return (d.toDateString() === new Date().toDateString() ? '今天 ' : mmdd(t) + ' ') + hm; };
+  const maAvatar = ai => ai.avatar || ai.imgUrl || ai.avatarImg ? avatar(ai)
+    : avatar({ ...ai, avatar: /^[A-Za-z]{2,4}$/.test(ai.roleKey || '') ? ai.roleKey.toUpperCase() : [...(ai.name || 'AI')][0] });
   const maRank = ai => ai.status !== 'active' ? 4 : maNeedsYou(ai) ? 0 : ai.isOnline || ai.standby ? 1 : 2;
   function myAiRowHtml(ai, tab, menu) {
     const id = esc(ai.participantId), active = ai.status === 'active', level = tokenLevel(ai.expiresAt);
@@ -4954,9 +4956,9 @@
       </div>` : '';
     return `<div class="ma-item${tab ? ' open' : ''}" data-ma="${id}">
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
-        ${avatar(ai)}
+        ${maAvatar(ai)}
         <div class="ma-main"><div class="ma-nm"><b>${esc(ai.name)}</b><span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
-          <div class="ma-meta">${[esc(ai.role || ''), env].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs"> · ${pjTags}</span>` : ''}${maWarn(ai) ? `<span class="ma-mtok warn-text"> · ${level === 'expired' ? 'Token 已過期' : esc(maWhen(ai.expiresAt)) + ' 到期'}</span>` : ''}</div></div>
+          <div class="ma-meta">${[esc(ai.role || ''), env].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role || env ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) ? `<span class="ma-mtok warn-text">${ai.role || env ? ' · ' : ''}${level === 'expired' ? 'Token 已過期' : esc(maWhen(ai.expiresAt)) + ' 到期'}</span>` : ''}</div></div>
         <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
       </div>
       ${tab ? myAiPanelHtml(ai, tab) : ''}
@@ -4988,6 +4990,13 @@
       <div class="ma-tabs" role="tablist">${tabs.map(([k, l]) => `<button type="button" role="tab" data-act="tab" data-tab="${k}" data-id="${id}" aria-selected="${k === t}">${esc(l)}</button>`).join('')}</div>
       ${body}
     </div>`;
+  }
+  function maPlaceMenu(root) {
+    const m = root.querySelector('.ma-menu'), btn = m?.parentElement.querySelector('.ma-more');
+    if (!m || !btn) return;
+    const r = btn.getBoundingClientRect(), h = m.offsetHeight, below = innerHeight - r.bottom - 8;
+    Object.assign(m.style, { position: 'fixed', right: Math.max(8, innerWidth - r.right) + 'px', left: 'auto',
+      top: (below >= h || r.top < h + 12 ? Math.min(r.bottom + 4, innerHeight - h - 8) : r.top - h - 4) + 'px' });
   }
   async function openMyAi(waitFor = null) {
     const body = openModal('我的 AI', `
@@ -5024,6 +5033,8 @@
     };
     const closeMenu = e => { if (menuFor && !e.target.closest('.ma-menu,[data-act="menu"]')) { const id = menuFor; menuFor = null; row(id); } };
     document.addEventListener('click', closeMenu, true);
+    const dropMenu = () => { if (!body.isConnected) { removeEventListener('scroll', dropMenu, true); removeEventListener('resize', dropMenu); return; } if (menuFor) { const m = menuFor; menuFor = null; row(m); } };
+    addEventListener('scroll', e => { if (!e.target.closest?.('.ma-menu')) dropMenu(); }, true); addEventListener('resize', dropMenu);
     body.addEventListener('change', e => {
       const c = e.target.dataset.maConvo, a = e.target.dataset.maAuto;
       if (c) { const ai = items.find(x => x.participantId === c); maOpts.set(c, { ...maOpt(ai), convo: e.target.value }); row(c); }
@@ -5039,7 +5050,7 @@
       const id = ai.participantId;
       try {
         if (b.dataset.act === 'row') { if (open.has(id)) open.delete(id); else open.set(id, ai.status === 'active' ? (ai.skillsWaiting ? 'skills' : 'conn') : 'set'); menuFor = null; return row(id); }
-        if (b.dataset.act === 'menu') { menuFor = menuFor === id ? null : id; row(id); return body.querySelector('.ma-menu [role=menuitem]')?.focus(); }
+        if (b.dataset.act === 'menu') { menuFor = menuFor === id ? null : id; row(id); maPlaceMenu(body); return body.querySelector('.ma-menu [role=menuitem]')?.focus(); }
         if (menuFor) { const m = menuFor; menuFor = null; row(m); }
         if (b.dataset.act === 'tab') { open.set(id, b.dataset.tab); return row(id); }
         if (b.dataset.act === 'copy') {
