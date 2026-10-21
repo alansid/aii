@@ -53,11 +53,13 @@ if (cmd === 'check') {
     const r = wr(['secret', 'put', k, '--config', CONF], { capture: true, input: v + '\n' });
     console.log(k, r.status ? '失敗' : '已設定');
   }
+} else if (cmd === 'r2') { // C-365：看 POC 帳號的 R2 bucket（開通後確認 aigile-switch-docs 在不在）
+  process.exit(wr(['r2', 'bucket', 'list']).status ?? 1);
 } else if (cmd === 'deploy') {
   if (fs.readFileSync(new URL(CONF, root), 'utf8').includes('TO_BE_CREATED')) { console.error('還沒建 D1：先跑 node scripts/poc.mjs setup'); process.exit(1); }
   const g = spawnSync('node', ['scripts/releases.mjs'], { cwd: root, stdio: 'inherit' });
   if (g.status) process.exit(g.status);
   process.exit(wr(['deploy', '--config', CONF]).status ?? 1);
 } else {
-  console.log('用法：node scripts/poc.mjs check | setup | secrets | deploy');
+  console.log('用法：node scripts/poc.mjs check | setup | secrets | r2 | deploy');
 }
