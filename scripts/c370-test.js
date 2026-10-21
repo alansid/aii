@@ -10,12 +10,13 @@ try {
   assert.ok(!/claude mcp add aigile -- /.test(setup), 'Claude Code 名稱不能固定叫 aigile');
   assert.ok(!/\[mcp_servers\.aigile\]/.test(setup), 'Codex 名稱不能固定叫 aigile');
   assert.match(setup, /const mcpName = `aigile-\$\{AGENT\.toLowerCase\(\)\}`/, '名稱帶代號小寫');
-  assert.match(setup, /claude mcp add \$\{mcpName\} -- node/, 'Claude Code 用帶代號的名稱');
+  assert.match(setup, /addArgs = \['mcp', 'add', mcpName/, 'Claude Code 用帶代號的名稱（C-372 起由腳本直接裝）');
   assert.match(setup, /\[mcp_servers\.\$\{mcpName\}\]/, 'Codex 用帶代號的名稱');
-  assert.match(setup, /自己的工作資料夾/, '提醒在自己的工作資料夾執行');
+  assert.match(setup, /同資料夾多個 AI 可並存/, 'C-372：同資料夾多個 AI 可並存');
   assert.match(setup, /同台/, '提醒同台多個 AI 各用自己的名稱');
   const s318 = spec.slice(spec.indexOf('### 3.18 MCP'));
   assert.match(s318, /aigile-<代號小寫>/, '規格 3.18 寫名稱');
+  assert.match(s318, /同資料夾多個 AI 可並存/, 'C-372：規格 3.18 寫可並存');
   console.log('c370-test：全部通過');
 } catch (e) {
   console.error('c370-test 失敗：', e.message);

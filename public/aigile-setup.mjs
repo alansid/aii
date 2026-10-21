@@ -8,6 +8,7 @@
 //   5. git 資料夾就確認 .gitignore 有 .aigile/（沒有就補一行）
 //   6. watcher 已在跑、但檔案或設定剛更新 → 提醒要重開（不會自己停掉它）
 //   7. （C-346）同步技能：下載專案已上架的技能、核對雜湊、裝到工具的技能資料夾；含腳本的要主人允許才裝；下架的移除（只移除自己裝的）
+//   8. （C-372）Claude Code：直接裝 MCP（claude mcp add aigile-<代號小寫>，這個資料夾；已裝就跳過）；Codex 印設定讓你自己加
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
 // 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|other] [--skills-only]
@@ -19,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const opt = name => { const i = args.findIndex(a => a === `--${name}` || a.startsWith(`--${name}=`)); return i < 0 ? '' : args[i].includes('=') ? args[i].split('=').slice(1).join('=') : args[i + 1] || ''; };
@@ -185,7 +187,22 @@ out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGE
 if (cfg.files['aigile-mcp.mjs']) {
   const mcp = path.resolve('.aigile', 'watcher', 'aigile-mcp.mjs').replace(/\\/g, '/');
   const mcpName = `aigile-${AGENT.toLowerCase()}`; // C-370：名稱帶代號，同台多個 AI 不撞名、不用到別人的身分
-  out(`MCP（裝上後每輪改用 aigile_ 工具，不用自己組 curl；在自己的工作資料夾執行，只掛自己的）：Claude Code → claude mcp add ${mcpName} -- node ${mcp} --agent ${AGENT}`);
+  const addArgs = ['mcp', 'add', mcpName, '--', 'node', mcp, '--agent', AGENT];
+  out(`MCP 名稱 ${mcpName}：名稱帶代號，同資料夾多個 AI 可並存；每輪改用 aigile_ 工具（不用自己組 curl），只呼叫 ${mcpName} 這組，不用別人代號的`);
+  if (TOOL === 'claude') {
+    // C-372：直接裝（這個資料夾）；已有同名就跳過；失敗印指令讓 AI 手動裝，不中斷其他檢查。AIGILE_CLAUDE_BIN 給測試用假的 claude
+    const bin = process.env.AIGILE_CLAUDE_BIN || '';
+    const q = s => `"${String(s).replace(/"/g, '\\"')}"`;
+    const claude = a => (/\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, ...a], { encoding: 'utf8', timeout: 60_000 })
+      : spawnSync([bin || 'claude', ...a].map(q).join(' '), { shell: true, encoding: 'utf8', timeout: 60_000 }));
+    const manual = `claude ${addArgs.map(a => (/\s/.test(a) ? q(a) : a)).join(' ')}`;
+    if (claude(['mcp', 'get', mcpName]).status === 0) out(`✓ MCP：Claude Code 已裝 ${mcpName}（不重裝）`);
+    else {
+      const r = claude(addArgs);
+      if (r.status === 0) out(`✓ MCP：已幫 Claude Code 裝好 ${mcpName}（這個資料夾；重開 Claude Code 對話後生效）`);
+      else out(`! MCP 沒裝成（${String(r.stderr || r.stdout || r.error?.message || '').trim().split('\n').pop().slice(0, 120) || '找不到 claude 指令'}）：請自己在這個資料夾執行 ${manual}`);
+    }
+  } else out(`  Claude Code → claude ${addArgs.join(' ')}`);
   out(`  Codex → ~/.codex/config.toml 加 [mcp_servers.${mcpName}]，command = "node"，args = ["${mcp}", "--agent", "${AGENT}"]（這檔全機共用：同台每個 AI 用自己的名稱，不要蓋掉別人的）`);
 }
 out('完成：照上面兩行啟動（要先取得所屬人類同意的就先問）。');

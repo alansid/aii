@@ -149,7 +149,7 @@ try {
   const wenv = (await call(T, '/api/me/watcher-env')).body;
   assert.equal(wenv.files['aigile-mcp.mjs'], scriptHashes()['aigile-mcp.mjs'], 'watcher-env 帶 aigile-mcp.mjs 雜湊');
   const setup = fs.readFileSync(new URL('../public/aigile-setup.mjs', import.meta.url), 'utf8');
-  assert.match(setup, /claude mcp add \$\{mcpName\} -- node \$\{mcp\} --agent \$\{AGENT\}/, '印 Claude Code 指令'); assert.match(setup, /\[mcp_servers\.\$\{mcpName\}\]/, '印 Codex 設定');
+  assert.match(setup, /addArgs = \['mcp', 'add', mcpName, '--', 'node', mcp, '--agent', AGENT\]/, '印 Claude Code 指令'); assert.match(setup, /\[mcp_servers\.\$\{mcpName\}\]/, '印 Codex 設定');
   assert.match(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), /### 3\.18 MCP/);
   const ob = JSON.stringify((await call(liu.token, `/api/my-ais/${AI}/onboarding`)).body);
   assert.match(ob, /印出啟動指令與 MCP 指令/, '接入設定提到 MCP');

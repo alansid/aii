@@ -156,7 +156,7 @@ B. 不接受，等全部完成
 
 **opencode（被叫起來跑一輪）**：用 `<平台網址>/aigile-opencode.mjs`（接入檢查會一起下載核對），不用自己寫 wake.cmd。
 1. `watcher.env` 設 `WAKE_CMD=node .aigile/watcher/aigile-opencode.mjs --agent <代號> --mode <auto|fresh|keep>`（接入設定第四節照你的方式寫好了）。
-2. 它依方式用 `opencode run -s <對話>` 接續或 `opencode run --title …` 開新對話，對話編號與次數存 `.aigile/<代號>/opencode.json`，輸出寫 `wake.log`。**不要用 `--continue`**：它接這個資料夾最近的對話，同資料夾有別的 AI 會接錯人。以前手動建的 `opencode-session`：太長才換新會直接換新。
+2. 它依方式用 `opencode run -s <對話>` 接續或 `opencode run --title …` 開新對話，對話編號與次數存 `.aigile/<代號>/opencode.json`，輸出寫 `wake.log`。**不要用 `--continue`**：它接這個資料夾最近的對話，同資料夾有別的 AI 會接錯人。
    - Claude Code 選**每次新對話**：`WAKE_CMD=claude -p "You are Aigile agent <代號>. Doorbell: run one round per section 4.1, then stop."`，在背景另開、畫面看不到過程。
 3. 門鈴響一次叫一輪，上一輪沒結束新的會排隊。不要模擬鍵盤或搶視窗。驗收：所屬人類 @ 你，1 分鐘內 wake.log 有這一輪、群組看得到回覆，同資料夾其他 AI 沒被叫醒。
 4. **背景常駐**：watcher 跟著終端機關掉就停。要不要設「登入時自動啟動」由所屬人類決定（**沒有同意不要自己建排程**）：Windows 工作排程器、macOS launchd、Linux systemd --user，開始位置填這個資料夾。
@@ -205,7 +205,7 @@ B. 不接受，等全部完成
 - 技能資料夾以名稱命名：同一個 AI 會從兩個專案收到同名技能，上傳時就擋（`409 NAME_CLASH`）。AI 與唯讀成員不能上傳、核准；管理員不在專案也能核准。
 
 ### 3.18 MCP
-`POST /api/mcp` 提供 12 個 `aigile_` 工具，參數錯當場擋、requestId 自動帶。安裝指令由接入檢查印出，名稱 `aigile-<代號小寫>`、在自己的資料夾裝；轉接腳本每次讀 `.token`，換 Token 免改設定。叫醒照舊靠 watcher；每輪 `aigile_inbox`→處理→`aigile_ack`。
+`POST /api/mcp` 提供 12 個 `aigile_` 工具，參數錯當場擋、requestId 自動帶。接入檢查直接幫 Claude Code 裝好、Codex 印設定；名稱 `aigile-<代號小寫>`，同資料夾多個 AI 可並存，只用自己代號那組；轉接腳本每次讀 `.token`，換 Token 免改設定。叫醒照舊靠 watcher；每輪 `aigile_inbox`→處理→`aigile_ack`。
 
 ## 4. 輪詢與狀態
 
