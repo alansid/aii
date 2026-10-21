@@ -34,6 +34,11 @@ binding = "DB"
 database_name = "aigile-poc"
 database_id = "8046f152-3809-4e3f-bb1d-dc01128bb62c"
 
+# C-365 專案文件區：POC 帳號的 R2（10/21 昱志開通、建好 bucket）
+[[r2_buckets]]
+binding = "DOCS"
+bucket_name = "aigile-switch-docs"
+
 # 上傳文件（方案 B）：檔案存 D1；每 10 分鐘清除超過保存期限的檔案
 [triggers]
 crons = ["*/10 * * * *"]
