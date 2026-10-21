@@ -2728,3 +2728,49 @@ html, body { overflow-x: clip; }
   .ma-hint { margin-left: 0; }
   .ma-f > b { width: 100%; }
 }
+
+/* C-368 找人：篩選列、標黃、@ 選單分組 */
+.fb { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.fb .fb-q { width: auto; flex: 1 1 200px; min-width: 160px; max-width: 320px; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; font-size: .9rem; }
+.fb-q:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 25%, transparent); }
+.fb-f { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fb-kind { display: inline-flex; gap: 4px; }
+.fb-kind .chip.on { background: var(--primary); border-color: var(--primary); color: var(--primary-text); font-weight: 600; }
+.fb .fb-sel { width: auto; min-width: 0; flex: none; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: .85rem; }
+.fb-cnt { margin-left: auto; font-size: .8rem; color: var(--muted); white-space: nowrap; }
+.fb-more { display: none; }
+.fb-more.on { border-color: var(--primary); color: var(--primary); }
+.fb-empty { padding: 8px 2px; font-size: .82rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pm-table mark, .pm-list mark, .ma-list mark, .mention-list mark { background: #fef08a; color: #111827; border-radius: 2px; padding: 0 1px; }
+.mention-list li.mention-grp { cursor: default; padding: 4px 10px; font-size: .75rem; color: var(--muted); background: var(--surface-2); border-radius: 0; }
+.mention-list li.mention-grp:hover { background: var(--surface-2); }
+.mention-list li.mention-tip { background: none; }
+#ma-find .fb { margin: 0 0 8px; }
+@media (max-width: 699px) {
+  .fb .fb-q { max-width: none; flex-basis: 0; }
+  .fb-more { display: inline-flex; }
+  .fb-f { display: none; width: 100%; }
+  .fb.open .fb-f { display: flex; }
+  .fb-cnt { width: 100%; margin-left: 0; }
+}
+
+/* C-369 申請加入專案 */
+.hub-join { display: inline-block; margin: 10px 2px 4px; }
+.pm-join { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.pm-join .pm-set { margin: 0; }
+.pm-join-note { display: flex; flex-direction: column; gap: 4px; }
+.pm-join-note input { width: 100%; box-sizing: border-box; }
+.pm-join-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; }
+.jl-row, .jr-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 2px; border-top: 1px solid var(--border); }
+.jl-row:first-child, .jr-row:first-child { border-top: 0; }
+.jl-row { align-items: center; }
+.jl-main, .jr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.jl-form { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin: 0 0 6px; background: var(--surface-2); border-radius: 10px; }
+.jl-form textarea { width: 100%; box-sizing: border-box; }
+.jl-last { font-size: .82rem; color: var(--danger); }
+.jl-acts, .jr-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.jr-acts { margin-top: 6px; }
+.jr-acts .grow { flex: 1; }
+.jr-note { font-size: .9rem; }
+.jr-acts select { width: auto; flex: none; min-width: 0; }
+.jl-form .jl-acts { justify-content: flex-end; }

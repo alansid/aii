@@ -8,6 +8,7 @@ import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
 import { registerCards, teamCards, workFrom, autoArchive, claimsOf, CLAIM_LOG } from './cards.js';
 import { registerLogin } from './login.js';
 import { registerSkills } from './skills.js'; // C-346 角色技能庫
+import { registerJoin } from './join.js'; // C-369 申請加入專案
 import { optionWarnings } from './questions.js';
 import { mcpDispatch } from './mcp.js'; // C-355 平台 MCP
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
@@ -1278,7 +1279,10 @@ ${trial
     const leaders = Object.fromEntries(PROJECTS.map(pj => [pj, (leadersMap[pj] || []).filter(id => people.get(id)?.status === 'active')]));
     await loadReadOnly();
     const readOnly = Object.fromEntries(PROJECTS.map(pj => [pj, (roMap[pj] || []).filter(id => people.get(id)?.status === 'active')])); // C-294
-    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, readOnly, feedbackProject: await loadFbProject(), ...extra };
+    // C-369：開放申請設定與待審數（一列設定＋只讀待審的列）
+    const js = await joinApi.joinSettings(), pend = await db.all("SELECT project, COUNT(*) AS n FROM join_requests WHERE status = 'pending' GROUP BY project").catch(() => []);
+    const join = Object.fromEntries(PROJECTS.map(pj => [pj, { open: !!js[pj]?.open, note: js[pj]?.note || '', pending: pend.find(x => x.project === pj)?.n || 0 }]));
+    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, readOnly, join, feedbackProject: await loadFbProject(), ...extra };
   }
 
   // 改成員所屬專案（單人或批次）。移出某專案時，他在該專案負責的未結案卡片退回「待處理」、改為未指派。
@@ -1548,7 +1552,7 @@ ${trial
     return scopeProjects(await projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges, roleChanges, roChanges: roChanges.map(({ seqs, ...c }) => c) }), me);
   });
   // UX 第 1354 則：不屬於全部專案的人，專案清單只回自己所屬的專案（不露出別專案名稱）
-  const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))), readOnly: Object.fromEntries(Object.entries(r.readOnly || {}).filter(([k]) => mine.includes(k))) }; };
+  const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))), readOnly: Object.fromEntries(Object.entries(r.readOnly || {}).filter(([k]) => mine.includes(k))), join: Object.fromEntries(Object.entries(r.join || {}).filter(([k]) => mine.includes(k))) }; };
   route('GET', '/api/projects', async ({ ctx, me }) => scopeProjects(await projectsResponse(ctx), me));
   // C-193：群組名稱（登入頁也要顯示，所以讀取不用登入）；只有管理員能改
   route('GET', '/api/group', async () => ({ name: await groupName() }), { open: true });
@@ -2983,6 +2987,7 @@ ${trial
       if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
     }
   }
+  const joinApi = registerJoin({ route, db, ApiError, invalid, readJson, randId, nowIso, requireHuman, peopleMap, projectsOf, PROJECTS, nameOf, loadProjects, projectRows: () => projectRows, loadLeaders, adminOf, applyMembership, loadProjectRoles, saveProjectRoles, projRoles: () => projRoles, readRole, loadReadOnly, invalidatePeople, projEvent }); // C-369
   const skillsApi = registerSkills({ route, db, ApiError, invalid, readJson, randId, nowIso, sha256, peopleMap, projectsOf, PROJECTS, nameOf, loadLeaders, adminOf, assertNoSecret, writeDm, myAi, requireHuman, loadReadOnly, roIn, readOnlyError }); // C-346；C-353 唯讀
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 
