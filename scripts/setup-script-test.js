@@ -120,7 +120,8 @@ try {
   const spec344 = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
   assert.ok(spec344.includes('**Codex 要先開網路**') && spec344.includes("codex --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'") && spec344.includes('**不用開完全權限**'), '規格 3.12 有 Codex 開網路段');
   assert.ok((await call(liu.token, `/api/my-ais/${ai.participantId}/onboarding`)).body.text.includes('要先請 劉昱志 開網路，不用完全權限'), '接入設定第四節提醒 Codex 先開網路');
-  assert.ok(fs.readFileSync(pub('app.js'), 'utf8').includes("[sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限"), '網頁短版接入寫明確設定');
+  { const app = fs.readFileSync(pub('app.js'), 'utf8'); // C-356 改寫成第 0 步，內容不變
+    assert.ok(app.includes('sandbox_mode = "workspace-write"') && app.includes('[sandbox_workspace_write] 底下 network_access = true') && app.includes("--sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'") && app.includes('不用開完全權限'), '網頁短版接入寫明確設定'); }
 
   // 3b) C-329 UX 回報：Token 放在規則教的 AIGILE_TOKEN_<代號> 也讀得到（修正前只讀 AIGILE_TOKEN，說找不到 Token）
   const d = work();
