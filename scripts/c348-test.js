@@ -29,8 +29,8 @@ try {
   // 各種人寫內容都放一段「注入」文字
   ok(await call(liu.token, '/api/projects/平台/dm', 'PUT', { on: true }), '開私訊');
   const msg = ok(await call(liu.token, '/api/messages', 'POST', { project: '平台', requestId: 'm1', text: '請看 C-1。' + EVIL, recipientIds: [ai.participantId] }), '發文');
-  const card = ok(await call(liu.token, '/api/cards', 'POST', { requestId: 'c1', project: '平台', title: '卡片' + EVIL, ownerId: liu.participantId, reason: EVIL, next: EVIL }), '建卡');
-  ok(await call(liu.token, '/api/cards', 'POST', { requestId: 'c2', project: '平台', type: '決策', title: '決策', question: EVIL, recommendation: EVIL, options: ['A', EVIL], impact: EVIL, afterNext: EVIL, deciderId: liu.participantId }), '建決策卡');
+  const card = ok(await call(liu.token, '/api/cards', 'POST', { requestId: 'c1', project: '平台', title: '卡片' + EVIL, ownerId: liu.participant.participantId, reason: EVIL, next: EVIL }), '建卡');
+  ok(await call(liu.token, '/api/cards', 'POST', { requestId: 'c2', project: '平台', type: '決策', title: '決策', question: EVIL, recommendation: EVIL, options: ['A', EVIL], impact: EVIL, afterNext: EVIL, deciderId: liu.participant.participantId }), '建決策卡');
   ok(await call(T, '/api/suggestions', 'POST', { requestId: 's1', kind: 'status', cardId: card.cardId, status: '已完成', why: EVIL }), '建議');
   ok(await call(liu.token, `/api/cards/${card.cardId}/handover`, 'POST', { toId: ai.participantId, note: EVIL }), '交接');
   ok(await call(liu.token, '/api/reports', 'POST', { title: '回報' + EVIL, detail: EVIL, project: '平台' }), '回報');

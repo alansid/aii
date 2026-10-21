@@ -96,7 +96,7 @@ try {
   // 7) 結案的卡不能接手、也不顯示認領；決策卡不用認領
   await call(A.tok, `/api/cards/${card.cardId}`, 'PATCH', { status: '已完成', version: d.version });
   assert.equal((await call(B.tok, `/api/cards/${card.cardId}/takeover`, 'POST', { reason: 'x' })).body.error?.code, 'CARD_CLOSED');
-  const dec = (await call(liu.token, '/api/cards', 'POST', { requestId: 'c3', project: '平台', type: '決策', title: '要不要做', question: '？', deciderId: liu.participantId })).body;
+  const dec = (await call(liu.token, '/api/cards', 'POST', { requestId: 'c3', project: '平台', type: '決策', title: '要不要做', question: '？', deciderId: liu.participant.participantId })).body;
   assert.equal((await call(A.tok, `/api/cards/${dec.cardId}/takeover`, 'POST', {})).body.error?.code, 'NO_CLAIM_DECISION');
 
   // 8) 規格寫明；網頁顯示認領者與交接四欄

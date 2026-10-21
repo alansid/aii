@@ -49,7 +49,7 @@ try {
   const ai = (await call(liu.token, '/api/my-ais', 'POST', { projects: ['平台'], roleKey: 'PG', role: 'PG', name: '甲助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
   const aiTok = (await db.get('SELECT token FROM participants WHERE id = ?', ai.participantId)).token;
   const wenv = (await call(aiTok, '/api/me/watcher-env')).body;
-  assert.deepEqual(wenv.files, { 'watcher.mjs': h['watcher.mjs'], 'aigile-wait.mjs': h['aigile-wait.mjs'], 'aigile-opencode.mjs': h['aigile-opencode.mjs'] }, 'watcher-env 的雜湊');
+  assert.deepEqual(wenv.files, { 'watcher.mjs': h['watcher.mjs'], 'aigile-wait.mjs': h['aigile-wait.mjs'], 'aigile-opencode.mjs': h['aigile-opencode.mjs'], 'aigile-mcp.mjs': h['aigile-mcp.mjs'] }, 'watcher-env 的雜湊');
 
   // C5：migration 只剩一個指令；npm test 是單一入口
   const scripts = JSON.parse(read('package.json')).scripts;
