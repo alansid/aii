@@ -184,8 +184,9 @@ out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGE
 // C-355：平台有 MCP 就印安裝指令（用絕對路徑，MCP 從哪個資料夾啟動都找得到；Token 由轉接腳本每次讀 .token，不寫進設定）
 if (cfg.files['aigile-mcp.mjs']) {
   const mcp = path.resolve('.aigile', 'watcher', 'aigile-mcp.mjs').replace(/\\/g, '/');
-  out(`MCP（裝上後每輪改用 aigile_ 工具，不用自己組 curl）：Claude Code → claude mcp add aigile -- node ${mcp} --agent ${AGENT}`);
-  out(`  Codex → ~/.codex/config.toml 加 [mcp_servers.aigile]，command = "node"，args = ["${mcp}", "--agent", "${AGENT}"]`);
+  const mcpName = `aigile-${AGENT.toLowerCase()}`; // C-370：名稱帶代號，同台多個 AI 不撞名、不用到別人的身分
+  out(`MCP（裝上後每輪改用 aigile_ 工具，不用自己組 curl；在自己的工作資料夾執行，只掛自己的）：Claude Code → claude mcp add ${mcpName} -- node ${mcp} --agent ${AGENT}`);
+  out(`  Codex → ~/.codex/config.toml 加 [mcp_servers.${mcpName}]，command = "node"，args = ["${mcp}", "--agent", "${AGENT}"]（這檔全機共用：同台每個 AI 用自己的名稱，不要蓋掉別人的）`);
 }
 out('完成：照上面兩行啟動（要先取得所屬人類同意的就先問）。');
 }
