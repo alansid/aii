@@ -2738,7 +2738,7 @@
         ${listed.length ? listed.map(c => `
           <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" data-card="${esc(c.cardId)}">
             ${cidHtml(c)}
-            <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}</span></span>
+            <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}${c.claim ? ' · 正在做：' + esc(c.claim.by?.name || '') : ''}</span></span>
             <span class="crow-st">${c.type === NOTE ? noteStPill(c) : c.status === '待確認' ? confirmPill(c) : stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
             <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
@@ -3223,6 +3223,13 @@
   // 交接歷程：從紀錄裡「交接 A → B：說明」整理成 PO → UX → PG
   // ---------- C-261 卡片動作看得懂 ----------
   // 最近一次交接是誰交來的（紀錄新的在前）
+  // C-349：上一棒交接四欄（做到哪、改了什麼、下一步、注意），卡片詳情最上面
+  const handHtml = h => {
+    if (!h) return '';
+    const rows = [['做到哪', h.progress], ['改了什麼', h.changes], ['下一步', h.nextStep], ['注意', h.caution], ['說明', h.note]].filter(([, v]) => v);
+    return `<div class="group-title">上一棒交接 · ${esc(h.from?.name || '')} → ${esc(h.to?.name || '')} · ${esc(shortTime(h.at))}</div>
+          <dl class="dfields">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  };
   const prevHandName = d => { for (const l of d.log || []) { const m = /^交接 (.+?) → (.+?)：/.exec(l.text); if (m) return m[1]; } return ''; };
   // 短名：名字很長的 AI 用代號（RVVW），其他照原名
   const shortOf = name => name; // C-269：一律顯示名字、不顯示代碼；太長的由 CSS 截斷加…，滑過看全名
@@ -3424,10 +3431,12 @@
             <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
           </form>` : `
+          ${handHtml(d.handover)}
           <dl class="dfields">
             <dt>專案</dt><dd>${esc(projName(d.project) || '')}</dd>
             <dt>${d.type === NOTE ? '內容' : '原因'}</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
             <dt>負責人</dt><dd>${ownerHtml(d)}</dd>
+            ${d.claim ? `<dt>正在做</dt><dd>${esc(d.claim.by?.name || '')} · ${esc(shortTime(d.claim.at))} 起</dd>` : ''}
             <dt>下一步</dt><dd class="${d.next ? '' : 'muted'}">${esc(d.next || '未填寫')}</dd>
             <dt>阻塞與等誰</dt><dd class="${waitText(d) ? '' : 'muted'}">${esc(waitText(d) || '沒有阻塞')}</dd>
             <dt>完成條件</dt><dd class="${d.criteria ? '' : 'muted'}">${esc(d.criteria || '未填寫')}</dd>

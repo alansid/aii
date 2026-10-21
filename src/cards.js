@@ -14,15 +14,26 @@ const BUILTIN_RESULTS = ['不同意', '要求補充']; // 決定時固定可用�
 // C-336：用 IN 列出狀態才走得到 idx_cards_status（NOT IN、!= 會逐列濾）
 const UNFINISHED_SQL = "('待整理','待處理','進行中','待確認','受阻')";
 const NOT_ARCHIVED_SQL = "('待整理','待處理','進行中','待確認','受阻','已完成')";
-export const CARD_LIMITS = { title: 100, reason: 500, next: 300, blocker: 300, criteria: 500, question: 200, recommendation: 500, impact: 200, afterNext: 300, note: 500, option: 40, handover: 300, record: 1000 };
+export const CARD_LIMITS = { title: 100, reason: 500, next: 300, blocker: 300, criteria: 500, question: 200, recommendation: 500, impact: 200, afterNext: 300, note: 500, option: 40, handover: 300, record: 1000, progress: 300, changes: 300, nextStep: 300, caution: 300, takeover: 200 };
 const CARD_NO_BASE = 100; // 顯示編號 = C-(seq + 100)
 
-const FIELD_LABEL = { title: '標題', reason: '原因', next: '下一步', blocker: '阻塞', criteria: '完成條件', question: '決策問題', recommendation: '建議方案', impact: '影響', afterNext: '決定後', handover: '交接說明' };
+const FIELD_LABEL = { title: '標題', reason: '原因', next: '下一步', blocker: '阻塞', criteria: '完成條件', question: '決策問題', recommendation: '建議方案', impact: '影響', afterNext: '決定後', handover: '交接說明', progress: '做到哪', changes: '改了什麼', nextStep: '下一步', caution: '注意', takeover: '接手原因' };
 const DECISION_COL = { question: 'question', recommendation: 'recommendation', impact: 'impact', afterNext: 'after_next' };
 const cardNo = seq => `C-${seq + CARD_NO_BASE}`;
 
 
 // C-161 卡片瘦身：已完成＋已驗證滿 7 天自動封存（未驗證的永遠不自動封存）
+// C-349 認領與結構化交接：記在 card_log（via＝認領／交接），不加資料表欄位。
+// 每張卡最新的一筆「認領」或「交接」：最新是認領＝那個人正在做；最新是交接＝交出去了，等接手的人 [接單] 再認領
+export const CLAIM_LOG = '認領', HANDOVER_LOG = '交接';
+export const HANDOVER_FIELDS = ['progress', 'changes', 'nextStep', 'caution']; // 做到哪、改了什麼、下一步、注意
+export async function claimsOf(db, seqs) {
+  const m = new Map();
+  if (!seqs.length) return m;
+  for (const l of await db.all('SELECT card_seq, at, by_id, via FROM card_log WHERE via IN (?, ?) AND card_seq IN (SELECT value FROM json_each(?)) ORDER BY id', CLAIM_LOG, HANDOVER_LOG, JSON.stringify(seqs)))
+    m.set(l.card_seq, l.via === CLAIM_LOG ? { by: l.by_id, at: l.at } : null);
+  return m;
+}
 export const ARCHIVE_DAYS = 7;
 export async function autoArchive(db, now = Date.now()) {
   const cutoff = new Date(now - ARCHIVE_DAYS * 86400_000).toISOString();
@@ -97,6 +108,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   }
   const notesOf = async seq => (await db.all('SELECT at, by_id, text FROM card_log WHERE card_seq = ? AND via = ? ORDER BY id', seq, NOTE_LOG));
   const noteView = (people, l) => ({ at: l.at, by: ref(people, l.by_id), text: l.text });
+  const CLOSED_ST = ['已完成', '已封存'];
+  const handoverView = (people, l) => { let d = {}; try { d = JSON.parse(l.text); } catch {} return { from: ref(people, l.by_id), to: ref(people, d.to), at: l.at, ...Object.fromEntries([...HANDOVER_FIELDS, 'note'].filter(k => d[k]).map(k => [k, d[k]])) }; };
   const aiNoteForbidden = () => new ApiError(403, 'HUMAN_NOTE_READONLY', '這是人類紀錄卡：AI 只能讀。整理完請另建一張卡，並可把這張標「已完成」同時帶 mergedInto（例如 C-230），其他都不能改。');
   const parseOptions = c => { try { return JSON.parse(c.options || '[]'); } catch { return []; } };
   const decisionView = (c, people) => ({
@@ -281,7 +294,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const withNotes = q.get('type') === NOTE; // 主動查人類紀錄：一次拿全部，含紀錄
     const noteMap = withNotes && out.length ? new Map() : null;
     if (noteMap) for (const l of await db.all('SELECT card_seq, at, by_id, text FROM card_log WHERE via = ? AND card_seq IN (SELECT value FROM json_each(?)) ORDER BY id', NOTE_LOG, JSON.stringify(out.map(c => c.seq)))) { if (!noteMap.has(l.card_seq)) noteMap.set(l.card_seq, []); noteMap.get(l.card_seq).push(noteView(people, l)); }
-    return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
+    const claims = await claimsOf(db, out.filter(c => !CLOSED_ST.includes(c.status) && c.type !== '決策' && c.type !== NOTE).map(c => c.seq)); // C-349：誰正在做（只看未結案的）
+    return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), ...(claims.get(c.seq) ? { claim: mark(people, claims.get(c.seq).by, claims.get(c.seq).at) } : {}), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
   }
   route('GET', '/api/cards', args => listCards(args));
 
@@ -295,9 +309,15 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       db.all('SELECT at, by_id, via, text FROM card_log WHERE card_seq = ? ORDER BY id DESC LIMIT 200', c.seq),
       db.all('SELECT message_id FROM card_msgs WHERE card_seq = ? ORDER BY rowid', c.seq),
     ]);
+    // C-349：正在做的人與最近一次結構化交接放最前面，下一位讀卡最先看到
+    const cl = CLOSED_ST.includes(c.status) || c.type === '決策' ? null : (await claimsOf(db, [c.seq])).get(c.seq);
+    const ho = log.find(l => l.via === HANDOVER_LOG);
+    const v = withStale(view(c, people), c, await staleHints());
     return {
-      ...withStale(view(c, people), c, await staleHints()), messageIds: msgs.map(m => m.message_id),
-      log: log.filter(l => l.via !== NOTE_LOG).map(l => ({ at: l.at, by: l.by_id === 'system' ? { participantId: 'system', name: '系統', memberType: 'system' } : ref(people, l.by_id), via: l.via, text: l.text })),
+      cardId: v.cardId, title: v.title, status: v.status, owner: v.owner,
+      ...(cl ? { claim: mark(people, cl.by, cl.at) } : {}), ...(ho ? { handover: handoverView(people, ho) } : {}),
+      ...v, messageIds: msgs.map(m => m.message_id),
+      log: log.filter(l => l.via !== NOTE_LOG && l.via !== HANDOVER_LOG).map(l => ({ at: l.at, by: l.by_id === 'system' ? { participantId: 'system', name: '系統', memberType: 'system' } : ref(people, l.by_id), via: l.via, text: l.text })),
       ...(c.type === NOTE ? { notes: (await notesOf(c.seq)).map(l => noteView(people, l)) } : {}),
       ...(mergedFrom.length ? { mergedFrom } : {}),
     };
@@ -612,8 +632,12 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (to === c.owner_id || to === me.id) throw new ApiError(400, 'SAME_OWNER', '不能交給目前的負責人或自己。');
     if (!projectsOf(people.get(to)).includes(c.project)) throw new ApiError(400, 'PROJECT_MISMATCH', `接手者不屬於這張卡的專案（${c.project}）；只能交給同專案成員，或兩邊都屬於的成員。`);
     if (c.type === NOTE) humansOnly(people, [to]);
-    const note = text({ handover: body.note }, 'handover', { required: true });
-    if (note === undefined) throw invalid('交接說明（note）為必填');
+    // C-349：交接四欄（做到哪、改了什麼、下一步、注意）；只寫 note 的舊用法照收
+    const four = Object.fromEntries(HANDOVER_FIELDS.map(k => [k, text(body, k)]).filter(([, x]) => x));
+    const structured = Object.keys(four).length > 0;
+    if (structured && (!four.progress || !four.nextStep)) throw invalid('交接四欄至少要寫 progress（做到哪）與 nextStep（下一步）；changes（改了什麼）、caution（注意）選填');
+    const note = text({ handover: body.note }, 'handover', { required: !structured }) || (structured ? `做到哪：${four.progress}；下一步：${four.nextStep}`.slice(0, CARD_LIMITS.handover) : undefined);
+    if (note === undefined) throw invalid('交接說明（note）為必填；或改寫四欄：progress、changes、nextStep、caution');
     const at = nowIso(), fromName = people.get(c.owner_id || me.id)?.name || me.name, toName = people.get(to).name;
     // C-241：交接只換負責人、留紀錄，狀態維持（進行中還是進行中）；接手者接單時自己改
     // C-242：唯一例外——AI 交給人類＝請人類驗收：狀態改「待確認」、等誰＝那位人類（人類紀錄、決策卡不套用）
@@ -631,9 +655,11 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const stateNote = verify ? `狀態 ${c.status} → 待確認，等 ${toName} 驗收` : reopen ? '狀態 待確認 → 進行中' : queued ? `狀態 待整理 → 待處理，等 ${toName} 接手` : `狀態維持：${c.status}`;
     const logs = [`交接 ${fromName} → ${toName}：${note}（${stateNote}）`];
     await save(c, sets, logs, me, at);
+    await db.run('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', c.seq, at, me.id, HANDOVER_LOG, JSON.stringify({ to, ...four, ...(structured && !body.note ? {} : { note }) })); // C-349：交接後認領清空，等接手的人 [接單]
     invalidatePeople();
     // 專案標記取自卡片的專案欄位（C-146 A）
-    const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${toName}：${note}（${verify ? '等你驗收' : stateNote}）`;
+    const fourText = structured ? '\n' + HANDOVER_FIELDS.filter(k => four[k]).map(k => `• ${FIELD_LABEL[k]}：${four[k]}`).join('\n') : '';
+    const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)} → @${toName}：${structured && !body.note ? four.progress : note}（${verify ? '等你驗收' : stateNote}）${fourText}`;
     let messageId = null, notifyError = null;
     if (c.type === NOTE) return { ...view(await load(params.id), people), handoverMessageId: null }; // C-218：人類紀錄交接不發群組訊息
     try {
@@ -642,6 +668,36 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
     } catch (err) { notifyError = err.message; }
     return { ...view(await load(params.id), people), handoverMessageId: messageId, ...(notifyError ? { notifyError } : {}) };
+  });
+
+  // C-349 接手：別人正在做（認領中）的卡，要改程式或狀態前先接手。不是鎖定：留紀錄、通知原本在做的人，認領改成自己。
+  // 沒人認領時就是單純認領（reason 選填）；別人認領中 reason 必填。不改負責人、不改狀態（那些照原本的規則）
+  route('POST', '/api/cards/:id/takeover', async ({ ctx, me, req, params }) => {
+    const body = await readJson(req);
+    const c = await load(params.id, me);
+    if (c.type === NOTE && me.kind !== 'human') throw aiNoteForbidden();
+    if (c.type === '決策') throw new ApiError(400, 'NO_CLAIM_DECISION', '決策卡片不用認領，它在等決策者決定。');
+    if (CLOSED_ST.includes(c.status)) throw new ApiError(400, 'CARD_CLOSED', '已完成或已封存的卡片不能接手；新工作請開新卡。');
+    const people = await peopleMap(ctx);
+    const cl = (await claimsOf(db, [c.seq])).get(c.seq);
+    if (cl?.by === me.id) return { ...view(c, people), claim: mark(people, cl.by, cl.at), alreadyClaimed: true };
+    const reason = text({ takeover: body.reason }, 'takeover', { required: !!cl });
+    if (cl && !reason) throw invalid(`這張卡 ${people.get(cl.by)?.name || cl.by} 正在做，接手要寫 reason（為什麼由你接手）`);
+    const at = nowIso(), prev = cl ? people.get(cl.by) : null;
+    const line = cl ? `${me.name} 接手（原本 ${prev?.name || cl.by} 從 ${cl.at} 起在做）：${reason}` : `${me.name} 認領，開始做${reason ? `：${reason}` : ''}`;
+    await db.batch([
+      ['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, CLAIM_LOG, line]],
+      ['UPDATE cards SET updated_at = ? WHERE seq = ?', [at, c.seq]], // 不加 version：認領不是卡片欄位，不要讓負責人的 PATCH 撞版本
+    ]);
+    let messageId = null, notifyError = null;
+    if (prev && c.type !== NOTE) { // 通知原本在做的人（只是知會）
+      try {
+        const r = await createMessage(ctx, me, { text: `[通知] ${c.project ? `【${projectName(c.project)}】` : ''}${cardNo(c.seq)} ${plainTitle(c.title)}：${me.name} 接手，@${prev.name} 請先停手、把做到哪交代一下。原因：${reason}`, requestId: `takeover_${c.uid}_${at}`.slice(0, 128), recipientIds: [prev.id], replyFrom: [], project: c.project });
+        messageId = r.message.messageId;
+        await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
+      } catch (err) { notifyError = err.message; }
+    }
+    return { ...view({ ...c, updated_at: at }, people), claim: mark(people, me.id, at), ...(prev ? { previousClaim: mark(people, cl.by, cl.at), takeoverMessageId: messageId } : {}), ...(notifyError ? { notifyError } : {}) };
   });
 
   function humansOnly(people, ids, changingType = false) {

@@ -44,7 +44,7 @@ try {
     ['/api/messages?brief=1', ['text']], [`/api/messages/${msg.messageId}`, ['text']], [`/api/messages/${msg.messageId}/around`, ['text']],
     ['/api/notifications?status=pending', ['preview']],
     ['/api/cards', ['title', 'reason', 'next', 'question', 'recommendation', 'options', 'impact', 'afterNext']],
-    [`/api/cards/${card.cardId}`, ['text', 'title', 'reason', 'next']], // log[].text 含交接 note
+    [`/api/cards/${card.cardId}`, ['text', 'title', 'reason', 'next', 'note']], // log[].text 含交接 note；C-349 起上一棒交接 handover.note 也在
     ['/api/suggestions', ['title', 'why']], ['/api/reports', ['title', 'detail']], ['/api/wishes', ['title', 'why']],
     ['/api/dm', ['text']], ['/api/me/skills', ['description']], ['/api/projects/平台/skills', ['description']], [`/api/me/skills/${skillId}/files`, ['text']],
     ['/api/search/messages?q=' + encodeURIComponent('忽略'), ['text']],
