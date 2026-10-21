@@ -415,7 +415,9 @@
       m.querySelector('button')?.focus();
     }
   }
-  function goTop(page) { closeSheet(false); if (hasHub()) setProjectView('hub', page); else showPage(page); }
+  // C-358：「我的 AI」在專案裡打開就留在那個專案（新角色、預設專案都用它）；其他第一層頁面照舊回總覽
+  const inProjectView = () => PROJECTS.includes(projectView());
+  function goTop(page) { closeSheet(false); if (page === 'myai' && inProjectView()) return showPage(page); if (hasHub()) setProjectView('hub', page); else showPage(page); }
   document.addEventListener('click', e => {
     const b = e.target.closest('.av-btn');
     if (b) return avOpen($('#av-menu').hidden, b);
@@ -1154,7 +1156,7 @@
   const PAGE_SLUG = { messages: 'messages', inbox: 'inbox', work: 'work', team: 'team', files: 'files' };
   function parseRoute() {
     const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
-    const page = x => (PAGE_SLUG[x] || x === 'dm' ? x : PAGE_BY_NAME[x] || null);
+    const page = x => (PAGE_SLUG[x] || x === 'dm' ? x : x === 'my-ai' ? 'myai' : PAGE_BY_NAME[x] || null); // C-358 /p/<專案>/my-ai
     if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.slug === seg[1]) || state.projectList.find(x => x.id === seg[1]) || state.projectList.find(x => x.name === seg[1]); if (p && page(seg[2]) === 'dm') { state.dmAi = seg[3] || null; state.dmOpenOnBoot = true; } return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
     if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
@@ -1164,8 +1166,9 @@
     return { view: null, page: null };
   }
   function routePath() {
-    if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     const v = projectView();
+    if (state.page === 'myai' && PROJECTS.includes(v)) return `/p/${encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/my-ai`; // C-358
+    if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     if (v === 'hub') return '/';
     return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/${PAGE_SLUG[state.page] || 'messages'}`; // C-285 網址英文名
   }
@@ -5010,10 +5013,12 @@
   async function openMyAi(waitFor = null) {
     const body = openModal('我的 AI', `
       <div class="ma-head"><span class="ma-sum" id="ma-sum">載入中…</span><span class="grow"></span>
+        ${inProjectView() ? '<button type="button" class="btn ghost" id="ma-all">看全部 AI</button>' : ''}
         <button type="button" class="btn ghost" id="ma-skills">技能庫 ›</button>
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI</button></div>
-      <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
+      <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: inProjectView() ? `你在「${projName(projectView())}」的 AI；新增和新角色都用這個專案。點一列看接入、技能、設定。` : '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
     let items = [];
+    const scope = inProjectView() ? projectView() : null; // C-358
     const open = new Map(); // AI id → 展開的分頁
     let menuFor = null;
     const row = id => { const ai = items.find(x => x.participantId === id); const el = body.querySelector(`[data-ma="${CSS.escape(id)}"]`); if (ai && el) { el.outerHTML = myAiRowHtml(ai, open.get(id), menuFor === id); if (open.get(id) === 'skills') loadSkills(ai); } };
@@ -5021,7 +5026,7 @@
       const list = items.slice().sort((a, b) => maRank(a) - maRank(b));
       const act = items.filter(a => a.status === 'active');
       const soon = act.filter(maWarn).length, on = act.filter(a => a.isOnline).length, sw = act.filter(a => a.skillsWaiting > 0).length;
-      body.querySelector('#ma-sum').innerHTML = `${items.length} 個 · ${on} 在線${soon ? ` · <span class="warn-text">${soon} 個 Token 快到期</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 個有技能等你允許</span>` : ''}`;
+      body.querySelector('#ma-sum').innerHTML = `${scope ? `<b>${esc(projName(scope))}</b> 的 AI · ` : ''}${items.length} 個 · ${on} 在線${soon ? ` · <span class="warn-text">${soon} 個 Token 快到期</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 個有技能等你允許</span>` : ''}`;
       body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId)).join('')
         : '<p class="muted">還沒有 AI 助手。按「＋ 新增 AI」選一個角色範例開始。</p>';
       for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
@@ -5029,6 +5034,7 @@
     async function draw() {
       items = (await Promise.all([api('/api/my-ais'), waitFor]))[0].items; waitFor = null;
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
+      if (scope) items = items.filter(a => (a.projects || []).includes(scope) || state.projMeta.crossRoleIds.includes(a.participantId));
       drawList();
     }
     // 技能分頁：展開才讀（不加清單的讀取）
@@ -5037,6 +5043,7 @@
       if (box) await drawAiSkills(box, ai, n => { if (ai.skillsWaiting !== n) { ai.skillsWaiting = n; drawList(); } });
     }
     body.querySelector('#ai-new').onclick = () => openAiForm(null);
+    body.querySelector('#ma-all')?.addEventListener('click', () => setProjectView('hub', 'myai'));
     body.querySelector('#ma-skills').onclick = () => {
       if (isAdmin() || myLeadProjects().length) { perm.tab = 'skills'; skv.data = null; goTop('perm'); } else openSkillsView('');
     };
@@ -5540,7 +5547,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   // C-182：AI 屬於哪些專案（新增、編輯都能勾）；只列自己在的專案，不在的灰掉寫原因；跨專案角色固定在所有專案
   function aiProjField(ai) {
     const cross = ai && state.projMeta.crossRoleIds.includes(ai.participantId);
-    const has = p => (ai ? (ai.projects || []).includes(p) : myProjects().length === 1);
+    const has = p => (ai ? (ai.projects || []).includes(p) : myProjects().length === 1 || p === projectView()); // C-358：在專案裡新增預設這個專案
     const boxes = PROJECTS.map(p => myProjects().includes(p)
       ? `<label class="chk"><input type="checkbox" name="proj" value="${esc(p)}" ${has(p) ? 'checked' : ''} ${cross ? 'disabled' : ''}> ${esc(projName(p))}</label>`
       : `<label class="chk off"><input type="checkbox" disabled> ${esc(projName(p))}<span class="muted small">（你不在這個專案）</span></label>`).join('');
