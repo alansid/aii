@@ -121,6 +121,21 @@ try {
   let lib = (await call(liu.token, '/api/projects/平台/skills')).body.items;
   assert.deepEqual(lib.find(x => x.name === 'write-report').install, { target: 3, installed: 1, waitingOwner: 0 }, '已裝 1／3（沒限定角色：兩個 PG、一個 UX）');
   assert.equal(lib.find(x => x.name === 'deploy-helper').install.waitingOwner, 3, '含腳本：3 台等主人允許');
+  // C-351：技能分頁一次拿全部（各專案數量、能否上傳／管理、待你核准、已裝數），抽屜才讀「裝到哪些 AI」
+  const all = (await call(wang.token, '/api/skills')).body;
+  assert.deepEqual(all.projects.map(p => p.id), ['平台'], '只列自己所在的專案');
+  assert.ok(all.projects[0].canUpload && all.projects[0].canManage && all.projects[0].count > 0, 'leader 能上傳、能管理，有數量');
+  assert.deepEqual(all.items.find(x => x.name === 'write-report').install, { target: 3, installed: 1, waitingOwner: 0 }, '清單就帶已裝數，不用再讀');
+  assert.ok(all.items.find(x => x.name === 'two-step').canReview, 'leader 看得到要他核准的');
+  const cAll = (await call(chen.token, '/api/skills')).body;
+  assert.ok(!cAll.projects[0].canManage && !cAll.items.find(x => x.name === 'two-step').canReview, '一般成員（上傳者）不能核准');
+  assert.ok((await call(liu.token, '/api/skills')).body.projects.some(p => p.id === '銀行系統'), '管理員看得到所有專案');
+  assert.equal((await call(ai.tok, '/api/skills')).status, 200, 'AI 也能看清單');
+  const dhId = lib.find(x => x.name === 'deploy-helper').skillId;
+  const det = (await call(liu.token, `/api/skills/${dhId}`)).body;
+  assert.ok(det.canManage && det.installs.length === 3 && det.installs.every(a => a.state === 'waiting' && a.mine && a.owner === '劉昱志'), '抽屜：3 台都等主人（我）允許');
+  assert.ok(!(await call(wang.token, `/api/skills/${dhId}`)).body.installs.some(a => a.mine), '別人的 AI 不算「我的」');
+  assert.match((await up(ai.tok, skill('by-ai'))).body.error?.message || '', /AI 不能上傳技能，請所屬人類上傳/, 'AI 上傳的錯誤講清楚');
 
   await call(liu.token, `/api/my-ais/${ai.id}/skills/${dh.skillId}`, 'PUT', { allow: true });
   o = await run(wd, ['--agent', AG, '--base', BASE, '--skills-only']); // 沒帶 --tool：用 watcher.env 記的

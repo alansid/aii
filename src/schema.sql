@@ -332,7 +332,7 @@ CREATE TABLE IF NOT EXISTS skills (
   reviewed_at TEXT,
   review_note TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_skills_project ON skills (project, name, version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_version ON skills (project, name, version); -- C-353：版本號唯一（取代 idx_skills_project）
 CREATE INDEX IF NOT EXISTS idx_skills_status ON skills (status, project);
 CREATE TABLE IF NOT EXISTS skill_allows (
   ai_id TEXT NOT NULL,

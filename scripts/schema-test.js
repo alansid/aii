@@ -13,6 +13,8 @@ try {
   const cols = t => new Set(db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name));
   const idx = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map(r => r.name));
   const miss = [];
+  const dropped = new Set();
+  for (const f of fs.readdirSync(new URL('migrations/', root)).filter(f => f.endsWith('.sql'))) for (const [, n] of fs.readFileSync(new URL('migrations/' + f, root), 'utf8').replace(/--.*$/gm, '').matchAll(/DROP INDEX\s+(?:IF EXISTS\s+)?(\w+)/gi)) dropped.add(n);
   for (const f of fs.readdirSync(new URL('migrations/', root)).filter(f => f.endsWith('.sql')).sort()) {
     const sql = fs.readFileSync(new URL('migrations/' + f, root), 'utf8').replace(/--.*$/gm, '');
     for (const [, t, c] of sql.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(\w+)/gi)) {
@@ -22,7 +24,7 @@ try {
       if (!cols(t).size) miss.push(`${f}: 表 ${t}`);
     }
     for (const [, name] of sql.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF NOT EXISTS\s+)?(\w+)/gi)) {
-      if (!idx.has(name)) miss.push(`${f}: 索引 ${name}`);
+      if (!idx.has(name) && !dropped.has(name)) miss.push(`${f}: 索引 ${name}`);
     }
   }
   assert.deepEqual(miss, [], 'schema.sql 少了 migrations 加的欄位／索引：' + miss.join('、'));
