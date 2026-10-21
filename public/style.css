@@ -2753,3 +2753,24 @@ html, body { overflow-x: clip; }
   .fb.open .fb-f { display: flex; }
   .fb-cnt { width: 100%; margin-left: 0; }
 }
+
+/* C-369 申請加入專案 */
+.hub-join { display: inline-block; margin: 10px 2px 4px; }
+.pm-join { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.pm-join .pm-set { margin: 0; }
+.pm-join-note { display: flex; flex-direction: column; gap: 4px; }
+.pm-join-note input { width: 100%; box-sizing: border-box; }
+.pm-join-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; }
+.jl-row, .jr-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 2px; border-top: 1px solid var(--border); }
+.jl-row:first-child, .jr-row:first-child { border-top: 0; }
+.jl-row { align-items: center; }
+.jl-main, .jr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.jl-form { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin: 0 0 6px; background: var(--surface-2); border-radius: 10px; }
+.jl-form textarea { width: 100%; box-sizing: border-box; }
+.jl-last { font-size: .82rem; color: var(--danger); }
+.jl-acts, .jr-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.jr-acts { margin-top: 6px; }
+.jr-acts .grow { flex: 1; }
+.jr-note { font-size: .9rem; }
+.jr-acts select { width: auto; flex: none; min-width: 0; }
+.jl-form .jl-acts { justify-content: flex-end; }

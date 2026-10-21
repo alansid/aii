@@ -348,3 +348,21 @@ CREATE TABLE IF NOT EXISTS skill_installs (
   PRIMARY KEY (ai_id, skill_id)
 );
 CREATE INDEX IF NOT EXISTS idx_skill_installs_skill ON skill_installs (skill_id);
+
+-- C-369 申請加入專案（migrations/0027_join_requests.sql）
+CREATE TABLE IF NOT EXISTS join_requests (
+  id TEXT PRIMARY KEY,
+  project TEXT NOT NULL,
+  participant_id TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+  reason TEXT NOT NULL DEFAULT '',          -- 拒絕原因（給申請人看）
+  role TEXT NOT NULL DEFAULT '',            -- 核准時選的角色
+  read_only INTEGER NOT NULL DEFAULT 0,     -- 核准時選唯讀
+  decided_by TEXT,
+  decided_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_join_pending ON join_requests (project, participant_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_join_status ON join_requests (status, project);
+CREATE INDEX IF NOT EXISTS idx_join_person ON join_requests (participant_id, created_at);

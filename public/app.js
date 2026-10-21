@@ -1064,7 +1064,7 @@
   async function loadProjectList() {
     const d = await api('/api/projects');
     state.projectList = d.items;
-    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {}, feedbackProject: d.feedbackProject || '平台' }; // C-294、C-300
+    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {}, join: d.join || {}, feedbackProject: d.feedbackProject || '平台' }; // C-369 join // C-294、C-300
     document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
     if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
     PROJECTS.length = 0;
@@ -1106,6 +1106,7 @@
     for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
     for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId });
     for (const n of (work.notes || []).filter(x => x.dm)) items.push({ p: n.project ?? null, kind: '私訊', title: `${n.sender?.name || ''} 回你了`, key: 'n:' + n.notificationId });
+    for (const j of work.joins || []) items.push({ p: myProjects().includes(j.project) ? j.project : null, kind: '申請', title: `${j.name} 申請加入${j.projectName}`, key: 'j:' + j.id }); // C-369
     return items.filter(x => !x.p || myProjects().includes(x.p));
   }
   function todoByView() {
@@ -1139,6 +1140,7 @@
           <div class="hs-head">我的專案</div>
           ${myProjects().map(p => `<button type="button" class="hs-item" data-proj="${esc(p)}" title="${esc(projName(p))}">${projIcon(p, 22)}<span class="hs-name">${esc(projName(p))}</span>${n(p)}</button>`).join('') || '<p class="muted small hs-empty">還沒有加入任何專案</p>'}
           <button type="button" class="hs-item hs-muted" data-proj="cross">${projIcon('cross', 22)}<span class="hs-name">跨專案頻道</span>${n('cross')}</button>
+          <button type="button" class="hs-item hs-add" data-join-open><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">申請加入專案</span></button>
           ${isAdmin() ? '<button type="button" class="hs-item hs-add" data-hub-newproj><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">新增專案</span></button>' : ''}
         </nav>`;
         return;
@@ -2846,7 +2848,7 @@
   work.notes = [];
   async function loadNotes() {
     work.notesAt = Date.now();
-    const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=50&order=desc'), api('/api/me/notices').catch(() => ({ items: [] }))]);
+    const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=50&order=desc'), api('/api/me/notices').catch(() => ({ items: [] })), loadJoins()]); // C-369 待審申請（只有 leader／管理員讀）
     const dmBefore = (work.notes || []).filter(n => n.dm).map(n => n.notificationId).join();
     work.notes = a.items; work.sec = b.items;
     if (dmVisible() && work.notes.filter(n => n.dm).map(n => n.notificationId).join() !== dmBefore) loadDmSummary(); // C-270：有私訊通知才更新清單
@@ -2857,6 +2859,13 @@
   const secDev = d => String(d || '').replace(/^[^·]+·\s*/, '');
   function secHtml(n) {
     const when = fmtDate(n.createdAt);
+    if (/^join_/.test(n.kind)) { // C-369
+      const [ico, hint, act] = n.kind === 'join_request' ? ['🙋', '核准或拒絕：', '<button type="button" class="btn small" data-join-review="">看申請</button>']
+        : n.kind === 'join_approved' ? ['✅', '重新整理頁面，側欄就會出現這個專案。', ''] : ['📮', '可以改寫想做什麼，隨時再申請。', '<button type="button" class="btn small" data-join-open>再申請</button>'];
+      return `<div class="sec-note" id="sec-${esc(n.id)}"><span class="sec-ico" aria-hidden="true">${ico}</span>
+      <div class="sec-main"><span>${esc(n.detail)} · ${esc(when)}</span><span class="small">${hint}</span></div>
+      <div class="sec-acts">${act}<button type="button" class="btn small" data-sec-read="${esc(n.id)}" aria-label="${esc(n.detail)} 知道了">知道了</button></div></div>`;
+    }
     const [text, hint] = n.kind === 'password_login' ? [`有新裝置用你的帳號密碼登入：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它並改密碼。']
       : n.kind === 'rescue_login' ? [`有裝置用主機救援連結登入你的帳號：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並檢查誰有主機部署權限。']
       : n.kind === 'login_code_read' ? [`有裝置讀取了你的登入碼：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並換一組登入碼（舊的會失效）。'] // C-335 S2
@@ -2943,6 +2952,7 @@
     return `<div class="hub"><section class="hub-main">
         <div class="work-head"><div class="work-title"><h2>${esc(greeting())}，${esc(shortName(state.me?.name || ''))}</h2><span class="muted small">${esc(new Date().toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}${counts.hub ? ` · ${counts.hub} 件要你處理` : ' · 沒有要你處理的事'}</span></div></div>
         <div class="hub-grid">${cards || '<p class="muted hub-empty">你還沒有加入任何專案，請群組管理員把你加入專案；在那之前可以先到跨專案頻道。</p>'}</div>
+        <button type="button" class="link hub-join" data-join-open>＋ 申請加入專案</button>
         <button type="button" class="hub-card hub-cross" data-proj="cross" aria-label="進入跨專案頻道">${projIcon('cross', 44)}<span class="hc-name"><b>跨專案頻道</b><span class="small">規則公告、跨團隊協調。${cm ? `最新：${esc(cm.author.name)} ${whenText(cm.createdAt)}「${esc(oneLine(cm.text, 40))}」` : '最近 12 小時沒有新訊息'}</span></span><span class="hc-go">進入 ›</span></button>
       </section>
       <aside class="hub-todo" aria-label="要你處理">${hubTodoHtml()}</aside></div>`;
@@ -2951,7 +2961,7 @@
   function hubTodoHtml(inModal = false) {
     const items = hubTodoItems();
     const groups = [...myProjects(), null].map(p => [p, items.filter(x => x.p === p)]).filter(([, l]) => l.length);
-    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg', 驗收: 'ver', 回覆: 'ask', 私訊: 'sg' };
+    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg', 驗收: 'ver', 回覆: 'ask', 私訊: 'sg', 申請: 'ver' };
     return `${inModal ? '' : `<div class="ht-head"><h3>要你處理</h3>${items.length ? `<span class="ps-count">${items.length}</span>` : ''}<span class="grow"></span><span class="muted small">各專案彙總</span></div>`}
       ${groups.length ? groups.map(([p, l]) => `<div class="ht-group">${esc(p ? projName(p) : '跨專案頻道')}</div>
         ${l.map(x => `<button type="button" class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(p || 'cross')}"><span class="ht-tag ${cls[x.kind]}">${x.kind}</span><span class="ht-title">${esc(x.title)}</span><span class="ht-go" aria-hidden="true">›</span></button>`).join('')}`).join('')
@@ -2964,6 +2974,7 @@
     if (!r) return;
     if (r.closest('.modal')) closeModal();
     const key = r.dataset.hubTodo, id = key.slice(2);
+    if (key[0] === 'j') return openJoinReview(work.joins.find(j => j.id === id)?.project || ''); // C-369
     await setProjectView(r.dataset.hubProj, 'inbox');
     work.focusItem = { sel: key[0] === 'n' ? `#fyi-${CSS.escape(id)}` : `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row', v: 'data-ver-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
     if (!applyFocusItem() && key[0] === 'c') openCard(id);
@@ -3003,7 +3014,8 @@
     const sg = (work.sugg || []).filter(x => inView(x.project));
     const verifyMe = all.filter(verifyingMe); // C-242
     const asks = askNotes(), dms = dmNotes();
-    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
+    const joins = (work.joins || []).filter(j => projectView() === 'hub' || j.project === projectView()); // C-369
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
     const askSection = asks.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>要你回覆</h3><span class="wcount ora">${asks.length}</span><span class="muted small">別人指定要你回覆的訊息；回覆了或按「不用回」就移走</span></div>
         ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
@@ -3030,7 +3042,11 @@
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dms.length}</span><span class="muted small">只有你看得到</span></div>
         ${dms.map(n => `<div class="sugg-row" id="fyi-${esc(n.notificationId)}"><div class="sugg-main"><b>${esc(n.sender.name)} 回你了</b><span class="muted small">${esc(oneLine(String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${agoText(n.createdAt)}</span></div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}">打開私訊</button></div></div>`).join('')}</section>` : '';
-    return dmSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
+    const joinSection = joins.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>待審申請</h3><span class="wcount ora">${joins.length}</span><span class="muted small">同仁申請加入專案，要你核准或拒絕</span></div>
+        ${joins.map(j => `<div class="sugg-row" data-join-row="${esc(j.id)}"><div class="sugg-main"><b>${esc(j.name)} 申請加入${esc(j.projectName)}</b><span class="muted small">${j.note ? `「${esc(oneLine(j.note, 60))}」` : '沒寫原因'} · ${agoText(j.createdAt)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-join-review="${esc(j.project)}">審核</button></div></div>`).join('')}</section>` : '';
+    return dmSection + joinSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
@@ -6431,6 +6447,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       <div class="pm-dhead"><div class="pm-dtitle"><strong>${esc(projName(pj))}</strong><span class="pm-sub"> · API 代號 ${esc(pj)} · ${members.length} 人</span></div><span class="grow"></span>
         ${admin ? '<button type="button" class="btn small" data-pm-invite>邀請新的人</button>' : ''}${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
       ${pr ? repoLine(pr, permCanEdit(pj), { code: false }) : ''}
+      ${permCanEdit(pj) ? joinPanelHtml(pj) : ''}
       ${findBarHtml('perm', { roles: findRoles(members, pj), shown: shown.length, total: members.length, unit: '人' })}
       <table class="pm-table">${pmHead('成員')}
       <tbody>${fs.f.kind === 'ai' ? '' : pmGrp(`人類 · ${humans.length}`) + (humans.map(row).join('') || `<tr><td colspan="4" class="muted small">${findOn(fs) ? '沒有符合的人類' : '沒有人類成員'}</td></tr>`)}
@@ -6605,6 +6622,139 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     drawPermBar();
     if (['pm-pq', 'pm-mq', 'pm-pickq', 'fb-q-perm'].includes(keep)) { const q = $('#' + keep); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
     if (perm.moreOpen) box.querySelector('.pm-more-menu [role="menuitem"]')?.focus();
+  }
+  // ---------- C-369 申請加入專案 ----------
+  // leader 打開「開放申請」才看得到；只有人類能申請；送出不自動加入，leader／管理員核准（選角色、一般／唯讀）或拒絕（寫原因）
+  work.joins = [];
+  const joinReviewer = () => isAdmin() || myLeadProjects().length > 0;
+  async function loadJoins() {
+    if (!joinReviewer()) { work.joins = []; return; }
+    try { work.joins = (await api('/api/join-requests')).items; } catch { work.joins = []; }
+  }
+  async function afterJoinChange() {
+    await Promise.all([loadProjectList(), loadParticipants(), loadJoins()]).catch(() => {});
+    updateTodoBadge();
+    if (state.page === 'perm') drawPerm();
+  }
+  function joinPanelHtml(pj) {
+    const j = state.projMeta.join?.[pj] || { open: false, note: '', pending: 0 };
+    return `<div class="pm-join"><div class="pm-set"><div class="pm-set-t"><b id="pj-join-t">開放申請加入</b><span class="pm-sub">打開後，群組裡的同仁會在「申請加入專案」看到這個專案名稱和說明；要你核准才會加入</span></div>
+        ${pmSw(j.open, `data-pj-join="${esc(pj)}" aria-describedby="pj-join-t"`, false, '開放申請加入')}</div>
+      ${j.open ? `<label class="pm-join-note"><span class="muted small">給申請的人看的說明（選填，100 字內）</span><input data-pj-join-note="${esc(pj)}" maxlength="100" value="${esc(j.note)}" placeholder="例：外食熱量追蹤 POC，歡迎 PO、UX 加入"></label>` : ''}
+      ${j.pending ? `<button type="button" class="link small pm-join-go" data-join-review="${esc(pj)}"><span class="pill-tag yellow">待審 ${j.pending}</span> 看申請 ›</button>` : ''}</div>`;
+  }
+  async function saveJoinSettings(pj, open, note) {
+    try { await api(`/api/projects/${encodeURIComponent(pj)}/join-settings`, { method: 'PUT', body: { open, note } }); await afterJoinChange(); toast(open ? '已開放申請加入' : '已關閉申請'); }
+    catch (err) { toast(err.message); }
+  }
+  document.addEventListener('click', async e => {
+    const sw = e.target.closest?.('[data-pj-join]');
+    if (sw) {
+      const pj = sw.dataset.pjJoin, j = state.projMeta.join?.[pj] || {}, on = !j.open;
+      if (on && !await confirmDialog({ title: `開放申請加入「${projName(pj)}」？`, confirmText: '打開',
+        message: '專案名稱和說明會給<b>整個群組</b>看到（包括不在這個專案的同仁）。送出的申請要 leader 或管理員核准才會加入。' })) return;
+      return saveJoinSettings(pj, on, j.note || '');
+    }
+    const rv = e.target.closest?.('[data-join-review]');
+    if (rv) { if (rv.closest('#modal-root .modal')) closeModal(); return openJoinReview(rv.dataset.joinReview); }
+    if (e.target.closest?.('[data-join-open]')) { if (e.target.closest('#modal-root .modal')) closeModal(); return openJoinList(); }
+  });
+  document.addEventListener('change', e => {
+    const inp = e.target.closest?.('[data-pj-join-note]');
+    if (inp) saveJoinSettings(inp.dataset.pjJoinNote, true, inp.value.trim());
+  });
+  const joinIcon = p => `<span class="pico" style="--pc:#0f766e;--psz:34px" aria-hidden="true">${esc([...p.name][0] || '?')}</span>`;
+  // 同仁：可以申請的專案
+  async function openJoinList() {
+    const body = openModal('申請加入專案', '<div id="jl" class="jl"><p class="muted small">載入中…</p></div>', { size: 'narrow', sub: '只列開放申請的專案。送出後要 leader 或管理員核准，結果會通知你。' });
+    let items = [], formFor = null;
+    const draw = () => {
+      const box = body.querySelector('#jl');
+      if (!box) return;
+      box.innerHTML = items.length ? items.map(p => `<div class="jl-row">${joinIcon(p)}<div class="jl-main"><b>${esc(p.name)}</b>
+          <div class="muted small">${[p.note ? esc(p.note) : '', p.leaders.length ? `leader ${esc(p.leaders.join('、'))}` : p.admin ? `管理員 ${esc(p.admin)}` : '', `${p.members} 人`].filter(Boolean).join(' · ')}</div></div>
+          ${p.status === 'pending' ? '<span class="pill-tag yellow">審核中</span>' : formFor === p.id ? '' : `<button type="button" class="btn primary small" data-jl-apply="${esc(p.id)}">申請</button>`}</div>
+        ${formFor === p.id ? `<form class="jl-form" data-jl-form="${esc(p.id)}"><b>申請加入${esc(p.name)}</b>
+          ${p.lastRejected ? `<div class="jl-last">上次被拒：${esc(p.lastRejected.reason)}</div>` : ''}
+          <textarea id="jl-note" maxlength="200" rows="2" placeholder="想做什麼（選填）：例：我想幫忙做手機畫面" aria-label="想做什麼（選填）"></textarea>
+          <div class="jl-acts"><button type="button" class="btn" data-jl-cancel>取消</button><button type="submit" class="btn primary">送出申請</button></div>
+          <span class="muted small">送出後要 leader 或管理員核准，結果會通知你。</span></form>` : ''}`).join('')
+        : '<p class="muted">目前沒有開放申請的專案。要加入某個專案，請找那個專案的 leader 或群組管理員。</p>';
+      body.querySelector('#jl-note')?.focus();
+    };
+    body.addEventListener('click', e => {
+      const a = e.target.closest('[data-jl-apply]');
+      if (a) { formFor = a.dataset.jlApply; draw(); }
+      if (e.target.closest('[data-jl-cancel]')) { formFor = null; draw(); }
+    });
+    body.addEventListener('submit', async e => {
+      const f = e.target.closest('[data-jl-form]');
+      if (!f) return;
+      e.preventDefault();
+      const p = items.find(x => x.id === f.dataset.jlForm);
+      try {
+        await api(`/api/projects/${encodeURIComponent(p.id)}/join-requests`, { method: 'POST', body: { note: body.querySelector('#jl-note').value.trim() } });
+        p.status = 'pending'; formFor = null; draw();
+        toast(`已送出申請，等${p.name}的 leader 處理`);
+      } catch (err) { toast(err.message); }
+    });
+    try { items = (await api('/api/join/projects')).items; } catch (err) { items = []; toast(err.message); }
+    draw();
+  }
+  // 拒絕原因（一定要寫，申請人會看到）
+  function askJoinReason(name) {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: `拒絕 ${name} 的申請`, size: 'narrow', body: '<label class="field"><span class="field-label">原因（申請人會看到，200 字內）</span><textarea id="jr-reason" maxlength="200" rows="3" placeholder="例：目前人夠了，下個月再開放"></textarea></label>',
+        foot: '<button class="btn" type="button" data-jx="0">取消</button><button class="btn danger" type="button" data-jx="1">拒絕</button>' });
+      document.body.appendChild(host);
+      const ta = host.querySelector('#jr-reason');
+      ta.focus();
+      const done = ok => { const v = ta.value.trim(); if (ok && !v) { ta.focus(); return toast('請寫一句原因'); } host.remove(); document.removeEventListener('keydown', key, true); resolve(ok ? v : null); };
+      const key = e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+      document.addEventListener('keydown', key, true);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-jx]'); if (b) done(b.dataset.jx === '1'); else if (e.target.closest('[data-close]')) done(false); });
+    });
+  }
+  // leader／管理員：待審申請（pj 空＝全部）
+  async function openJoinReview(pj = '') {
+    const body = openModal(pj ? `待審申請 · ${projName(pj)}` : '待審申請', '<div id="jr" class="jr"><p class="muted small">載入中…</p></div>', { size: 'form', sub: '核准時選角色和一般／唯讀；拒絕要寫一句原因（申請人會看到）。核准了才會加入。' });
+    let items = [];
+    const roleOpts = p => ['', ...ROLE_CHOICES, ...projRoleDefs(p).map(d => d.role).filter(r => !ROLE_CHOICES.includes(r))].map(r => `<option value="${esc(r)}">${r ? esc(r) : '角色：未設定'}</option>`).join('');
+    const draw = () => {
+      const box = body.querySelector('#jr');
+      if (!box) return;
+      box.innerHTML = items.length ? items.map(x => `<div class="jr-row">${avatar(state.participants.get(x.participantId) || { name: x.name, memberType: 'human' })}<div class="jr-main">
+          <div><b>${esc(x.name)}</b> <span class="muted small">${pj ? '' : esc(x.projectName) + ' · '}${esc(fmtTime(x.createdAt))}</span></div>
+          <div class="jr-note">${x.note ? `「${esc(x.note)}」` : '<span class="muted small">沒寫原因</span>'}</div>
+          ${x.lastRejected ? `<div class="muted small">上次被拒：${esc(x.lastRejected.reason)}</div>` : ''}
+          <div class="jr-acts"><select data-jr-role="${esc(x.id)}" aria-label="${esc(x.name)} 的角色">${roleOpts(x.project)}</select>
+            <select data-jr-ro="${esc(x.id)}" aria-label="${esc(x.name)} 一般或唯讀"><option value="">一般成員</option><option value="1">👁 唯讀</option></select>
+            <span class="grow"></span><button type="button" class="btn small danger-outline" data-jr-no="${esc(x.id)}">拒絕</button><button type="button" class="btn small primary" data-jr-ok="${esc(x.id)}">核准加入</button></div></div></div>`).join('')
+        : '<p class="muted">沒有待審的申請。</p>';
+    };
+    body.addEventListener('click', async e => {
+      const ok = e.target.closest('[data-jr-ok]'), no = e.target.closest('[data-jr-no]');
+      const id = ok?.dataset.jrOk || no?.dataset.jrNo, x = id && items.find(i => i.id === id);
+      if (!x) return;
+      try {
+        if (ok) {
+          const role = body.querySelector(`[data-jr-role="${CSS.escape(id)}"]`).value, ro = body.querySelector(`[data-jr-ro="${CSS.escape(id)}"]`).value === '1';
+          await api(`/api/join-requests/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { role, readOnly: ro } });
+          toast(`已核准 ${x.name} 加入${x.projectName}`);
+        } else {
+          const reason = await askJoinReason(x.name);
+          if (!reason) return;
+          await api(`/api/join-requests/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason } });
+          toast(`已拒絕 ${x.name}，原因會通知他`);
+        }
+        items = items.filter(i => i.id !== id); draw();
+        afterJoinChange();
+      } catch (err) { toast(err.message); }
+    });
+    try { items = (await api('/api/join-requests' + (pj ? '?project=' + encodeURIComponent(pj) : ''))).items; } catch (err) { toast(err.message); }
+    draw();
   }
   // C-280：本專案角色（只列自己能管理的專案）：改字、停用／啟用、沒人用才能刪
   function permRolesHtml() {
