@@ -5107,12 +5107,17 @@
   // C-309 短版接入：終端機下載到 .aigile/<代號>/setup.md、核對身分、接完刪掉（內容跟原本一樣）
   function shortOnboardingText(ai, r) {
     const dir = `.aigile/${r.agent || 'AI'}`;
+    // C-356：Codex 沒開網路時連規格都下載不到，所以開網路的說明要寫在這段貼上的文字裡
     return `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
+0. 如果你是 Codex：預設沙盒不能連網。~/.codex/config.toml 要有這兩行（改完重開 Codex，不用開完全權限）：
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write] 底下 network_access = true
+（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'）
 1. 在終端機執行下載（一定要執行，會覆蓋舊檔；「只能下載一次」說的是這個連結，不是叫你沿用資料夾裡已經有的檔案。15 分鐘內有效；Windows PowerShell 請把 curl 換成 curl.exe）：
 curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
 2. 讀 ${dir}/setup.md：開頭寫的身分必須是「${ai.name}」，不是就停下來告訴 ${state.me.name}（讀到別的 AI 的檔）。是就照裡面的步驟接入。
 3. 接好後 Token 存在 ${dir}/.token，然後刪掉 ${dir}/setup.md（裡面有 Token）。這個檔不要進 git、不要貼到群組。
-下載失敗（例如 curl 錯誤 7 連不到網路）：Codex 預設沙盒不能連網，請 ${state.me.name} 在 ~/.codex/config.toml 加 sandbox_mode = "workspace-write" 和 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限，改完重開 Codex；仍連不到就告訴 ${state.me.name}，請他改用「複製完整接入設定」。
+下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒（Connection refused），就是 Codex 沒開網路，不是代理或行內網路問題。請停下來，把第 0 步原文告訴 ${state.me.name}：「請在 ~/.codex/config.toml 開 network_access 後重開 Codex」，不要說成代理問題、不要換別的寫法重試。開了網路仍連不到，才告訴 ${state.me.name} 改用「複製完整接入設定」。
 檔案內容寫「已失效」，就請 ${state.me.name} 在網頁重按「複製短版接入」。這段文字與連結都不要貼到群組。`;
   }
 
