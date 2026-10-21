@@ -968,6 +968,59 @@
     if (q.memberType !== 'human' || !q.projectRoles) return q.role || '';
     return PROJECTS.includes(pj) ? q.projectRoles[pj] || '' : '';
   };
+  // ---------- C-368 找人：成員與權限、@ 選人、我的 AI 共用 ----------
+  // 比對名字、代號（RVVW）、角色名稱與代碼（PG），不分大小寫；篩選在網頁做，不加讀取
+  const findQ = q => (q || '').trim().toLowerCase();
+  const findHit = (p, q, pj) => !q || [p.name, p.shortCode, roleIn(p, pj), p.role, p.roleKey].some(v => String(v || '').toLowerCase().includes(q));
+  const markQ = (text, q) => {
+    const t = String(text ?? ''), i = q ? t.toLowerCase().indexOf(q) : -1;
+    return i < 0 ? esc(t) : `${esc(t.slice(0, i))}<mark>${esc(t.slice(i, i + q.length))}</mark>${esc(t.slice(i + q.length))}`;
+  };
+  // 篩選條件記在這台裝置（關掉再開還在）；搜尋字不記
+  const NO_FIND = { kind: '', role: '', proj: '' };
+  const findPrefs = place => { try { return { ...NO_FIND, ...JSON.parse(store.get('aigile-find:' + place) || '{}') }; } catch { return { ...NO_FIND }; } };
+  const saveFindPrefs = (place, f) => store.set('aigile-find:' + place, JSON.stringify({ kind: f.kind || '', role: f.role || '', proj: f.proj || '' }));
+  const findPass = (p, f, pj) => (!f.kind || p.memberType === f.kind) && (!f.role || roleIn(p, pj) === f.role) && (!f.proj || (p.projects || []).includes(f.proj));
+  const findOn = s => !!(findQ(s.q) || s.f.kind || s.f.role || s.f.proj);
+  const findRoles = (list, pj) => [...new Set(list.map(p => roleIn(p, pj)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  const finders = {};
+  const finder = (place, redraw) => { const st = finders[place] ||= { q: '', f: findPrefs(place), open: false }; st.redraw = redraw; return st; };
+  // 篩選列：搜尋框＋人類／AI＋（專案）＋角色＋「顯示 x／y」；手機把篩選收進「篩選 ▾」
+  function findBarHtml(place, { roles, projs = null, kinds = true, shown, total, unit = '個', ph = '找名字、代號、角色' }) {
+    const st = finders[place], f = st.f, on = !!(f.kind || f.role || f.proj);
+    const opt = (v, t, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
+    return `<div class="fb${st.open ? ' open' : ''}">
+      <input type="search" class="fb-q" id="fb-q-${place}" data-fb-q="${place}" placeholder="🔍 ${esc(ph)}" aria-label="搜尋${esc(ph)}" value="${esc(st.q)}" autocomplete="off">
+      <button type="button" class="btn small fb-more${on ? ' on' : ''}" data-fb-more="${place}" aria-expanded="${st.open}">篩選${on ? ' ·' : ''} ▾</button>
+      <div class="fb-f">
+        ${kinds ? `<div class="fb-kind" role="group" aria-label="人類或 AI">${[['', '全部'], ['human', '人類'], ['ai', 'AI']].map(([v, t]) => `<button type="button" class="chip${f.kind === v ? ' on' : ''}" data-fb-kind="${v}" data-fb="${place}" aria-pressed="${f.kind === v}">${t}</button>`).join('')}</div>` : ''}
+        ${projs ? `<select class="fb-sel" data-fb-proj="${place}" aria-label="專案">${opt('', '專案：全部', f.proj)}${projs.map(x => opt(x, projName(x), f.proj)).join('')}</select>` : ''}
+        <select class="fb-sel" data-fb-role="${place}" aria-label="角色">${opt('', '角色：全部', f.role)}${roles.map(r => opt(r, r, f.role)).join('')}</select>
+      </div>
+      <span class="fb-cnt" aria-live="polite">${shown === total ? `${total} ${unit}` : `顯示 ${shown}／${total}`}</span></div>`;
+  }
+  const findEmptyHtml = (place, none) => `<div class="fb-empty">${none ? '沒有符合的。' : ''}找不到？試試代號（RVVW）或角色（測試、QA）<button type="button" class="link" data-fb-clear="${place}">清除篩選</button></div>`;
+  const findRedraw = (place, typing) => {
+    const st = finders[place];
+    st.redraw();
+    const q = document.getElementById('fb-q-' + place);
+    if (typing && q && document.activeElement !== q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  };
+  document.addEventListener('input', e => { const pl = e.target.dataset?.fbQ; if (pl && finders[pl]) { finders[pl].q = e.target.value; findRedraw(pl, true); } });
+  document.addEventListener('change', e => {
+    const t = e.target, pl = t.dataset?.fbRole || t.dataset?.fbProj, st = pl && finders[pl];
+    if (!st) return;
+    st.f[t.dataset.fbRole ? 'role' : 'proj'] = t.value; saveFindPrefs(pl, st.f); findRedraw(pl);
+  });
+  document.addEventListener('click', e => {
+    const b = e.target.closest?.('[data-fb-kind],[data-fb-clear],[data-fb-more]');
+    const pl = b && (b.dataset.fbMore || b.dataset.fbClear || b.dataset.fb), st = pl && finders[pl];
+    if (!st) return;
+    if (b.dataset.fbMore) st.open = !st.open;
+    else if (b.dataset.fbClear) { st.q = ''; st.f = { ...NO_FIND }; saveFindPrefs(pl, st.f); }
+    else { st.f.kind = b.dataset.fbKind; saveFindPrefs(pl, st.f); }
+    findRedraw(pl);
+  });
   function roleSelectHtml(value, attrs, { changed = false, label = '角色', pj = '', ai = true } = {}) {
     const pr = pj ? projRoleDefs(pj).map(d => d.role).filter(r => !ROLE_CHOICES.includes(r)) : []; // C-280 本專案角色
     const custom = value && !ROLE_CHOICES.includes(value) && !pr.includes(value);
@@ -1631,14 +1684,38 @@
   // C-174：專案內只列該專案的成員（跨專案角色本來就屬於每個專案），「所有人」寫成「所有人（平台）」；跨專案頻道列全部
   const mentionScope = () => { const t = sendTarget(); return t === 'all' ? null : t; };
   const inScope = (p, scope) => !scope || (p.projects || []).includes(scope);
+  // C-368：最近 @ 過的人記在這台裝置（最多 10 位，選單用前 5 位）
+  const RECENT_AT = 'aigile-recent-at';
+  const recentAt = () => { try { return JSON.parse(store.get(RECENT_AT) || '[]'); } catch { return []; } };
+  const noteRecentAt = p => { if (p?.participantId && p.memberType !== 'all') store.set(RECENT_AT, JSON.stringify([p.participantId, ...recentAt().filter(x => x !== p.participantId)].slice(0, 10))); };
   function mentionCandidates(raw) {
-    const q = raw.toLowerCase(), scope = mentionScope();
+    const q = findQ(raw), scope = mentionScope();
     const mine = myProjects();
     const near = p => (p.projects?.length ? p.projects : PROJECTS).some(x => mine.includes(x));
     const people = [...state.participants.values()]
-      .filter(p => p.participantId !== meId() && p.status !== 'disabled' && inScope(p, scope) && !(scope && roOf(p.participantId, scope)) && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q))); // C-294 唯讀的人不列
+      .filter(p => p.participantId !== meId() && p.status !== 'disabled' && inScope(p, scope) && !(scope && roOf(p.participantId, scope)) && findHit(p, q, scope || projectView())); // C-294 唯讀的人不列；C-368 代號、角色代碼也算
     const all = scope ? { ...ALL, label: `${ALL.name}（${projName(scope)}）`, role: `通知${projName(scope)}的所有成員` } : ALL;
-    return [...(!q || ALL.name.includes(q) || all.role.includes(q) ? [all] : []), ...people.filter(near), ...people.filter(p => !near(p))];
+    const sorted = [...people.filter(near), ...people.filter(p => !near(p))];
+    const g = (list, grp) => list.map(p => ({ ...p, _grp: grp, _q: q }));
+    const recentIds = q ? [] : recentAt().filter(id => sorted.some(p => p.participantId === id)).slice(0, 5);
+    const recent = recentIds.map(id => sorted.find(p => p.participantId === id));
+    const rest = sorted.filter(p => !recentIds.includes(p.participantId));
+    const kind = k => rest.filter(p => p.memberType === k);
+    return [...(!q || ALL.name.includes(q) || all.role.includes(q) ? [{ ...all, _q: q }] : []), ...g(recent, '最近 @ 過'),
+      ...(q ? [...g(kind('ai'), 'AI'), ...g(kind('human'), '人類')] : [...g(kind('human'), '人類'), ...g(kind('ai'), 'AI')])];
+  }
+  // 選單一列：分組標題（不能選）＋名字（標黃）＋代號、角色
+  function mentionItemsHtml(items, index, pj) {
+    let last = null;
+    return items.map((p, i) => {
+      const head = p._grp && p._grp !== last ? `<li class="mention-grp" role="presentation">${esc(p._grp)}${p._q ? ` · 符合 ${items.filter(x => x._grp === p._grp).length}` : ''}</li>` : '';
+      last = p._grp || last;
+      const meta = p.memberType === 'all' ? esc(p.role || '') : [p.shortCode ? '#' + markQ(p.shortCode, p._q) : '', markQ(roleIn(p, pj), p._q) + (p._q && p.roleKey && p.roleKey !== roleIn(p, pj) && p.roleKey.toLowerCase().includes(p._q) ? ' (' + markQ(p.roleKey, p._q) + ')' : '')].filter(Boolean).join(' · ');
+      return `${head}<li role="option" data-i="${i}" aria-selected="${i === index}">
+        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${p.label ? esc(p.label) : markQ(p.name, p._q)}</b>
+        <span class="muted small">${meta}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}
+      </li>`;
+    }).join('') + (items.some(p => p._grp) ? '<li class="mention-grp mention-tip" role="presentation">↑↓ 選、Enter 選定、Esc 關；只列這個專案的人</li>' : '');
   }
   // 手打 @ 了不在這個專案的人：輸入框下方先提示，不用等送出才被擋
   function outsideMentions(text, scope = mentionScope()) {
@@ -1685,17 +1762,14 @@
     renderMention();
   }
   function renderMention() {
-    mentionList.innerHTML = mentionState.items.map((p, i) => `
-      <li role="option" data-i="${i}" aria-selected="${i === mentionState.index}">
-        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.label || p.name)}</b>
-        <span class="muted small">${esc(p.memberType === 'all' ? p.role || '' : roleIn(p, mentionScope() || projectView()))}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}
-      </li>`).join('');
+    mentionList.innerHTML = mentionItemsHtml(mentionState.items, mentionState.index, mentionScope() || projectView()); // C-368
     mentionList.hidden = false;
     scrollPicked(mentionList);
   }
   function closeMention() { mentionState = null; mentionList.hidden = true; }
   function pickMention(i) {
     const p = mentionState.items[i];
+    noteRecentAt(p); // C-368
     const insert = '@' + p.name + ' ';
     input.value = input.value.slice(0, mentionState.start) + insert + input.value.slice(mentionState.end);
     const caret = mentionState.start + insert.length;
@@ -1705,7 +1779,7 @@
     onInput();
   }
   mentionList.addEventListener('mousedown', e => {
-    const li = e.target.closest('li');
+    const li = e.target.closest('li[data-i]');
     if (li) { e.preventDefault(); pickMention(Number(li.dataset.i)); }
   });
 
@@ -4948,7 +5022,7 @@
   const maAvatar = ai => ai.avatar || ai.imgUrl || ai.avatarImg ? avatar(ai)
     : avatar({ ...ai, avatar: /^[A-Za-z]{2,4}$/.test(ai.roleKey || '') ? ai.roleKey.toUpperCase() : [...(ai.name || 'AI')][0] });
   const maRank = ai => ai.status !== 'active' ? 4 : maNeedsYou(ai) ? 0 : ai.isOnline || ai.standby ? 1 : 2;
-  function myAiRowHtml(ai, tab, menu) {
+  function myAiRowHtml(ai, tab, menu, q = '') {
     const id = esc(ai.participantId), active = ai.status === 'active', level = tokenLevel(ai.expiresAt);
     const [stCls, stText] = maState(ai), pjs = state.projMeta.crossRoleIds.includes(ai.participantId) ? null : (ai.projects || []).filter(p => PROJECTS.includes(p));
     const env = ai.environment ? (MA_INSIDE.includes(ai.environment) ? `<span class="pill-tag red">${esc(ai.environment)}</span>` : esc(ai.environment)) : '';
@@ -4969,8 +5043,8 @@
     return `<div class="ma-item${tab ? ' open' : ''}" data-ma="${id}">
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
         ${maAvatar(ai)}
-        <div class="ma-main"><div class="ma-nm"><b>${esc(ai.name)}</b><span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
-          <div class="ma-meta">${[esc(ai.role || ''), env].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role || env ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) ? `<span class="ma-mtok warn-text">${ai.role || env ? ' · ' : ''}${level === 'expired' ? 'Token 已過期' : esc(maWhen(ai.expiresAt)) + ' 到期'}</span>` : ''}</div></div>
+        <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
+          <div class="ma-meta">${[markQ(ai.role || '', q), env].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role || env ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) ? `<span class="ma-mtok warn-text">${ai.role || env ? ' · ' : ''}${level === 'expired' ? 'Token 已過期' : esc(maWhen(ai.expiresAt)) + ' 到期'}</span>` : ''}</div></div>
         <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
       </div>
       ${tab ? myAiPanelHtml(ai, tab) : ''}
@@ -5016,19 +5090,27 @@
         ${inProjectView() ? '<button type="button" class="btn ghost" id="ma-all">看全部 AI</button>' : ''}
         <button type="button" class="btn ghost" id="ma-skills">技能庫 ›</button>
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI</button></div>
+      <div id="ma-find"></div>
       <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: inProjectView() ? `你在「${projName(projectView())}」的 AI；新增和新角色都用這個專案。點一列看接入、技能、設定。` : '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
     let items = [];
     const scope = inProjectView() ? projectView() : null; // C-358
     const open = new Map(); // AI id → 展開的分頁
     let menuFor = null;
-    const row = id => { const ai = items.find(x => x.participantId === id); const el = body.querySelector(`[data-ma="${CSS.escape(id)}"]`); if (ai && el) { el.outerHTML = myAiRowHtml(ai, open.get(id), menuFor === id); if (open.get(id) === 'skills') loadSkills(ai); } };
+    const fs = finder('myai', () => drawList()); // C-368
+    const useFind = () => items.length >= 6;
+    const fq = () => (useFind() ? findQ(fs.q) : '');
+    const row = id => { const ai = items.find(x => x.participantId === id); const el = body.querySelector(`[data-ma="${CSS.escape(id)}"]`); if (ai && el) { el.outerHTML = myAiRowHtml(ai, open.get(id), menuFor === id, fq()); if (open.get(id) === 'skills') loadSkills(ai); } };
     function drawList() {
-      const list = items.slice().sort((a, b) => maRank(a) - maRank(b));
+      if (!body.isConnected) return;
+      const q = fq(), f = useFind() ? fs.f : NO_FIND;
+      const list = items.filter(a => findHit(a, q) && findPass(a, f)).sort((a, b) => maRank(a) - maRank(b));
+      const pjs = scope ? null : PROJECTS.filter(p => items.some(a => (a.projects || []).includes(p)));
+      body.querySelector('#ma-find').innerHTML = useFind() ? findBarHtml('myai', { roles: findRoles(items), projs: pjs && pjs.length > 1 ? pjs : null, kinds: false, shown: list.length, total: items.length }) : '';
       const act = items.filter(a => a.status === 'active');
       const soon = act.filter(maWarn).length, on = act.filter(a => a.isOnline).length, sw = act.filter(a => a.skillsWaiting > 0).length;
       body.querySelector('#ma-sum').innerHTML = `${scope ? `<b>${esc(projName(scope))}</b> 的 AI · ` : ''}${items.length} 個 · ${on} 在線${soon ? ` · <span class="warn-text">${soon} 個 Token 快到期</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 個有技能等你允許</span>` : ''}`;
-      body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId)).join('')
-        : '<p class="muted">還沒有 AI 助手。按「＋ 新增 AI」選一個角色範例開始。</p>';
+      body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId, q)).join('')
+        : items.length ? findEmptyHtml('myai', true) : '<p class="muted">還沒有 AI 助手。按「＋ 新增 AI」選一個角色範例開始。</p>';
       for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
     }
     async function draw() {
@@ -5899,7 +5981,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     let st = null;
     const close = () => { st = null; list.hidden = true; };
     const render = () => {
-      list.innerHTML = st.items.map((p, i) => `<li role="option" data-i="${i}" aria-selected="${i === st.index}"><span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${esc(p.label || p.name)}</b><span class="muted small">${esc(p.role || '')}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}</li>`).join('');
+      list.innerHTML = mentionItemsHtml(st.items, st.index, mentionScope() || projectView()); // C-368
       list.hidden = false;
       scrollPicked(list);
     };
@@ -5913,6 +5995,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     };
     ta.openMention = update; // 「＠ 加人」按鈕插入 @ 後直接開選單
     const pick = i => {
+      noteRecentAt(st.items[i]); // C-368
       const insert = '@' + st.items[i].name + ' ';
       ta.value = ta.value.slice(0, st.start) + insert + ta.value.slice(st.end);
       const caret = st.start + insert.length;
@@ -5928,7 +6011,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pick(st.index); }
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
     });
-    list.addEventListener('mousedown', e => { const li = e.target.closest('li'); if (li && st) { e.preventDefault(); pick(Number(li.dataset.i)); } });
+    list.addEventListener('mousedown', e => { const li = e.target.closest('li[data-i]'); if (li && st) { e.preventDefault(); pick(Number(li.dataset.i)); } });
   }
 
   function openUpload(file) {
@@ -6297,7 +6380,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     if (canRemove(p, pj)) return `<button type="button" class="pm-x" data-pm-rm="${esc(p.participantId)}" data-pj="${esc(pj)}" aria-label="把 ${esc(p.name)} 移出${esc(projName(pj))}" title="移出">✕</button>`;
     return p.participantId === meId() ? pmLock('自己不能移出') : '<span class="muted">—</span>';
   }
-  const pmRoleCell = (p, pj) => (p.memberType === 'human' ? permRoleHtml(p, pj) : `<span class="pm-ai-role">${esc(p.role || '')}</span>`);
+  const pmRoleCell = (p, pj, q = '') => (p.memberType === 'human' ? permRoleHtml(p, pj) : `<span class="pm-ai-role">${markQ(p.role || '', q)}${p.roleKey && p.roleKey !== p.role ? ` <span class="muted small">(${markQ(p.roleKey, q)})</span>` : ''}</span>`);
   // C-294：人類列的「一般／👁 唯讀」；AI 跟著主人（只顯示）
   function pmRoCell(p, pj, isNew) {
     const ro = roOf(p.participantId, pj);
@@ -6330,24 +6413,30 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const row = p => {
       const c = permCur(p), b = permBase(p), isNew = !(b.cross || b.projects.has(pj)), lchg = (c.leaders || b.leaders).has(pj) !== b.leaders.has(pj), isAdm = p.participantId === state.projMeta.adminId;
       const tags = [isAdm ? '<span class="pill-tag blue">管理員</span>' : c.cross ? '<span class="pm-cross-tag">跨專案</span>' : '', isNew ? '<span class="pill-tag yellow">新加入</span>' : '', !admin && p.participantId === meId() ? '<span class="muted small">· 你</span>' : ''].join('');
-      const name = admin ? `<button type="button" class="pm-name-link" data-pm-goto-mem="${esc(p.participantId)}" title="看 ${esc(p.name)} 的所有專案">${esc(p.name)}</button>` : `<b>${esc(p.name)}</b>`;
-      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name">${name}${tags}${pmRoCell(p, pj, isNew)}${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role">${pmRoleCell(p, pj)}</td><td class="c-lead">${pmLeadCell(p, pj)}</td><td class="c-act">${pmActCell(p, pj, '到「依成員」')}</td></tr>`;
+      const name = admin ? `<button type="button" class="pm-name-link" data-pm-goto-mem="${esc(p.participantId)}" title="看 ${esc(p.name)} 的所有專案">${markQ(p.name, fq)}</button>` : `<b>${markQ(p.name, fq)}</b>`;
+      const sub = [p.shortCode ? '#' + markQ(p.shortCode, fq) : '', esc(permSub(p))].filter(Boolean).join(' · ');
+      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name">${name}${tags}${pmRoCell(p, pj, isNew)}${sub ? `<span class="pm-sub"> · ${sub}</span>` : ''}</td><td class="c-role">${pmRoleCell(p, pj, fq)}</td><td class="c-lead">${pmLeadCell(p, pj)}</td><td class="c-act">${pmActCell(p, pj, '到「依成員」')}</td></tr>`;
     };
     const removed = permPeople().filter(p => { const b = permBase(p); return (b.cross || b.projects.has(pj)) && !inProj(p, pj); });
+    // C-368：搜尋＋人類／AI＋角色
+    const fs = finder('perm', drawPerm), fq = findQ(fs.q);
+    const shown = members.filter(p => findHit(p, fq, pj) && findPass(p, fs.f, pj));
     const rmRow = p => `<tr class="pm-tr chg pm-gone"><td class="c-name"><s>${esc(p.name)}</s><span class="pill-tag red">將移出</span>${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role"><span class="muted">—</span></td><td class="c-lead"><span class="muted">—</span></td><td class="c-act"><button type="button" class="link small" data-pm-restore="${esc(p.participantId)}" data-pj="${esc(pj)}">復原</button></td></tr>`;
-    const humans = members.filter(p => p.memberType === 'human');
+    const humans = shown.filter(p => p.memberType === 'human');
     const owner = a => ownerOf(a)?.name || '';
-    const ais = members.filter(p => p.memberType === 'ai').sort((a, b) => owner(a).localeCompare(owner(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant')); // 依主人分組
+    const ais = shown.filter(p => p.memberType === 'ai').sort((a, b) => owner(a).localeCompare(owner(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant')); // 依主人分組
     const pr = state.projectList.find(x => x.id === pj);
     const mid = `<section class="pm-col pm-detail" aria-label="${esc(projName(pj))} 的成員">
       ${narrowPerm() ? '<button type="button" class="ph-back pm-back" data-pm-back>‹ 專案清單</button>' : ''}
       <div class="pm-dhead"><div class="pm-dtitle"><strong>${esc(projName(pj))}</strong><span class="pm-sub"> · API 代號 ${esc(pj)} · ${members.length} 人</span></div><span class="grow"></span>
         ${admin ? '<button type="button" class="btn small" data-pm-invite>邀請新的人</button>' : ''}${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
       ${pr ? repoLine(pr, permCanEdit(pj), { code: false }) : ''}
+      ${findBarHtml('perm', { roles: findRoles(members, pj), shown: shown.length, total: members.length, unit: '人' })}
       <table class="pm-table">${pmHead('成員')}
-      <tbody>${pmGrp(`人類 · ${humans.length}`)}${humans.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有人類成員</td></tr>'}
-      ${pmGrp(`AI · ${ais.length}（依主人分組；角色跟著 AI 設定）`)}${ais.map(row).join('') || '<tr><td colspan="4" class="muted small">沒有 AI</td></tr>'}
+      <tbody>${fs.f.kind === 'ai' ? '' : pmGrp(`人類 · ${humans.length}`) + (humans.map(row).join('') || `<tr><td colspan="4" class="muted small">${findOn(fs) ? '沒有符合的人類' : '沒有人類成員'}</td></tr>`)}
+      ${fs.f.kind === 'human' ? '' : pmGrp(`AI · ${ais.length}（依主人分組；角色跟著 AI 設定）`) + (ais.map(row).join('') || `<tr><td colspan="4" class="muted small">${findOn(fs) ? '沒有符合的 AI' : '沒有 AI'}</td></tr>`)}
       ${removed.length ? pmGrp('這次會移出') + removed.map(rmRow).join('') : ''}</tbody></table>
+      ${findOn(fs) ? findEmptyHtml('perm', !shown.length) : ''}
       <p class="muted small pm-note">🔒＝管理員或跨專案角色，自動在所有專案，滑過看怎麼移出。✕＝移出（人類名下的 AI 會一起移出）${admin ? '；☆ 點了變 ★＝設為 leader（只有人類）；點名字看他的所有專案' : ''}。</p></section>`;
     const cls = narrowPerm() ? (perm.picker ? ' m-pick' : perm.mobileDetail ? ' m-detail' : ' m-list') : perm.picker ? ' with-pick' : '';
     return `<div class="pm-split${cls}">${left}${mid}${perm.picker ? permPickerHtml(pj) : ''}</div>`;
@@ -6388,8 +6477,8 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   function permByMemberHtml() {
     const all = permPeople(), q = perm.mq.trim().toLowerCase();
     if (!all.some(p => p.participantId === perm.selMember)) perm.selMember = all[0]?.participantId || null;
-    const list = all.filter(p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q));
-    const li = p => { const c = permCur(p); return `<button type="button" class="pm-li${p.participantId === perm.selMember ? ' sel' : ''}" data-pm-mem="${esc(p.participantId)}" aria-current="${p.participantId === perm.selMember}"><b>${esc(p.name)}</b>${perm.draft.has(p.participantId) ? '<span class="pm-chg-tag">變更</span>' : ''}<span class="muted small">${c.cross ? '全部' : `${c.projects.size} 專案`}</span></button>`; };
+    const list = all.filter(p => findHit(p, q)); // C-368
+    const li = p => { const c = permCur(p); return `<button type="button" class="pm-li${p.participantId === perm.selMember ? ' sel' : ''}" data-pm-mem="${esc(p.participantId)}" aria-current="${p.participantId === perm.selMember}"><b>${markQ(p.name, q)}</b>${perm.draft.has(p.participantId) ? '<span class="pm-chg-tag">變更</span>' : ''}<span class="muted small">${c.cross ? '全部' : `${c.projects.size} 專案`}</span></button>`; };
     const hs = list.filter(p => p.memberType === 'human'), as = list.filter(p => p.memberType === 'ai');
     const left = `<section class="pm-col pm-list" aria-label="成員清單"><div class="pm-search">${pmViewSeg()}<input id="pm-mq" type="search" placeholder="搜尋成員（${all.length} 人）" aria-label="搜尋成員" value="${esc(perm.mq)}"></div>
       ${hs.length ? `<div class="pm-sec">人類</div>${hs.map(li).join('')}` : ''}${as.length ? `<div class="pm-sec">AI</div>${as.map(li).join('')}` : ''}${list.length ? '' : '<p class="muted small pm-pad">找不到成員</p>'}</section>`;
@@ -6514,7 +6603,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
     box.scrollTop = top;
     drawPermBar();
-    if (['pm-pq', 'pm-mq', 'pm-pickq'].includes(keep)) { const q = $('#' + keep); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+    if (['pm-pq', 'pm-mq', 'pm-pickq', 'fb-q-perm'].includes(keep)) { const q = $('#' + keep); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
     if (perm.moreOpen) box.querySelector('.pm-more-menu [role="menuitem"]')?.focus();
   }
   // C-280：本專案角色（只列自己能管理的專案）：改字、停用／啟用、沒人用才能刪

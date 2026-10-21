@@ -13,7 +13,7 @@ const src = js.slice(a, b);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const avatar = p => `<span class="avatar">${esc(p.avatar || p.role)}</span>`;
 const env = { esc, avatar, tokenLevel: () => '', fmtTime: x => x, mmdd: () => '10/28', state: { projMeta: { crossRoleIds: [] } }, PROJECTS: ['平台'],
-  projTag: p => `<span class="ptag">${p}</span>`, CONVO_OPTS: [['', '依所在環境（建議）']], CONVO_HINT: { '': '', auto: '', keep: '' }, grantsBlock: () => '', innerHeight: 700, innerWidth: 1200 };
+  projTag: p => `<span class="ptag">${p}</span>`, CONVO_OPTS: [['', '依所在環境（建議）']], CONVO_HINT: { '': '', auto: '', keep: '' }, grantsBlock: () => '', markQ: t => esc(t), innerHeight: 700, innerWidth: 1200 };
 const fn = new Function(...Object.keys(env), `${src}; return { myAiRowHtml: typeof myAiRowHtml === 'function' ? myAiRowHtml : null, maPlaceMenu: typeof maPlaceMenu === 'function' ? maPlaceMenu : null };`);
 const { myAiRowHtml, maPlaceMenu } = fn(...Object.values(env));
 
