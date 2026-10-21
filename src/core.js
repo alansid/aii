@@ -9,6 +9,7 @@ import { registerCards, teamCards, workFrom, autoArchive, claimsOf, CLAIM_LOG } 
 import { registerLogin } from './login.js';
 import { registerSkills } from './skills.js'; // C-346 角色技能庫
 import { registerJoin } from './join.js'; // C-369 申請加入專案
+import { registerDocs, DOC_MAX_TOTAL_BYTES } from './docs.js'; // C-365 專案文件區
 import { optionWarnings } from './questions.js';
 import { mcpDispatch } from './mcp.js'; // C-355 平台 MCP
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
@@ -63,7 +64,7 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
 
 // ---------- 應用程式 ----------
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
-export function createApp({ db, docText, flowsText = '', releases = null, config = {}, storage = null, scriptHashes = {} }) {
+export function createApp({ db, docText, flowsText = '', releases = null, config = {}, storage = null, docStorage = null, scriptHashes = {} }) {
   const ROOM_CODE = config.roomCode || '';
   // C-202：人類改用邀請連結加入；只有群組還沒有人類（建立者）或明確開放（OPEN_JOIN=1，本機測試用）才能自己加入
   const OPEN_JOIN = config.openJoin === true || config.openJoin === '1';
@@ -2747,7 +2748,7 @@ ${trial
     const rows = isAdmin
       ? await db.all('SELECT * FROM file_audit ORDER BY at DESC LIMIT ?', limit)
       : await db.all(`SELECT a.* FROM file_audit a LEFT JOIN files f ON f.id = a.file_id LEFT JOIN messages m ON m.id = f.message_id
-          WHERE a.actor_id = ?${mine.length ? ` OR m.project IN (${mine.map(() => '?').join(',')})` : ''} ORDER BY a.at DESC LIMIT ?`, me.id, ...mine, limit);
+          WHERE a.actor_id = ?${mine.length ? ` OR m.project IN (${mine.map(() => '?').join(',')}) OR a.file_id IN (SELECT id FROM docs WHERE project IN (${mine.map(() => '?').join(',')}))` : ''} ORDER BY a.at DESC LIMIT ?`, me.id, ...mine, ...mine, limit); // C-365：專案文件區的紀錄也看得到
     return {
       scope: isAdmin ? 'all' : 'mine',
       items: rows.map(a => ({
@@ -2988,6 +2989,8 @@ ${trial
     }
   }
   const joinApi = registerJoin({ route, db, ApiError, invalid, readJson, randId, nowIso, requireHuman, peopleMap, projectsOf, PROJECTS, nameOf, loadProjects, projectRows: () => projectRows, loadLeaders, adminOf, applyMembership, loadProjectRoles, saveProjectRoles, projRoles: () => projRoles, readRole, loadReadOnly, invalidatePeople, projEvent }); // C-369
+  registerDocs({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, identity, projectsOf, PROJECTS, assertWritable, loadReadOnly, roIn, audit, docStorage, // C-365
+    maxTotalBytes: (Number(config.docMaxTotalMb) || 0) * 1048576 || DOC_MAX_TOTAL_BYTES });
   const skillsApi = registerSkills({ route, db, ApiError, invalid, readJson, randId, nowIso, sha256, peopleMap, projectsOf, PROJECTS, nameOf, loadLeaders, adminOf, assertNoSecret, writeDm, myAi, requireHuman, loadReadOnly, roIn, readOnlyError }); // C-346；C-353 唯讀
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 

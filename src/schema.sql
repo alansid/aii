@@ -366,3 +366,31 @@ CREATE TABLE IF NOT EXISTS join_requests (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_join_pending ON join_requests (project, participant_id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_join_status ON join_requests (status, project);
 CREATE INDEX IF NOT EXISTS idx_join_person ON join_requests (participant_id, created_at);
+-- C-365 專案文件區：本體存 R2（本機用資料夾），這裡是目錄與中繼資料；資料夾最多兩層，刪除只標記
+CREATE TABLE IF NOT EXISTS doc_folders (
+  id TEXT PRIMARY KEY,
+  project TEXT NOT NULL,
+  parent_id TEXT,                      -- 空＝第一層
+  name TEXT NOT NULL,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  deleted_at TEXT,
+  deleted_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doc_folders ON doc_folders (project, deleted_at);
+CREATE TABLE IF NOT EXISTS docs (
+  id TEXT PRIMARY KEY,
+  project TEXT NOT NULL,
+  folder_id TEXT,                      -- 空＝放在最上層
+  name TEXT NOT NULL,
+  ext TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  uploader_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  deleted_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_docs ON docs (project, deleted_at);

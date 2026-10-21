@@ -2,6 +2,7 @@
 import { createApp } from './src/core.js';
 import { wrapD1 } from './src/db-d1.js';
 import { dbStorage } from './src/storage-db.js';
+import { r2Storage } from './src/storage-r2.js'; // C-365 專案文件區
 import docText from './docs/ai-integration.md';
 import flowsText from './docs/flows.md'; // C-291：要登入才讀得到
 import releases from './generated/releases.json'; // C-291：npm run deploy 會先產生
@@ -13,7 +14,8 @@ const app = env => {
   const db = wrapD1(env.DB);
   handle = createApp({
     db,
-    storage: dbStorage(db), // 檔案存 D1，不需要 R2
+    storage: dbStorage(db), // 訊息附件存 D1，不需要 R2
+    docStorage: env.DOCS ? r2Storage(env.DOCS) : null, // C-365 專案文件區存 R2；還沒綁定 DOCS 就回 503，其他功能照常
     docText,
     flowsText,
     releases,
@@ -24,6 +26,7 @@ const app = env => {
       aiTokenTtlHours: env.AI_TOKEN_TTL_HOURS,
       humanTokenTtlHours: env.HUMAN_TOKEN_TTL_HOURS,
       fileTtlHours: env.FILE_TTL_HOURS,
+      docMaxTotalMb: env.DOC_MAX_TOTAL_MB,
       staleMinutes: env.STALE_MINUTES,
       unansweredMinutes: env.UNANSWERED_MINUTES,
       tokenWarnHours: env.TOKEN_WARN_HOURS,

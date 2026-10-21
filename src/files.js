@@ -49,12 +49,13 @@ export class FileRejected extends Error {
 }
 
 // 依副檔名檢查內容；不通過丟出 FileRejected
-export function inspectFile(name, bytes) {
+// maxBytes：訊息附件 2 MB（預設）；專案文件區 20 MB（C-365）
+export function inspectFile(name, bytes, maxBytes = MAX_FILE_BYTES) {
   const ext = (name.match(/\.([A-Za-z0-9]+)$/)?.[1] || '').toLowerCase();
   const rule = ALLOWED[ext];
   if (!rule) throw new FileRejected(415, 'FILE_TYPE_NOT_ALLOWED', `不允許的檔案類型「.${ext || '（無副檔名）'}」，只接受：${ALLOWED_LIST}`);
   if (!bytes.length) throw new FileRejected(400, 'INVALID_REQUEST', '檔案是空的');
-  if (bytes.length > MAX_FILE_BYTES) throw new FileRejected(413, 'FILE_TOO_LARGE', `檔案超過 2 MB 上限（${(bytes.length / 1048576).toFixed(1)} MB）`);
+  if (bytes.length > maxBytes) throw new FileRejected(413, 'FILE_TOO_LARGE', `檔案超過 ${maxBytes / 1048576} MB 上限（${(bytes.length / 1048576).toFixed(1)} MB）`);
 
   const mismatch = () => new FileRejected(415, 'FILE_SIGNATURE_MISMATCH', `檔案內容與副檔名 .${ext} 不符（可能是改名偽裝的檔案）`);
   switch (rule.check) {
