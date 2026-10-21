@@ -5,7 +5,7 @@
 //   get(sql, ...args) → 單列或 null      all(sql, ...args) → 陣列
 //   run(sql, ...args) → { changes }       batch([[sql, args], ...]) → 原子執行
 import { ROLES, SETTING_FIELDS, ENVIRONMENTS } from './roles.js';
-import { registerCards, teamCards, workFrom, autoArchive } from './cards.js';
+import { registerCards, teamCards, workFrom, autoArchive, claimsOf, CLAIM_LOG } from './cards.js';
 import { registerLogin } from './login.js';
 import { registerSkills } from './skills.js'; // C-346 角色技能庫
 import { optionWarnings } from './questions.js';
@@ -959,7 +959,7 @@ ${grantLines}${canGrant
 
 ## 九、工作卡片（規格 3.10）
 - 只在接下任務、受阻或解除、要人類拍板（建決策卡）、完成（不要自己標已驗證）、交接（POST /api/cards/:id/handover）時動卡片。
-- 你是負責人時發 [接單]（或 [進度]）帶 cardId，伺服器自動把卡改成「進行中」。相關訊息都帶 cardId。
+- 發 [接單]／[進度] 帶 cardId＝認領（你是負責人卡會改「進行中」）；回應有 cardClaim＝別人在做，先協調或 takeover 接手；交接用四欄。相關訊息都帶 cardId。
 - 新工作開新卡。只能改自己負責的卡；要改別人的卡或派工用 POST /api/suggestions；查卡照規格 3.10。
 
 ## 十、工作記憶與私訊
@@ -2485,9 +2485,21 @@ ${trial
       teamCache = { at: 0, data: null };
       cardStarted = true;
     }
+    // C-349：[接單]／[進度] 帶 cardId＝認領。沒人在做就記你；別人正在做就不改，回 cardClaim 提示先接手（不是鎖定，訊息照發）
+    let cardClaim = null;
+    if (card && !r.duplicate && card.type !== '決策' && card.type !== '人類紀錄' && !cardClosed && /^\s*\[(接單|進度)\]/.test(body.text || '')) {
+      const cl = (await claimsOf(db, [card.seq])).get(card.seq);
+      if (cl && cl.by !== me.id) {
+        const who = (await peopleMap(ctx, [cl.by])).get(cl.by);
+        cardClaim = { participantId: cl.by, name: who?.name || cl.by, since: cl.at, hint: `${who?.name || cl.by} 從 ${cl.at} 起在做 ${body.cardId}；要改程式或狀態請先 POST /api/cards/${body.cardId}/takeover 帶 reason 接手（會留紀錄並通知對方），或先在群組跟對方協調` };
+      } else if (!cl) {
+        // 不動 updated_at：卡片本身沒改，「可能過時」（卡沒更新、訊息有新進度）要照樣判斷得出來
+        await db.run('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', card.seq, nowIso(), me.id, CLAIM_LOG, `${me.name} 發了 ${/\[進度\]/.test(body.text) ? '[進度]' : '[接單]'}，開始做`);
+      }
+    }
     const warnings = [...(r.warnings || []), ...(cardMismatch ? [cardMismatch] : [])];
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`); // C-276
-    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(warnings.length ? { warnings } : {}) };
+    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(cardClaim ? { cardClaim } : {}), ...(warnings.length ? { warnings } : {}) };
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
@@ -3062,7 +3074,7 @@ ${trial
     wishDigest: await wishDigest().catch(() => 0),
     pendingAutoAcked: await autoAckPending().catch(() => 0) }); // C-334
   // C-348 人寫欄位（說明見 markUntrusted）
-  const UNTRUSTED_KEYS = ['text', 'preview', 'title', 'reason', 'next', 'note', 'why', 'detail', 'description', 'question', 'recommendation', 'options', 'impact', 'afterNext', 'statusNote'];
+  const UNTRUSTED_KEYS = ['text', 'preview', 'title', 'reason', 'next', 'note', 'why', 'detail', 'description', 'question', 'recommendation', 'options', 'impact', 'afterNext', 'statusNote', 'progress', 'changes', 'nextStep', 'caution'];
   const UNTRUSTED_SET = new Set(UNTRUSTED_KEYS);
   const TRUSTED_GET = new Set(['/api/me', '/api/me/state', '/api/me/watcher-env']);
   return handle;
