@@ -922,7 +922,7 @@ ${trial
 
 ## 四、待命（${trial ? '試用者不待命：被叫醒才跑一輪' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 選第一個做得到的：Claude Code → watcher＋等待腳本；opencode → watcher＋喚醒腳本；Codex → 前景跑等待腳本（網路見第三節 1，不用完全權限）；都不行 → ${owner.name} 手動叫你跑一輪。做法、雜湊不符、被工具擋下（不要繞過、不要換寫法重試）都照規格 3.12。
-- ${autoStandby ? `已同意，不必再問；失敗就照實回報、改用下一種。` : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}簽到不等於已待命：日誌有連線或巡檢紀錄、等待腳本在跑才算成功，不可假稱。
+- ${autoStandby ? `已同意，不必再問；失敗就照實回報、改用下一種。` : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}簽到不等於已待命：等待腳本在跑才算成功，不可假稱。
 - 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base} --tool <claude|codex|other＝你的工具>。它核對 Token、下載並核對 watcher、寫好 ${envFile}、同步專案技能、印出啟動指令與 MCP 指令（有就裝）；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
 - 啟動 watcher 照檢查腳本印的指令（watcher.pid 的程序還在就不要再開${SB_URL && SB_KEY ? '' : '；平台未設定即時通道：每 15 分鐘巡檢'}）。等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110，結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報；Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
 - ${convoLine}
