@@ -5543,7 +5543,25 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const tail = myProjects().some(canMakeRole) ? '<option value="__ai">＋ 跟 AI 討論新角色…</option>' : '<option value="__ai_no" disabled>新角色請 leader 建立</option>';
     return common.map(opt).join('') + (other.length ? `<optgroup label="其他角色">${other.map(opt).join('')}</optgroup>` : '') + mine + tail;
   }
-  const roleAiPj = () => { const pv = projectView(); return canMakeRole(pv) && myProjects().includes(pv) ? pv : myProjects().find(canMakeRole); };
+  // C-362：新角色建在哪個專案——看表單勾的所屬專案（沒勾或勾的不能建就看全部能建的）；在專案裡用那個專案（C-358）；
+  // 只剩一個就用它，兩個以上回 null 讓人選（原本默默用第一個＝平台）
+  const roleAiPjs = (checked = []) => { const can = myProjects().filter(canMakeRole), pick = checked.filter(p => can.includes(p)); return pick.length ? pick : can; };
+  const roleAiPj = (checked = []) => { const c = roleAiPjs(checked), pv = projectView(); return c.includes(pv) ? pv : c.length === 1 ? c[0] : null; };
+  function pickRoleAiPj(pjs) {
+    if (!pjs.length) return Promise.resolve(null);
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: '新角色要建在哪個專案？', size: 'narrow',
+        body: `<p class="muted small">新角色只屬於一個專案，只有那個專案的成員能選。</p><div class="proj-row">${pjs.map(p => `<button class="btn" type="button" data-rp="${esc(p)}">${esc(projName(p))}</button>`).join('')}</div>`,
+        foot: '<button class="btn" type="button" data-close>取消</button>' });
+      document.body.appendChild(host);
+      const done = v => { host.remove(); document.removeEventListener('keydown', esc_, true); resolve(v); };
+      const esc_ = e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+      document.addEventListener('keydown', esc_, true);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-rp]'); if (b) done(b.dataset.rp); else if (e.target.closest('[data-close]')) done(null); });
+    });
+  }
   // C-182：AI 屬於哪些專案（新增、編輯都能勾）；只列自己在的專案，不在的灰掉寫原因；跨專案角色固定在所有專案
   function aiProjField(ai) {
     const cross = ai && state.projMeta.crossRoleIds.includes(ai.participantId);
@@ -5677,8 +5695,8 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       counts();
     };
     let prevKey = form.roleKey.value;
-    form.roleKey.addEventListener('change', e => {
-      if (form.roleKey.value === '__ai') { form.roleKey.value = prevKey; e.stopImmediatePropagation(); const pj = roleAiPj(); if (pj) askRoleAi(pj); return; } // C-280
+    form.roleKey.addEventListener('change', async e => {
+      if (form.roleKey.value === '__ai') { form.roleKey.value = prevKey; e.stopImmediatePropagation(); const checked = [...form.querySelectorAll('input[name="proj"]:checked')].map(c => c.value); const pj = roleAiPj(checked) || await pickRoleAiPj(roleAiPjs(checked)); if (pj) askRoleAi(pj); return; } // C-280、C-362
       prevKey = form.roleKey.value;
       const r = roleHint(form.roleKey.value);
       const autoName = `${state.me.name}的${r.suffix}`;

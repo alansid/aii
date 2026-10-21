@@ -29,7 +29,7 @@ const env = {
   TOP_PAGES: { myai: '/my-ai', perm: '/members' }, PAGE_SLUG: { messages: 'messages' }, PAGE_BY_NAME: {},
   location: { pathname: '/' }, canMakeRole: () => true,
 };
-const names = ['myProjects', 'projectView', ...(has('inProjectView') ? ['inProjectView'] : []), 'goTop', 'routePath', 'parseRoute', 'roleAiPj'];
+const names = ['myProjects', 'projectView', ...(has('inProjectView') ? ['inProjectView'] : []), 'goTop', 'routePath', 'parseRoute', ...(has('roleAiPjs') ? ['roleAiPjs'] : []), 'roleAiPj'];
 const fns = new Function(...Object.keys(env), `${names.map(fnSrc).join('\n')}\nreturn { ${names.join(', ')} };`)(...Object.values(env));
 
 try {
