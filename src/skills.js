@@ -307,4 +307,16 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
       text: `[技能同步] 請在你的工作資料夾跑一次：node .aigile/watcher/aigile-setup.mjs --agent ${agent} --base ${base} --skills-only（第一次要加 --tool <claude|codex|other>），跑完把最後幾行回報給我。` });
     return { ok: true };
   });
+
+  // C-352 我的 AI 清單：每個 AI 有幾個含腳本的技能等主人允許（排序與「技能」分頁的數字；兩句查詢，不逐台查）
+  async function waitingAllow(ais) {
+    const out = new Map(ais.map(a => [a.id, 0]));
+    if (!ais.length) return out;
+    const rows = await db.all("SELECT id, project, roles FROM skills WHERE status = 'published' AND has_scripts > 0");
+    if (!rows.length) return out;
+    const allow = new Set((await db.all('SELECT ai_id, skill_id FROM skill_allows WHERE ai_id IN (SELECT value FROM json_each(?))', JSON.stringify(ais.map(a => a.id)))).map(x => x.ai_id + '|' + x.skill_id));
+    for (const a of ais) out.set(a.id, rows.filter(r => projectsOf(a).includes(r.project) && forRole(r, a) && !allow.has(a.id + '|' + r.id)).length);
+    return out;
+  }
+  return { waitingAllow };
 }

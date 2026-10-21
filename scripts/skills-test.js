@@ -131,6 +131,12 @@ try {
   assert.ok(!cAll.projects[0].canManage && !cAll.items.find(x => x.name === 'two-step').canReview, '一般成員（上傳者）不能核准');
   assert.ok((await call(liu.token, '/api/skills')).body.projects.some(p => p.id === '銀行系統'), '管理員看得到所有專案');
   assert.equal((await call(ai.tok, '/api/skills')).status, 200, 'AI 也能看清單');
+  // C-352：我的 AI 清單帶「技能等你允許」數（跟該 AI 技能清單裡含腳本、還沒允許的一致）與待命狀態
+  const myAis = (await call(liu.token, '/api/my-ais')).body.items, mine1 = myAis.find(a => a.participantId === ai.id);
+  const waitN = (await call(liu.token, `/api/my-ais/${ai.id}/skills`)).body.items.filter(s => s.hasScripts && !s.allowed).length;
+  assert.ok(waitN > 0 && mine1.skillsWaiting === waitN, `skillsWaiting ${mine1.skillsWaiting} = ${waitN}`);
+  assert.equal(myAis.find(a => a.participantId === bankAi.id).skillsWaiting, 0, '別的專案的 AI 不算');
+  assert.equal(typeof mine1.standby, 'boolean');
   const dhId = lib.find(x => x.name === 'deploy-helper').skillId;
   const det = (await call(liu.token, `/api/skills/${dhId}`)).body;
   assert.ok(det.canManage && det.installs.length === 3 && det.installs.every(a => a.state === 'waiting' && a.mine && a.owner === '劉昱志'), '抽屜：3 台都等主人（我）允許');

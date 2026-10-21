@@ -2505,8 +2505,11 @@ ${trial
     const people = await peopleMap(ctx);
     const raws = {}; // C-229 長期授權
     for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'grants:' AND key < 'grants;')").catch(() => [])) { try { raws[r.key.slice(7)] = JSON.parse(r.value); } catch {} }
-    const items = [...people.values()].filter(p => p.kind === 'ai' && p.owner_id === me.id && p.status !== 'deleted')
-      .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(p => ({ ...aiView(p, people), grants: grantsView(raws[p.id], p), grantable: grantable(p) }));
+    const mine = [...people.values()].filter(p => p.kind === 'ai' && p.owner_id === me.id && p.status !== 'deleted').sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const waiting = await skillsApi.waitingAllow(mine.filter(p => p.status === 'active')); // C-352：技能等你允許
+    const now = Date.now();
+    const items = mine.map(p => ({ ...aiView(p, people), grants: grantsView(raws[p.id], p), grantable: grantable(p),
+      lastSeenAt: iso(p.last_seen_at), standby: !!p.standby_at && now - p.standby_at <= 20 * 60_000, skillsWaiting: waiting.get(p.id) || 0 }));
     return { items };
   });
   route('POST', '/api/my-ais', async ({ me, req, ctx }) => { requireHuman(me); return { __status: 201, ...(await createAi(ctx, me, await readJson(req))) }; });
@@ -2966,7 +2969,7 @@ ${trial
       if (p && roIn(p, pj)) throw new ApiError(400, 'READ_ONLY_MEMBER', `${p.name} 在「${nameOf(pj)}」是唯讀，不能當負責人、交接對象或決策者。`);
     }
   }
-  registerSkills({ route, db, ApiError, invalid, readJson, randId, nowIso, sha256, peopleMap, projectsOf, PROJECTS, nameOf, loadLeaders, adminOf, assertNoSecret, writeDm, myAi, requireHuman, loadReadOnly, roIn, readOnlyError }); // C-346；C-353 唯讀
+  const skillsApi = registerSkills({ route, db, ApiError, invalid, readJson, randId, nowIso, sha256, peopleMap, projectsOf, PROJECTS, nameOf, loadLeaders, adminOf, assertNoSecret, writeDm, myAi, requireHuman, loadReadOnly, roIn, readOnlyError }); // C-346；C-353 唯讀
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 
   // C-235：只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）

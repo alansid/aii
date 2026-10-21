@@ -4924,56 +4924,133 @@
     // C-306：先畫出頁面，專案清單與 AI 清單同時抓（原本一支等完才抓下一支，中間整塊空白）
     await openMyAi(loadProjectList().catch(() => {}));
   }
+  // C-352 我的 AI（UX 稿 v75）：一列一個 AI、只露一顆主按鈕、其他收進 ⋯；點一列展開「接入／技能／設定」
+  // 自動待命、對話接續改成每個 AI 自己的選項（只影響這個 AI 接下來複製的設定；複製內容不變）
+  const MA_INSIDE = ['行內', '投信'];
+  const maWarn = ai => ai.status === 'active' && ['expired', '2h', '24h'].includes(tokenLevel(ai.expiresAt));
+  const maNeedsYou = ai => maWarn(ai) || (ai.status === 'active' && ai.skillsWaiting > 0);
+  const maState = ai => ai.status !== 'active' ? ['off', '已停用']
+    : ai.isOnline ? ['on', '在線'] : ai.standby ? ['standby', '待命中']
+    : ai.lastSeenAt && Date.now() - Date.parse(ai.lastSeenAt) < 24 * 3600_000 ? ['idle', '閒置'] : ['', '離線'];
+  const maWhen = t => { const d = new Date(t), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); return (d.toDateString() === new Date().toDateString() ? '今天 ' : mmdd(t) + ' ') + hm; };
+  const maRank = ai => ai.status !== 'active' ? 4 : maNeedsYou(ai) ? 0 : ai.isOnline || ai.standby ? 1 : 2;
+  function myAiRowHtml(ai, tab, menu) {
+    const id = esc(ai.participantId), active = ai.status === 'active', level = tokenLevel(ai.expiresAt);
+    const [stCls, stText] = maState(ai), pjs = state.projMeta.crossRoleIds.includes(ai.participantId) ? null : (ai.projects || []).filter(p => PROJECTS.includes(p));
+    const env = ai.environment ? (MA_INSIDE.includes(ai.environment) ? `<span class="pill-tag red">${esc(ai.environment)}</span>` : esc(ai.environment)) : '';
+    const pjTags = pjs === null ? '<span class="ptag ptag-all">跨專案角色</span>' : pjs.slice(0, 2).map(projTag).join('') + (pjs.length > 2 ? `<span class="ptag">+${pjs.length - 2}</span>` : '');
+    const tokTxt = !active ? '' : level === 'expired' ? '<span class="pill-tag red">Token 已過期</span>'
+      : maWarn(ai) ? `<span class="pill-tag yellow">Token ${esc(maWhen(ai.expiresAt))} 到期</span>` : `<span class="muted small ma-tok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>`;
+    const main = !active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
+      : maWarn(ai) ? `<button class="btn warn" type="button" data-act="reissue" data-id="${id}">重發<span class="ma-long"> Token</span></button>`
+      : `<button class="btn ma-copy" type="button" data-act="copy" data-id="${id}">複製接入設定</button>`;
+    const menuHtml = menu ? `<div class="ma-menu" role="menu">
+        <button type="button" role="menuitem" data-act="edit" data-id="${id}">✏️ 編輯名稱、角色、專案</button>
+        ${active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
+        <button type="button" role="menuitem" data-act="reissue" data-id="${id}">🔑 重發 Token</button>
+        ${level !== 'expired' ? `<button type="button" role="menuitem" data-act="token" data-id="${id}">📋 只複製 Token</button>` : ''}
+        <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : `<hr><button type="button" role="menuitem" data-act="enable" data-id="${id}">▶ 重新啟用</button>`}
+        <button type="button" role="menuitem" class="danger-text" data-act="delete" data-id="${id}">🗑 刪除這個 AI</button>
+      </div>` : '';
+    return `<div class="ma-item${tab ? ' open' : ''}" data-ma="${id}">
+      <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
+        ${avatar(ai)}
+        <div class="ma-main"><div class="ma-nm"><b>${esc(ai.name)}</b><span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
+          <div class="ma-meta">${[esc(ai.role || ''), env].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs"> · ${pjTags}</span>` : ''}${maWarn(ai) ? `<span class="ma-mtok warn-text"> · ${level === 'expired' ? 'Token 已過期' : esc(maWhen(ai.expiresAt)) + ' 到期'}</span>` : ''}</div></div>
+        <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
+      </div>
+      ${tab ? myAiPanelHtml(ai, tab) : ''}
+    </div>`;
+  }
+  // 每個 AI 的接入選項（預設：對話接續依環境、自動待命勾選）
+  const maOpts = new Map();
+  const maOpt = ai => maOpts.get(ai.participantId) || { convo: '', auto: true };
+  function myAiPanelHtml(ai, tab) {
+    const id = esc(ai.participantId), active = ai.status === 'active', o = maOpt(ai), inside = MA_INSIDE.includes(ai.environment);
+    const tabs = [['conn', '接入'], ['skills', `技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}`], ['set', '設定']].filter(([k]) => active || k === 'set');
+    const t = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
+    const convoLabel = v => v ? CONVO_OPTS.find(x => x[0] === v)[1] : `依環境：${inside ? '太長才換新' : '一直接續'}（建議）`;
+    const body = t === 'conn' ? `
+        <label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
+        <p class="ma-hint">${esc(CONVO_HINT[o.convo || (inside ? 'auto' : 'keep')])}</p>
+        <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本${inside ? '（行內／投信仍會先問你）' : ''}</span></label>
+        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="copy" data-id="${id}">完整接入設定</button><button class="btn" type="button" data-act="short" data-id="${id}" title="貼長設定會當掉的工具用：只有幾行，AI 自己去讀完整設定">短版（已接過）</button><button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button></span></div>
+        <p class="ma-hint">上面兩個選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這個 AI 的存取憑證，只貼到自己的 AI 對話。<a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
+      : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
+      : `<dl class="ma-dl">
+          <dt>主要職責</dt><dd>${esc(ai.duties)}</dd><dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
+          <dt>可自主處理的事項</dt><dd>${esc(ai.autonomy)}</dd><dt>必須確認的事項</dt><dd>${esc(ai.mustConfirm)}</dd><dt>完成與交接條件</dt><dd>${esc(ai.handoff)}</dd>
+        </dl>
+        ${grantsBlock(ai, active)}
+        <div class="row"><button class="btn small" type="button" data-act="edit" data-id="${id}">編輯</button><span class="muted small">#${esc(ai.shortCode || '')} · 版本 v${ai.version} · 更新 ${esc(fmtTime(ai.updatedAt))}</span></div>`;
+    return `<div class="ma-panel">
+      <div class="ma-ptop"><b class="ma-ptitle">${esc(ai.name)}</b><button type="button" class="modal-x" data-act="row" data-id="${id}" aria-label="收合">×</button></div>
+      <div class="ma-tabs" role="tablist">${tabs.map(([k, l]) => `<button type="button" role="tab" data-act="tab" data-tab="${k}" data-id="${id}" aria-selected="${k === t}">${esc(l)}</button>`).join('')}</div>
+      ${body}
+    </div>`;
+  }
   async function openMyAi(waitFor = null) {
     const body = openModal('我的 AI', `
-      <p class="muted small">你名下所有 AI，不分專案；每列看得到它在哪些專案。</p>
-      <div class="row spread">
-        <button class="btn primary" type="button" id="ai-new">＋ 新增 AI 助手</button>
-        <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a>
-      </div>
-      <label class="check"><input type="checkbox" id="ai-auto-standby"${autoStandbyConsent ? ' checked' : ''}> 允許 AI 自動啟動待命（watcher＋等待腳本，簽到後直接啟動再回報；行內／投信仍會先問你）</label>
-      <label class="field-inline">對話接續方式 <select id="ai-convo">${CONVO_OPTS.map(([v, l]) => `<option value="${v}"${convoMode === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <p class="muted small" id="ai-convo-hint">${CONVO_HINT[convoMode]}</p>
-      ${(() => { const pjs = PROJECTS.filter(pj => (state.me?.projects || []).includes(pj)); return pjs.length ? `<p class="small">技能（給 AI 的做事方法）：<button type="button" class="link small" data-skills-lib="">全部</button>、${pjs.map(pj => `<button type="button" class="link small" data-skills-lib="${esc(pj)}">${esc(projName(pj))}</button>`).join('、')}</p>` : ''; })()}
-      <div id="ai-list" class="stack"><p class="muted small">載入中…</p></div>`, { sub: '每位 AI 有獨立身分、專屬 Token 與通知收件匣。' });
-    body.querySelector('#ai-auto-standby').onchange = e => { autoStandbyConsent = e.target.checked; };
-    body.querySelector('#ai-convo').onchange = e => { convoMode = e.target.value; body.querySelector('#ai-convo-hint').textContent = CONVO_HINT[convoMode]; };
+      <div class="ma-head"><span class="ma-sum" id="ma-sum">載入中…</span><span class="grow"></span>
+        <button type="button" class="btn ghost" id="ma-skills">技能庫 ›</button>
+        <button class="btn primary" type="button" id="ai-new">＋ 新增 AI</button></div>
+      <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
     let items = [];
-    const open = new Set();
+    const open = new Map(); // AI id → 展開的分頁
+    let menuFor = null;
+    const row = id => { const ai = items.find(x => x.participantId === id); const el = body.querySelector(`[data-ma="${CSS.escape(id)}"]`); if (ai && el) { el.outerHTML = myAiRowHtml(ai, open.get(id), menuFor === id); if (open.get(id) === 'skills') loadSkills(ai); } };
+    function drawList() {
+      const list = items.slice().sort((a, b) => maRank(a) - maRank(b));
+      const act = items.filter(a => a.status === 'active');
+      const soon = act.filter(maWarn).length, on = act.filter(a => a.isOnline).length, sw = act.filter(a => a.skillsWaiting > 0).length;
+      body.querySelector('#ma-sum').innerHTML = `${items.length} 個 · ${on} 在線${soon ? ` · <span class="warn-text">${soon} 個 Token 快到期</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 個有技能等你允許</span>` : ''}`;
+      body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId)).join('')
+        : '<p class="muted">還沒有 AI 助手。按「＋ 新增 AI」選一個角色範例開始。</p>';
+      for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
+    }
     async function draw() {
       items = (await Promise.all([api('/api/my-ais'), waitFor]))[0].items; waitFor = null;
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
-      body.querySelector('#ai-list').innerHTML = items.length ? items.map(ai => aiCardHtml(ai, open.has(ai.participantId))).join('')
-        : '<p class="muted">還沒有 AI 助手。按「新增 AI 助手」選一個角色範例開始。</p>';
+      drawList();
+    }
+    // 技能分頁：展開才讀（不加清單的讀取）
+    async function loadSkills(ai) {
+      const box = body.querySelector(`[data-ma-skills="${CSS.escape(ai.participantId)}"]`);
+      if (box) await drawAiSkills(box, ai, n => { if (ai.skillsWaiting !== n) { ai.skillsWaiting = n; drawList(); } });
     }
     body.querySelector('#ai-new').onclick = () => openAiForm(null);
+    body.querySelector('#ma-skills').onclick = () => {
+      if (isAdmin() || myLeadProjects().length) { perm.tab = 'skills'; skv.data = null; goTop('perm'); } else openSkillsView('');
+    };
+    const closeMenu = e => { if (menuFor && !e.target.closest('.ma-menu,[data-act="menu"]')) { const id = menuFor; menuFor = null; row(id); } };
+    document.addEventListener('click', closeMenu, true);
+    body.addEventListener('change', e => {
+      const c = e.target.dataset.maConvo, a = e.target.dataset.maAuto;
+      if (c) { const ai = items.find(x => x.participantId === c); maOpts.set(c, { ...maOpt(ai), convo: e.target.value }); row(c); }
+      if (a) { const ai = items.find(x => x.participantId === a); maOpts.set(a, { ...maOpt(ai), auto: e.target.checked }); }
+    });
+    body.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('ma-row')) { e.preventDefault(); e.target.click(); } });
     body.addEventListener('click', async e => {
+      if (!body.isConnected) return document.removeEventListener('click', closeMenu, true);
       const b = e.target.closest('[data-act]');
-      if (!b) return;
+      if (!b || (b.dataset.act === 'row' && e.target.closest('button:not([data-act="row"]),a,input,select,label,.ma-menu'))) return;
       const ai = items.find(x => x.participantId === b.dataset.id);
+      if (!ai) return;
+      const id = ai.participantId;
       try {
-        if (b.dataset.act === 'more') {
-          if (open.has(ai.participantId)) open.delete(ai.participantId); else open.add(ai.participantId);
-          b.closest('.ai-card').outerHTML = aiCardHtml(ai, open.has(ai.participantId));
-        } else if (b.dataset.act === 'skills') { openAiSkills(ai); // C-346
-        } else if (b.dataset.act === 'copy') {
+        if (b.dataset.act === 'row') { if (open.has(id)) open.delete(id); else open.set(id, ai.status === 'active' ? (ai.skillsWaiting ? 'skills' : 'conn') : 'set'); menuFor = null; return row(id); }
+        if (b.dataset.act === 'menu') { menuFor = menuFor === id ? null : id; row(id); return body.querySelector('.ma-menu [role=menuitem]')?.focus(); }
+        if (menuFor) { const m = menuFor; menuFor = null; row(m); }
+        if (b.dataset.act === 'tab') { open.set(id, b.dataset.tab); return row(id); }
+        if (b.dataset.act === 'copy') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           const { text } = await api(onboardingUrl(ai));
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'short') { // C-283：3～4 行、不含 Token，連結 15 分鐘、只能讀一次
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
-          const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!autoStandbyConsent, ...(convoMode ? { convo: convoMode } : {}) } });
-          // 改成終端機指令＋讀本機檔：很多 AI 不肯「照網頁上寫的去做」，但會照使用者交代的指令與檔案做（昱志 10/19 codex 實測讀不到）
-          // C-309：每個 AI 存自己的 .aigile/<代號>/setup.md；一定要下載覆蓋、核對身分、接完刪掉
-          const dir = `.aigile/${r.agent || 'AI'}`;
-          const text = `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
-1. 在終端機執行下載（一定要執行，會覆蓋舊檔；「只能下載一次」說的是這個連結，不是叫你沿用資料夾裡已經有的檔案。15 分鐘內有效；Windows PowerShell 請把 curl 換成 curl.exe）：
-curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
-2. 讀 ${dir}/setup.md：開頭寫的身分必須是「${ai.name}」，不是就停下來告訴 ${state.me.name}（讀到別的 AI 的檔）。是就照裡面的步驟接入。
-3. 接好後 Token 存在 ${dir}/.token，然後刪掉 ${dir}/setup.md（裡面有 Token）。這個檔不要進 git、不要貼到群組。
-下載失敗（例如 curl 錯誤 7 連不到網路）：Codex 預設沙盒不能連網，請 ${state.me.name} 在 ~/.codex/config.toml 加 sandbox_mode = "workspace-write" 和 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限，改完重開 Codex；仍連不到就告訴 ${state.me.name}，請他改用「複製完整接入設定」。
-檔案內容寫「已失效」，就請 ${state.me.name} 在網頁重按「複製短版接入」。這段文字與連結都不要貼到群組。`;
-          toast((await copyText(text)) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
+          const o = maOpt(ai);
+          const r = await api(`/api/my-ais/${encodeURIComponent(id)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!o.auto, ...(o.convo ? { convo: o.convo } : {}) } });
+          toast((await copyText(shortOnboardingText(ai, r))) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'token') {
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
           toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
@@ -4984,32 +5061,42 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
         } else if (b.dataset.act === 'reissue') {
           if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發',
             message: `重發後，<b>${esc(ai.name)}</b> 目前的 Token 會立即失效，需要把新 Token 換給它。` })) return;
-          const r = await api(`/api/my-ais/${ai.participantId}/reissue`, { method: 'POST' });
+          const r = await api(`/api/my-ais/${id}/reissue`, { method: 'POST' });
           loadParticipants().catch(() => {});
           openTokenOnly(r);
         } else if (b.dataset.act === 'disable') {
           if (!await confirmDialog({ title: '停用 AI 助手？', confirmText: '停用', danger: true,
             message: `停用後 <b>${esc(ai.name)}</b> 的 Token 會立即失效，它將無法再讀寫群組，之後可以重新啟用。` })) return;
-          await api(`/api/my-ais/${ai.participantId}/disable`, { method: 'POST' });
+          await api(`/api/my-ais/${id}/disable`, { method: 'POST' });
           await draw();
         } else if (b.dataset.act === 'delete') {
           if (!await confirmDialog({ title: '永久刪除 AI 助手？', confirmText: '永久刪除', danger: true, expectText: ai.name,
             message: `<b>${esc(ai.name)}</b> 的 Token 會立即失效，從成員名單、@ 選單、團隊狀態消失，<b>不可復原</b>。它發過的訊息與卡片紀錄會保留並標「（已刪除）」；它負責且未完成的卡片會變成未指派。` })) return;
-          const r = await api(`/api/my-ais/${ai.participantId}/delete`, { method: 'POST', body: { confirmName: ai.name } });
+          const r = await api(`/api/my-ais/${id}/delete`, { method: 'POST', body: { confirmName: ai.name } });
           toast(r.unassignedCards.length ? `已刪除；${r.unassignedCards.join('、')} 變成未指派` : '已刪除');
           loadParticipants().catch(() => {});
           await draw();
         } else if (b.dataset.act === 'enable') {
-          await api(`/api/my-ais/${ai.participantId}/enable`, { method: 'POST' });
+          await api(`/api/my-ais/${id}/enable`, { method: 'POST' });
           await draw();
         }
       } catch (err) { toast(err.message); }
     });
     await draw();
   }
+  // C-309 短版接入：終端機下載到 .aigile/<代號>/setup.md、核對身分、接完刪掉（內容跟原本一樣）
+  function shortOnboardingText(ai, r) {
+    const dir = `.aigile/${r.agent || 'AI'}`;
+    return `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
+1. 在終端機執行下載（一定要執行，會覆蓋舊檔；「只能下載一次」說的是這個連結，不是叫你沿用資料夾裡已經有的檔案。15 分鐘內有效；Windows PowerShell 請把 curl 換成 curl.exe）：
+curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
+2. 讀 ${dir}/setup.md：開頭寫的身分必須是「${ai.name}」，不是就停下來告訴 ${state.me.name}（讀到別的 AI 的檔）。是就照裡面的步驟接入。
+3. 接好後 Token 存在 ${dir}/.token，然後刪掉 ${dir}/setup.md（裡面有 Token）。這個檔不要進 git、不要貼到群組。
+下載失敗（例如 curl 錯誤 7 連不到網路）：Codex 預設沙盒不能連網，請 ${state.me.name} 在 ~/.codex/config.toml 加 sandbox_mode = "workspace-write" 和 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限，改完重開 Codex；仍連不到就告訴 ${state.me.name}，請他改用「複製完整接入設定」。
+檔案內容寫「已失效」，就請 ${state.me.name} 在網頁重按「複製短版接入」。這段文字與連結都不要貼到群組。`;
+  }
 
   // C-147：「允許 AI 自動啟動待命」預設勾選；勾選才在接入設定寫明已同意，沒勾照舊先問
-  let autoStandbyConsent = true;
   // C-327 A：對話接續方式寫進接入設定；預設「太長才換新」
   // C-331 昱志選 C：預設「依所在環境」——行內／投信 太長才換新、行外 一直接續（伺服器依每個 AI 的環境決定）
   const CONVO_OPTS = [['', '依所在環境（建議）'], ['auto', '太長才換新'], ['fresh', '每次叫醒開新對話'], ['keep', '一直接續同一個對話']];
@@ -5019,8 +5106,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     fresh: '最省用量。注意：Claude Code 選這個會在背景另開對話，你在畫面上看不到它在做什麼。',
     keep: '對話越長，每次叫醒越貴（行內曾一天用完一週用量）；只在需要一路看紀錄時用。',
   };
-  let convoMode = '';
-  const onboardingUrl = ai => `/api/my-ais/${ai.participantId}/onboarding?${new URLSearchParams({ ...(convoMode ? { convo: convoMode } : {}), ...(autoStandbyConsent ? { autoStandby: '1' } : {}) })}`;
+  const onboardingUrl = ai => { const o = maOpt(ai); return `/api/my-ais/${ai.participantId}/onboarding?${new URLSearchParams({ ...(o.convo ? { convo: o.convo } : {}), ...(o.auto ? { autoStandby: '1' } : {}) })}`; };
 
   // 重發後：只需把新 Token 換進 AI 的環境，不用重讀整份接入設定
   function openTokenOnly(ai) {
@@ -5284,16 +5370,23 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   // 我的 AI › 技能：含腳本的這一版要主人允許；「同步」私訊 AI 請它跑一次接入檢查（只同步技能）
   async function openAiSkills(ai) {
     const body = openModal(`技能 · ${ai.name}`, '<p class="muted small">載入中…</p>', { sub: '只有你按「同步」或 AI 重跑接入檢查時才會下載安裝；AI 不會自己去查、不會自己更新。', size: 'narrow' });
+    await drawAiSkills(body, ai);
+  }
+  async function drawAiSkills(body, ai, onCount = null) {
     const sync = () => api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/sync`, { method: 'POST' });
     const draw = async () => {
       const { items } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills`);
+      if (!body.isConnected) return;
       body.innerHTML = `${items.length ? items.map(s => `
         <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b> <span class="muted small">${esc(projName(s.project))} · 第 ${s.version} 版</span>${s.hasScripts ? ` <span class="pill-tag purple">含腳本 ${s.scripts}</span>` : ''}
           <div class="muted small">${esc(s.description)} · SHA-256 ${esc(s.sha256.slice(0, 4))}…${esc(s.sha256.slice(-3))} · ${s.installed ? '這台已裝' : '這台還沒裝'}</div></div>
           ${s.hasScripts ? `<div class="row"><button type="button" class="btn small" data-sk-look="${esc(s.skillId)}">看腳本</button>${s.allowed ? `<button type="button" class="btn small" data-sk-revoke="${esc(s.skillId)}">收回允許</button>` : `<button type="button" class="btn small primary" data-sk-allow="${esc(s.skillId)}">允許並同步到這台</button>`}</div>` : '<span class="muted small">純文字，會安裝</span>'}</div>`).join('')
         : '<p class="muted">這個 AI 所屬的專案還沒有給它角色的技能。</p>'}
-        <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能）。</span></div>`;
+        <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能）。只有你按「同步」或 AI 重跑接入檢查時才會安裝。</span></div>`;
+      onCount?.(items.filter(s => s.hasScripts && !s.allowed).length);
     };
+    if (body.dataset.bound) return draw().catch(e => { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; });
+    body.dataset.bound = '1';
     body.addEventListener('click', async e => {
       const t = e.target.closest('[data-sk-sync],[data-sk-allow],[data-sk-revoke],[data-sk-look]');
       if (!t) return;
@@ -5318,59 +5411,6 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     skv.modal = false;
     skv.redraw = () => { if (state.page === 'perm' && perm.tab === 'skills') drawPerm(); };
     return skillsViewHtml();
-  }
-
-  function aiCardHtml(ai, expanded = false) {
-    const active = ai.status === 'active';
-    const level = tokenLevel(ai.expiresAt);
-    const expired = level === 'expired';
-    const statusTag = !active ? '<span class="pill-tag grey">已停用</span>'
-      : expired ? '<span class="pill-tag red">Token 已過期</span>'
-      : level === '2h' ? '<span class="pill-tag yellow">Token 2 小時內到期</span>'
-      : level === '24h' ? '<span class="pill-tag yellow">Token 24 小時內到期</span>' : '<span class="pill-tag green">有效</span>';
-    const id = ai.participantId;
-    return `
-      <div class="ai-card">
-        <div class="ai-card-head">
-          ${avatar(ai)}
-          <div class="member-info">
-            <div class="member-name"><b>${esc(ai.name)}</b>${statusTag}${state.projMeta.crossRoleIds.includes(ai.participantId) ? '<span class="ptag ptag-all">跨專案角色</span>' : (ai.projects || []).filter(p => PROJECTS.includes(p)).map(projTag).join('')}</div>
-            <div class="member-sub">${esc([ai.role, '#' + ai.shortCode, ai.environment].filter(Boolean).join(' · '))}
-              <span class="ai-online"><span class="dot ${ai.isOnline ? 'on' : ''}"></span>${ai.isOnline ? '在線' : '離線／閒置'}</span></div>
-            <div class="member-sub ${active && level ? 'warn-text' : ''}">Token 到期：${ai.expiresAt ? fmtTime(ai.expiresAt) : '—'}</div>
-          </div>
-        </div>
-        <div class="row actions">
-          ${!active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
-            : expired ? `<button class="btn primary" type="button" data-act="reissue" data-id="${id}">重發 Token</button>
-               <button class="btn" type="button" data-act="edit" data-id="${id}">編輯</button>`
-            : `<button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button>
-               <button class="btn" type="button" data-act="copy" data-id="${id}">複製完整接入設定</button>
-               <button class="btn" type="button" data-act="short" data-id="${id}" title="貼長設定會當掉的工具用：只有幾行，AI 自己去讀完整設定">複製短版接入</button>
-               <button class="btn" type="button" data-act="skills" data-id="${id}">技能</button>
-               <button class="btn" type="button" data-act="edit" data-id="${id}">編輯</button>
-               <button class="btn" type="button" data-act="reissue" data-id="${id}">重發 Token</button>`}
-          <button type="button" class="link push-right" data-act="more" data-id="${id}" aria-expanded="${expanded}">${expanded ? '收合設定' : '詳細設定'}</button>
-        </div>
-        ${expanded ? `
-        <div class="ai-detail">
-          <dl>
-            <dt>主要職責</dt><dd>${esc(ai.duties)}</dd>
-            <dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
-            <dt>可自主處理的事項</dt><dd>${esc(ai.autonomy)}</dd>
-            <dt>必須確認的事項</dt><dd>${esc(ai.mustConfirm)}</dd>
-            <dt>完成與交接條件</dt><dd>${esc(ai.handoff)}</dd>
-          </dl>
-          ${grantsBlock(ai, active)}
-          ${active ? `
-          <div class="row actions">
-            <button class="btn small danger-outline" type="button" data-act="disable" data-id="${id}" title="立即撤銷：Token 馬上失效，AI 無法再讀寫">停用（撤銷）</button>
-          </div>
-          <p class="muted small">接入設定與 Token 都是此 AI 的存取憑證，請只貼到自己的 AI 對話。</p>` : ''}
-          <div class="row actions"><button class="btn small danger-outline" type="button" data-act="delete" data-id="${id}" title="永久刪除：不可復原，歷史訊息保留並標已刪除">刪除</button></div>
-          <p class="muted small">版本 v${ai.version} · 更新時間 ${fmtTime(ai.updatedAt)}</p>
-        </div>` : ''}
-      </div>`;
   }
 
   // ---------- C-229 長期授權（只有行外的 AI；昱志選 C：只有「部署到正式環境」） ----------

@@ -39,7 +39,10 @@ try {
   const d = skDiff('a\nb\nc', 'a\nB\nc\nd');
   assert.deepEqual(d, [[' ', 'a'], ['-', 'b'], ['+', 'B'], [' ', 'c'], ['+', 'd']], '逐行差異');
   // 入口：我的 AI 卡片「技能」、成員與權限的「技能」分頁（leader 也有）
-  assert.ok(js.includes('data-act="skills"') && js.includes("openAiSkills(ai); // C-346"), '我的 AI 卡片有「技能」');
+  // C-352 我的 AI：一列一個 AI、一顆主按鈕、⋯ 選單、展開分頁（接入／技能／設定）；技能分頁展開才讀
+  for (const k of ['ma-row', 'data-act="menu"', '複製接入設定', '重發 Token', '技能庫 ›', '＋ 新增 AI', 'data-ma-skills', '🗑 刪除這個 AI', 'skillsWaiting']) assert.ok(js.includes(k), '我的 AI 有 ' + k);
+  assert.ok(!js.includes('C-346）：'), '拿掉專案連結串與 C-346');
+  assert.ok(!/let (autoStandbyConsent|convoMode)/.test(js), '自動待命、對話接續改成每個 AI 自己的');
   assert.ok(js.includes("[['members', '成員'], ['roles', '角色'], ['skills', '技能']]"), 'leader 有技能分頁');
   assert.ok(js.includes('看過全文與差異，核准上架'), '核准按鈕寫明要看全文與差異');
   // C-351：技能分頁照 UX 稿 v74（篩選、技能卡、黃條、抽屜、空專案）；清單只讀一支 API
