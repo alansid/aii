@@ -86,9 +86,9 @@ if (a[0] === 'run') {
   assert.match(spec, /沒選就依所在環境：行內／投信＝太長才換新、行外＝一直接續/); assert.match(spec, /\*\*太長才換新\*\*＝太長是指同一個對話叫醒滿 10 次/); assert.match(spec, /\*\*每次新對話\*\*/); assert.match(spec, /\*\*一直接續\*\*/);
   assert.match(spec, /WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent <代號> --mode/, '規格寫出 opencode 喚醒腳本');
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(js, /let convoMode = '';/, '網頁預設依所在環境'); assert.match(js, /\['', '依所在環境（建議）'\]/); assert.match(js, /太長＝同一個對話叫醒滿 10 次/, '提示寫明太長的意思');
+  assert.match(js, /const maOpt = ai => maOpts\.get\(ai\.participantId\) \|\| \{ convo: '', auto: true \}/, '網頁預設依所在環境（C-352 改成每個 AI 自己的選項）'); assert.match(js, /\['', '依所在環境（建議）'\]/); assert.match(js, /太長＝同一個對話叫醒滿 10 次/, '提示寫明太長的意思');
   assert.match(js, /Claude Code 選這個會在背景另開對話，你在畫面上看不到/, 'Claude Code 選每次新對話有提醒');
-  assert.match(js, /convoMode \? \{ convo: convoMode \} : \{\}/, '完整與短版接入：有選才帶');
+  assert.match(js, /o\.convo \? \{ convo: o\.convo \} : \{\}/, '完整與短版接入：有選才帶');
 
   console.log('convo-test：全部通過');
 } catch (e) {
