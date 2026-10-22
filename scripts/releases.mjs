@@ -22,7 +22,7 @@ if (process.argv.includes('--deployed')) {
 // 由舊到新讀 commit；標題結尾「(v0.72.6)」或開頭「v0.30.0 」是版本號；沒有版本號的 commit 算進前一個版本
 const log = execFileSync('git', ['log', '--reverse', '--format=%h%x1f%aI%x1f%s'], { cwd: root, encoding: 'utf8' }).trim().split('\n').filter(Boolean);
 const VER = /\(v(\d+\.\d+\.\d+)\)\s*$|^v(\d+\.\d+\.\d+)\b/;
-const CARD = /\bC-\d{3,}\b/g;
+const CARD = /\b(?:C-\d{3,}|[A-Z]{2,5}-\d+)\b/g; // C-382：新 commit 寫專案卡號（PLAT-12）；不是卡號的（UTF-8）由 /api/releases 濾掉
 const byVer = new Map();
 let last = null;
 for (const line of log) {

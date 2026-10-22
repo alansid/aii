@@ -49,7 +49,7 @@ const rid = () => 'req_c' + (++n);
     const msg = (await call(liu.token, '/api/messages', 'POST', { requestId: rid(), text: '[需確認] 頭像要不要上傳圖片？' })).body;
     const c1req = rid();
     const c1 = (await call(liu.token, '/api/cards', 'POST', { requestId: c1req, title: '頭像支援上傳圖片', reason: '昱志回饋', ownerId: pg.participantId, messageIds: [msg.messageId] })).body;
-    assert.match(c1.cardId, /^C-\d+$/);
+    assert.match(c1.cardId, /^[A-Z]{2,5}-\d+$/); assert.match(c1.legacyId, /^C-\d+$/); // C-382：cardId＝專案卡號
     assert.equal(c1.status, '待整理'); assert.equal(c1.owner.participantId, pg.participantId); assert.equal(c1.version, 1);
     const again = await call(liu.token, '/api/cards', 'POST', { requestId: c1req, title: '頭像支援上傳圖片' });
     assert.equal(again.status, 200); assert.equal(again.body.cardId, c1.cardId, '同 requestId 不重複建立');
@@ -392,7 +392,7 @@ const rid = () => 'req_c' + (++n);
     const { DatabaseSync } = await import('node:sqlite');
     const sqlDb = new DatabaseSync(path.join(dataDir, 'switch.db'));
     const ago = d => new Date(Date.now() - d * 86400_000).toISOString();
-    const seqOf = id => Number(id.slice(2)) - 100;
+    const seqOf = id => Number(id.slice(2)) - 100; // 傳 legacyId（C-382：cardId 是專案卡號）
     const mkDone = async (title, verify) => {
       const c = (await call(pc.token, '/api/cards', 'POST', { requestId: rid(), title, ownerId: pg.participantId })).body;
       if (!c.cardId) throw new Error('建卡失敗：' + JSON.stringify(c));
@@ -401,9 +401,9 @@ const rid = () => 'req_c' + (++n);
       return c;
     };
     const oldV = await mkDone('驗證滿 8 天', true), oldU = await mkDone('完成 8 天沒驗證', false), newV = await mkDone('驗證 6 天', true);
-    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(9), ago(8), seqOf(oldV.cardId));
-    sqlDb.prepare('UPDATE cards SET done_at = ? WHERE seq = ?').run(ago(8), seqOf(oldU.cardId));
-    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(7), ago(6), seqOf(newV.cardId));
+    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(9), ago(8), seqOf(oldV.legacyId));
+    sqlDb.prepare('UPDATE cards SET done_at = ? WHERE seq = ?').run(ago(8), seqOf(oldU.legacyId));
+    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(7), ago(6), seqOf(newV.legacyId));
     const list = (await call(pc.token, '/api/cards?limit=200&counts=1')).body; // 讀卡時順便封存（測試設 ARCHIVE_EVERY_MS=0）
     const st = id => list.items.find(c => c.cardId === id)?.status;
     assert.equal(st(oldV.cardId), undefined, '已驗證滿 7 天 → 不在預設清單（已封存）');

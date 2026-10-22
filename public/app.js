@@ -648,21 +648,33 @@
     return lead + html.split(/(\bhttps?:\/\/[^\s<]+)/).map((part, i) => i % 2
       ? `<a href="${part}" target="_blank" rel="noopener">${part}</a>`
       : part.replace(/\b[0-9a-f]{40}\b/g, h => `<button type="button" class="sha" data-sha="${h}" title="${h}（點一下複製）">${h.slice(0, 7)}</button>`)
-        .replace(/\b(?:C-\d{3,}|[A-Z]{2,5}-\d+)\b/g, m => (/^C-/.test(m) ? capsuleHtml(m) : keyToId(m) ? capsuleHtml(keyToId(m)) : m))).join(''); // C-310
+        .replace(CARD_REF_G, m => (isCardRef(m) ? capsuleHtml(m) : m))).join(''); // C-310
   }
-  // 訊息內的 C-xxx 轉成膠囊：卡號＋狀態文字（不只靠顏色）；清單載入後找不到的卡號灰字不可點
-  // C-310：卡號顯示成「專案代號-號碼」（PLAT-12）；C-xxx 留在提示裡、程式內部照舊用 C-xxx
-  const ckey = id => work.cards.get(id)?.key || id;
-  const ckeyOf = c => c?.key || ckey(c?.cardId || ''); // 卡片物件自己帶 key 就用，沒帶再查清單
-  let keyIdx = null, keyIdxAt = 0;
-  function keyToId(k) {
-    if (!keyIdx || keyIdxAt !== work.cards.size) { keyIdx = new Map([...work.cards.values()].filter(c => c.key).map(c => [c.key, c.cardId])); keyIdxAt = work.cards.size; }
-    return keyIdx.get(k) || null;
+  // 訊息內的卡號轉成膠囊：卡號＋狀態文字（不只靠顏色）；清單載入後找不到的卡號灰字不可點
+  // C-382：卡號一律是專案卡號（cardId＝PLAT-12）；舊訊息裡的 C-xxx 用卡片的 legacyId 對回專案卡號，原文不改
+  const CARD_REF_G = /\b(?:C-\d{3,}|[A-Z]{2,5}-\d+)\b/g;
+  let legIdx = null, legIdxAt = 0;
+  function cardIdNorm(id) {
+    id = String(id || '');
+    if (!/^C-\d+$/.test(id)) return id;
+    if (!legIdx || legIdxAt !== work.cards.size) { legIdx = new Map([...work.cards.values()].filter(c => c.legacyId).map(c => [c.legacyId, c.cardId])); legIdxAt = work.cards.size; }
+    return legIdx.get(id) || id;
   }
-  function capsuleHtml(id) {
-    const c = work.cards.get(id);
-    if (!c) return work.loaded ? `<button type="button" class="cap cap-miss" data-cap="${id}" title="點一下查看">${id}</button>` : id; // C-181：點了再問伺服器（別專案／已封存／不存在）
-    return `<button type="button" class="cap" data-cap="${id}" data-st="${esc(c.status)}" title="${esc(c.key ? `${c.key}（${id}）` : id)}">${esc(ckey(id))}<i class="cdot" aria-hidden="true"></i>${esc(c.status)}</button>`;
+  // 文字裡像卡號的字：舊的 C-xxx，或已知專案代號開頭（UTF-8 這類不算）
+  const projCodeSet = () => new Set((state.projectList || []).map(p => p.code).filter(Boolean));
+  const isCardRef = t => /^C-\d{3,}$/.test(t) || work.cards.has(t) || projCodeSet().has(t.split('-')[0]);
+  const cardRefsIn = t => [...new Set((String(t || '').match(CARD_REF_G) || []).filter(isCardRef).map(cardIdNorm))]; // C-382：文字裡提到的卡（專案卡號，舊 C-xxx 換成專案卡號）
+  const ckey = id => work.cards.get(cardIdNorm(id))?.cardId || cardIdNorm(id);
+  const ckeyOf = c => c?.cardId || ckey(c?.cardId || '');
+  // 卡移到別專案會換號：同一張卡（legacyId 相同）舊號那筆拿掉，清單不會出現兩張
+  function putCard(c) {
+    if (c?.legacyId) for (const [k, x] of work.cards) if (k !== c.cardId && x.legacyId === c.legacyId) work.cards.delete(k);
+    work.cards.set(c.cardId, c);
+  }
+  function capsuleHtml(raw) {
+    const id = cardIdNorm(raw), c = work.cards.get(id);
+    if (!c) return work.loaded ? `<button type="button" class="cap cap-miss" data-cap="${esc(id)}" title="點一下查看">${esc(id)}</button>` : esc(id); // C-181：點了再問伺服器（別專案／已封存／不存在）
+    return `<button type="button" class="cap" data-cap="${esc(id)}" data-st="${esc(c.status)}" title="${esc(id)}">${esc(id)}<i class="cdot" aria-hidden="true"></i>${esc(c.status)}</button>`;
   }
 
   // 第二行：AI 寫成「角色 · AI · 所屬人 · 所在環境」
@@ -702,7 +714,7 @@
   const isSlim = m => !state.open.has(m.messageId) && slimMode() && !keepFull(m) && !FLOW_TAGS.includes(tagOf(m.text));
   // 提到我／回覆我、我還沒回的（需確認有人類回過也算處理了）
   const needReply = m => mentionsMe(m) && !repliesOf(m.messageId).some(isMine) && !work.answered?.has(m.messageId);
-  const cardIdOf = t => String(t).match(/\bC-\d{3,}\b/)?.[0] || '';
+  const cardIdOf = t => cardIdNorm((String(t).match(CARD_REF_G) || []).find(isCardRef) || ''); // C-382：專案卡號或舊的 C-xxx
   // 第一句：去掉開頭的 [標籤] 和【專案名】，取第一行到第一個句號為止
   function firstSentence(t) {
     const lines = String(t).replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').replace(/^\s*【[^】\n]{1,20}】\s*/, '').split('\n').map(x => x.trim()).filter(Boolean);
@@ -911,7 +923,7 @@
     if (m.file || authorKind(m) !== 'ai') return null;
     const tag = tagOf(m.text);
     let t = String(m.text).replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').replace(/^\s*【[^】\n]{1,20}】\s*/, '');
-    t = t.replace(/^C-\d{3,}[^\n]{0,120}?→\s*@[^：:\n]{1,40}[：:]\s*/, '');
+    t = t.replace(/^(?:C-\d{3,}|[A-Z]{2,5}-\d+)[^\n]{0,120}?→\s*@[^：:\n]{1,40}[：:]\s*/, ''); // C-382：新訊息寫專案卡號
     let head, rest;
     const gap = t.search(/\n[ \t]*\n/);
     if (gap >= 0) { head = t.slice(0, gap); rest = t.slice(gap).replace(/^\s+/, ''); }
@@ -2221,7 +2233,7 @@
   const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
   const NOTE = '人類紀錄'; // C-218：人類記內容，AI 不主動看到（給卡號才讀）
   const typeTag = c => (c.type !== '工作' && c.type !== NOTE ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
-  const cidHtml = c => `<span class="cid" title="${esc(c.key ? `${c.key}（${c.cardId}）` : c.cardId)}">${c.type === NOTE ? '<span aria-label="人類紀錄">🔒</span> ' : ''}${esc(c.key || c.cardId)}</span>`; // C-310
+  const cidHtml = c => `<span class="cid">${c.type === NOTE ? '<span aria-label="人類紀錄">🔒</span> ' : ''}${esc(c.cardId)}</span>`; // C-310；C-382：只顯示專案卡號
   const mergedHtml = c => (c.mergedInto ? `<button type="button" class="merged-into" data-card="${esc(c.mergedInto)}">已整理 · 已整理到 ${esc(c.mergedInto)}</button>` : '');
   // C-226：人類紀錄只有「收集中」「已整理」兩種狀態
   const noteStText = c => (c.status === '已完成' ? '已整理' : c.status === '已封存' ? '已封存' : '收集中');
@@ -2248,7 +2260,7 @@
     a.loading = true;
     try {
       const d = await api(`/api/cards?status=${encodeURIComponent('已封存')}&limit=50&offset=${more ? a.loaded : 0}`);
-      for (const c of d.items) work.cards.set(c.cardId, c);
+      for (const c of d.items) putCard(c);
       a.loaded = (more ? a.loaded : 0) + d.items.length; a.hasMore = d.hasMore; a.fetched = true;
     } finally { a.loading = false; }
   }
@@ -2342,7 +2354,7 @@
   // [需確認] 訊息裡提到「正在等我決定的決策卡」→ 以決策卡為準，訊息不再單獨列出（C-139）
   const cardOfConfirm = d => {
     const text = state.byId.get(d.messageId)?.text || d.title || '';
-    for (const id of text.match(/C-\d+/g) || []) { const c = work.cards.get(id); if (c && (decidingMe(c) || (c.decision?.deferred && c.decision.decider?.participantId === meId()))) return c; }
+    for (const id of cardRefsIn(text)) { const c = work.cards.get(id); if (c && (decidingMe(c) || (c.decision?.deferred && c.decision.decider?.participantId === meId()))) return c; }
     return null;
   };
   work.note = null; // { id, kind: '不同意' | '要求補充', text }
@@ -2544,7 +2556,7 @@
     updateTodoBadge();
     if (!d.items.length && !suggChanged) return;
     const archMoved = d.items.some(c => c.status === '已封存' || work.cards.get(c.cardId)?.status === '已封存');
-    for (const c of d.items) work.cards.set(c.cardId, c);
+    for (const c of d.items) putCard(c);
     if (d.items.length) { work.since = d.nextSince; drawAiNow(); }
     if (archMoved) await refreshArchivedCount(); // 有卡被封存或重新打開，已封存數字跟著更新
     renderWork();
@@ -2710,7 +2722,7 @@
       cardInView(c)
       && (!work.type || c.type === work.type)
       && (!work.owner || c.owner?.participantId === work.owner)
-      && (!q || [c.title, c.next, c.cardId].some(v => (v || '').toLowerCase().includes(q))))
+      && (!q || [c.title, c.next, c.cardId, c.legacyId].some(v => (v || '').toLowerCase().includes(q))))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
@@ -2913,7 +2925,7 @@
   const dmNotes = () => (work.notes || []).filter(n => n.dm && msgInView(n.project ?? null)); // C-270
   const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !n.dm && n.ask !== true && msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
   // C-181：講已經決定完的決策卡的通知，不再列在「給你知道的」
-  const decidedCardNote = n => ((state.byId.get(n.messageId)?.text || n.preview || '').match(/C-\d+/g) || []).some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
+  const decidedCardNote = n => cardRefsIn(state.byId.get(n.messageId)?.text || n.preview || '').some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
   function notesHtml() {
     const list = noteList();
     const reason = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
@@ -3292,9 +3304,9 @@
     const c = work.cards.get(id);
     try {
       const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: c?.version } });
-      work.cards.set(id, r);
+      putCard(r);
       if (render) renderWork(); // C-304：收件匣驗收時由呼叫端先淡出再重畫
-      if (work.openId === id) openCard(id);
+      if (work.openId === id) { work.openId = r.cardId; openCard(r.cardId); } // C-382：改專案會換號
       return r;
     } catch (err) {
       toast(err.message);
@@ -3312,7 +3324,8 @@
     // C-189：相關訊息不在目前載入範圍的先抓回來，抽屜才看得到內容（不插進訊息串）
     const missMsgs = (d.messageIds || []).filter(mid => !state.byId.has(mid)).slice(0, 20);
     if (missMsgs.length) await Promise.all(missMsgs.map(mid => api(`/api/messages/${encodeURIComponent(mid)}`).then(m => { state.byId.set(mid, m); }).catch(() => {})));
-    work.cards.set(id, { ...d, log: undefined, messageIds: undefined });
+    id = d.cardId || id; // C-382：點舊的 C-xxx 也存成專案卡號
+    putCard({ ...d, log: undefined, messageIds: undefined });
     const reopen = work.openId === id && $('#card-drawer');
     work.openId = id; work.detail = d;
     if (!reopen) work.editing = false;
@@ -3365,7 +3378,8 @@
   // 「發生了什麼」：同人同秒的多筆合成一句；交接寫成「A 把這張交給 B 驗收／做」，備註收合、版號抽出放小字
   function happenedHtml(d) {
     const groups = [];
-    for (const l of d.log || []) {
+    for (const l0 of d.log || []) {
+      const l = { ...l0, text: String(l0.text).replace(/\bC-\d{3,}\b/g, cardIdNorm) }; // C-382：舊紀錄的 C-xxx 顯示成專案卡號
       const k = (l.by?.participantId || l.by?.name || '') + '|' + String(l.at).slice(0, 19);
       const g = groups[groups.length - 1];
       if (g && g.k === k && !/^建立卡片/.test(l.text) && !g.items.some(t => /^建立卡片/.test(t))) g.items.push(l.text); else groups.push({ k, by: l.by, at: l.at, items: [l.text] }); // 建卡永遠單獨一句
@@ -3481,7 +3495,7 @@
       ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
       <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
-          <div class="drawer-titles">${cidHtml(d)}${d.key ? `<span class="cid-alt muted small">${esc(d.cardId)}</span>` : ''}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
+          <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
           <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
         </div>
@@ -4268,7 +4282,7 @@
     if (d.roleProposal) return `<div class="dm-b ai rp-wrap" id="dm-${esc(d.dmId)}">${rpCard(d)}</div><div class="dm-t">${dmTime(d.createdAt)}</div>`;
     if (d.proposal) return `<div class="dm-b ai" id="dm-${esc(d.dmId)}">${apCard(d)}</div><div class="dm-t">${dmTime(d.createdAt)}</div>`;
     const mine = d.from.participantId === meId();
-    const cards = mine ? [] : [...new Set(String(d.text).match(/\bC-\d{3,}\b/g) || [])];
+    const cards = mine ? [] : cardRefsIn(d.text);
     const wb = dm.wb && dm.wb.id === d.dmId;
     return `<div class="dm-b ${mine ? 'me' : 'ai'}" id="dm-${esc(d.dmId)}">${mine ? '' : `<div class="dm-name"><b>${esc(d.from.name)}</b></div>`}<div class="dm-text">${renderText(d.text)}</div>
       ${cards.map(c => `<button type="button" class="dm-wb" data-dm-wb="${esc(d.dmId)}" data-card-id="${c}">↗ 寫回 ${c}</button>`).join(' ')}
@@ -4834,7 +4848,7 @@
     if (!w) return;
     const body = openModal(`改狀態 · ${w.title}`, `<form id="wish-form" class="stack">
       <label>狀態<select name="status">${['收到', '評估中', '排入', '先不做'].map(s => `<option${(w.status === s || (s === '排入' && w.status === '已上線')) ? ' selected' : ''}>${s}</option>`).join('')}</select></label>
-      <label>排入的工作卡（排入時必填，例：C-290；卡完成會自動顯示「已上線」）<input name="cardId" value="${esc(w.cardId || '')}" placeholder="C-xxx"></label>
+      <label>排入的工作卡（排入時必填，例：PLAT-12；卡完成會自動顯示「已上線」）<input name="cardId" value="${esc(w.cardId || '')}" placeholder="PLAT-12"></label>
       <label>原因（先不做時必填）<input name="statusNote" maxlength="200" value="${esc(w.statusNote || '')}"></label>
       <p class="error small" id="wish-err" role="alert"></p></form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="wish-form">儲存</button>' });
     body.querySelector('#wish-form').addEventListener('submit', async e => {
@@ -5006,7 +5020,7 @@
       ${r.fixes.map(f => `<div class="rel-inc fix">🩹 修正 ${esc(f.cause)}（<button type="button" class="link small" data-rel-ver="${esc(f.causeVersion)}">v${esc(f.causeVersion)}</button>）造成的問題：${esc(f.note)}${f.flow ? `（流程 ${esc(f.flow)}）` : ''}</div>`).join('')}
       ${r.causes.map(c => `<div class="rel-inc cause">⚠ 這版造成的問題，由 ${esc(c.fix)}（<button type="button" class="link small" data-rel-ver="${esc(c.fixVersion)}">v${esc(c.fixVersion)}</button>）修好：${esc(c.note)}</div>`).join('')}
       <ul class="rel-commits">${r.commits.map(c => `<li><code>${esc(c.sha)}</code> ${esc(c.title)}</li>`).join('')}</ul></article>`;
-    box.innerHTML = head + `<div class="work-filters"><input id="rel-q" type="search" placeholder="找版本、卡號或關鍵字（例：C-276、0.62、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}"></div>
+    box.innerHTML = head + `<div class="work-filters"><input id="rel-q" type="search" placeholder="找版本、卡號或關鍵字（例：PLAT-229、0.62、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}"></div>
       ${d.incidents?.length && !q ? `<section class="wpanel rel-incidents"><b>事故對照</b>${d.incidents.map(i => `<div class="small">${esc(i.fix)}（v${esc(i.fixVersion)}）← ${esc(i.cause)}（<button type="button" class="link small" data-rel-ver="${esc(i.causeVersion)}">v${esc(i.causeVersion)}</button>）：${esc(i.note)}${i.flow ? `（${esc(i.flow)}）` : ''}</div>`).join('')}</section>` : ''}
       <section class="rel-list">${list.map(row).join('') || '<p class="muted">找不到符合的版本。</p>'}</section>`;
     if (rel.hit) { const el = document.getElementById('v' + rel.hit); if (el) setTimeout(() => el.scrollIntoView({ block: 'center' }), 0); }
@@ -7154,7 +7168,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
         toast(`回報改送到「${projName(pj)}」`);
       } else if (a === 'code') { // C-310
         const cur = state.projectList.find(p => p.id === id)?.code || '';
-        const code = await promptName('專案代號', cur, { label: '2～5 個英文字母（例：PLAT）', max: 5, hint: `卡片會顯示成 ${'<代號>'}-12；改了以後舊的代號號就找不到，但 C-xxx 永遠可用。` });
+        const code = await promptName('專案代號', cur, { label: '2～5 個英文字母（例：PLAT）', max: 5, hint: `卡片會顯示成 ${'<代號>'}-12；改了以後卡片換成新代號，舊的卡號照樣查得到。` });
         if (!code || code.toUpperCase() === cur) return;
         await api(`/api/projects/${encodeURIComponent(id)}/code`, { method: 'PUT', body: { code } });
         await loadCards().catch(() => {}); renderWork();

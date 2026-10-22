@@ -41,7 +41,7 @@ try {
   for (let i = 0; i < 599; i++) {
     const st = i < 99 ? ['待處理', '進行中', '受阻'][i % 3] : i % 2 ? '已完成' : '已封存';
     await db.run(`INSERT INTO cards (uid, status, request_id, project, ${cols.join(',')}) SELECT ?, ?, ?, ?, ${cols.join(',')} FROM cards WHERE seq = ?`,
-      'card_seed' + i, st, 'seed' + i, i % 2 ? '平台' : '銀行系統', Number(tpl.cardId.slice(2)) - 100);
+      'card_seed' + i, st, 'seed' + i, i % 2 ? '平台' : '銀行系統', Number(tpl.legacyId.slice(2)) - 100);
   }
   const settingsRows = await count('SELECT COUNT(*) AS n FROM app_settings');
   const cardRows = await count('SELECT COUNT(*) AS n FROM cards');

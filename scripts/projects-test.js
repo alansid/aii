@@ -229,8 +229,8 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     assert.equal((await call(plat.token, `/api/cards/${pc333.cardId}/messages`, 'POST', { messageId: am.messageId })).status, 200, 'B1：看得到的訊息照常可掛');
     // B1（UX 10/20 退回）：發文時直接帶 cardId 也要擋——C 號、專案代號（BANK-20 那種）都不能掛別專案的卡
     const bcKey = (await call(liu.token, `/api/cards/${bc.cardId}`)).body.key;
-    assert.ok(bcKey && bcKey !== bc.cardId, '銀行卡有專案代號：' + bcKey);
-    for (const id of [bc.cardId, bcKey]) {
+    assert.ok(bcKey && bcKey === bc.cardId && /^C-\d+$/.test(bc.legacyId), '銀行卡號是專案卡號，舊編號在 legacyId：' + bcKey); // C-382
+    for (const id of [bc.legacyId, bcKey]) {
       const r = await call(plat.token, '/api/messages', 'POST', { requestId: 'req_c333_m_' + id, project: '平台', cardId: id, text: '[測試] 掛別專案的卡' });
       assert.equal(r.body.error?.code, 'CARD_FORBIDDEN', `B1：發文帶 ${id === bcKey ? '專案代號' : 'C 號'}也不能掛別專案的卡（修正前 201、cardLinked: true）`);
     }

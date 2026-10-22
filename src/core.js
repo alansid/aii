@@ -183,10 +183,12 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   }
   // C-310：專案代號（2～5 個英文大寫，卡片顯示 PLAT-12）。設定存 app_settings 的 pcode:<專案>；沒設就取網址英文名的字母
   const CODE_RE = /^[A-Z]{2,5}$/;
-  let projCodes = {};
+  let projCodes = {}, oldCodes = {}; // C-382：oldCodes＝改代號前的舊代號 → 專案（舊的 PLAT-xxx 照樣查得到）
   async function loadCodes() {
-    const set = {}, slugs = {};
-    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'pcode:' AND key < 'pcode;') OR (key >= 'slug:' AND key < 'slug;')").catch(() => [])) (r.key.startsWith('pcode:') ? set : slugs)[r.key.slice(r.key.indexOf(':') + 1)] = r.value;
+    const set = {}, slugs = {}, olds = {};
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'pcode:' AND key < 'pcode;') OR (key >= 'pcodeold:' AND key < 'pcodeold;') OR (key >= 'slug:' AND key < 'slug;')").catch(() => []))
+      (r.key.startsWith('pcodeold:') ? olds : r.key.startsWith('pcode:') ? set : slugs)[r.key.slice(r.key.indexOf(':') + 1)] = r.value;
+    oldCodes = olds;
     const out = {}, used = new Set(Object.values(set));
     projectRows.forEach((r, i) => {
       if (CODE_RE.test(set[r.id] || '')) { out[r.id] = set[r.id]; return; }
@@ -199,15 +201,23 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     projCodes = out;
   }
   const cardKey = c => (c && c.proj_no && projCodes[c.project] ? `${projCodes[c.project]}-${c.proj_no}` : null);
+  const pubNo = c => cardKey(c) || `C-${c.seq + 100}`; // C-382：對外只給專案卡號（沒有專案代號才退回 C-xxx）
   // PLAT-12 → 卡片 seq；找不到回 null（C-xxx 照舊由各路由自己解析）
+  // C-382：舊代號（改代號前）與移到別專案的卡的舊號也查得到
   async function cardSeqByKey(id) {
     const m = /^([A-Za-z]{2,5})-(\d+)$/.exec(String(id || '').trim());
     if (!m || /^C$/i.test(m[1])) return null;
     await loadProjects();
-    const pj = Object.keys(projCodes).find(k => projCodes[k] === m[1].toUpperCase());
+    const code = m[1].toUpperCase(), no = Number(m[2]);
+    const pj = Object.keys(projCodes).find(k => projCodes[k] === code) || (PROJECTS.includes(oldCodes[code]) ? oldCodes[code] : null);
     if (!pj) return null;
-    return (await db.get('SELECT seq FROM cards WHERE project = ? AND proj_no = ?', pj, Number(m[2])))?.seq ?? null;
+    const hit = (await db.get('SELECT seq FROM cards WHERE project = ? AND proj_no = ?', pj, no))?.seq;
+    if (hit) return hit;
+    const moved = await db.get('SELECT value FROM app_settings WHERE key = ?', `cardmoved:${pj}:${no}`).catch(() => null);
+    return moved ? Number(moved.value) : null;
   }
+  // C-382：卡號（PLAT-12 或舊的 C-212）→ seq；找不到回 null
+  const seqOfCardId = async id => { const m = /^C-(\d+)$/i.exec(String(id || '').trim()); return m ? Number(m[1]) - 100 : cardSeqByKey(id); };
   const invalidateProjects = () => { projectsAt = 0; };
   // 成員所屬專案：欄位是空字串＝沒有任何專案（只看得到「全部專案」）；沒有欄位值（舊資料）＝所有專案
   const projectsOf = p => {
@@ -1018,7 +1028,29 @@ ${trial
   }, { open: true });
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS, environments: ENVIRONMENTS }), { open: true });
   // C-291 版本紀錄與 3 張關鍵流程圖：部署時打包的內容，不讀資料庫；要登入（人類、AI 都能讀，寫影響範圍用）
-  route('GET', '/api/releases', () => { if (!releases) throw new ApiError(404, 'NOT_FOUND', '版本紀錄還沒產生（部署用 npm run deploy）'); return releases; });
+  route('GET', '/api/releases', () => { if (!releases) throw new ApiError(404, 'NOT_FOUND', '版本紀錄還沒產生（部署用 npm run deploy）'); return releasesView(); });
+  // C-382：commit 標題寫的卡號（舊的 C-xxx）換成專案卡號；不是卡號的（例如 UTF-8）拿掉。卡片移專案會換號，結果只留 5 分鐘
+  let relView = null, relAt = 0;
+  async function releasesView() {
+    if (relView && Date.now() - relAt < 300_000) return relView;
+    const ids = new Set();
+    for (const r of releases.items || []) { (r.cards || []).forEach(c => ids.add(c)); (r.causes || []).forEach(c => ids.add(c.fix)); (r.fixes || []).forEach(f => ids.add(f.cause)); }
+    for (const i of releases.incidents || []) { ids.add(i.fix); ids.add(i.cause); }
+    const m = await cardInfos([...ids]);
+    const tr = id => m.get(id)?.cardId || id;
+    relView = {
+      ...releases,
+      incidents: (releases.incidents || []).map(i => ({ ...i, fix: tr(i.fix), cause: tr(i.cause) })),
+      items: (releases.items || []).map(r => ({
+        ...r,
+        cards: [...new Set((r.cards || []).map(c => m.get(c)?.cardId || (/^C-/.test(c) ? c : null)).filter(Boolean))],
+        causes: (r.causes || []).map(c => ({ ...c, fix: tr(c.fix) })),
+        fixes: (r.fixes || []).map(f => ({ ...f, cause: tr(f.cause) })),
+      })),
+    };
+    relAt = Date.now();
+    return relView;
+  }
   route('GET', '/api/flows', () => new Response(flowsText || '# 流程圖還沒放進來', { headers: { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'private, no-cache' } }));
   route('POST', '/api/join', async ({ req, ctx }) => ({ __status: 201, ...(await joinHuman(ctx, await readJson(req))) }), { open: true });
 
@@ -1315,11 +1347,11 @@ ${trial
         if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `${target.name} 的所屬人類 ${owner?.name || ''} 不在「${outside.map(nameOf).join('、')}」，AI 的專案不能超出所屬人類。`);
       }
       const cards = removed.length ? await db.all(
-        `SELECT seq, project FROM cards WHERE owner_id = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') AND project IN (${removed.map(() => '?').join(',')}) ORDER BY seq`,
+        `SELECT seq, project, proj_no FROM cards WHERE owner_id = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') AND project IN (${removed.map(() => '?').join(',')}) ORDER BY seq`,
         target.id, ...removed) : [];
       if (added.length || removed.length) plan.push({ target, next, added, removed, cards });
     }
-    const impact = plan.map(x => ({ participantId: x.target.id, name: x.target.name, added: x.added, removed: x.removed, returnedCards: x.cards.map(c => 'C-' + (c.seq + 100)) }));
+    const impact = plan.map(x => ({ participantId: x.target.id, name: x.target.name, added: x.added, removed: x.removed, returnedCards: x.cards.map(pubNo) }));
     if (dryRun || !plan.length) return impact;
     const at = nowIso(), stmts = [];
     for (const x of plan) {
@@ -1504,8 +1536,8 @@ ${trial
         if (on && nextLeaders[pj].includes(p.id)) throw invalid(`${p.name} 是「${nameOf(pj)}」的 leader，先取消 leader 再設唯讀`);
         nextRo[pj] = on ? [...nextRo[pj], p.id] : nextRo[pj].filter(x => x !== p.id);
         const ids = [p.id, ...[...people.values()].filter(a => a.kind === 'ai' && a.owner_id === p.id).map(a => a.id)];
-        const cards = on ? await db.all("SELECT seq FROM cards WHERE project = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') AND owner_id IN (SELECT value FROM json_each(?)) ORDER BY seq", pj, JSON.stringify(ids)) : [];
-        roChanges.push({ participantId: p.id, name: p.name, project: pj, readOnly: on, returnedCards: cards.map(c => 'C-' + (c.seq + 100)), seqs: cards.map(c => c.seq) });
+        const cards = on ? await db.all("SELECT seq, project, proj_no FROM cards WHERE project = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') AND owner_id IN (SELECT value FROM json_each(?)) ORDER BY seq", pj, JSON.stringify(ids)) : [];
+        roChanges.push({ participantId: p.id, name: p.name, project: pj, readOnly: on, returnedCards: cards.map(pubNo), seqs: cards.map(c => c.seq) });
       }
     }
     for (const pj of PROJECTS) if (nextLeaders[pj].some(id => nextRo[pj].includes(id))) throw invalid(`唯讀的人不能當 leader（${nameOf(pj)}）`);
@@ -1650,12 +1682,12 @@ ${trial
     await loadFbProject(true);
     return projectsResponse(ctx);
   });
-  // C-310：專案代號（卡片顯示 PLAT-12）；管理員可改；改了舊代號號就失效（C-xxx 永遠可用）
+  // C-310：專案代號（卡片顯示 PLAT-12）；管理員可改；C-382：舊代號留作別名，舊的卡號照樣查得到
   function readCode(raw, selfId) {
     const code = String(raw ?? '').trim().toUpperCase();
     if (!CODE_RE.test(code)) throw invalid('專案代號需為 2～5 個英文字母');
-    const clash = projectRows.find(r => r.id !== selfId && projCodes[r.id] === code);
-    if (clash) throw new ApiError(409, 'CODE_TAKEN', `「${code}」已經是「${clash.name}」的代號`);
+    const clash = projectRows.find(r => r.id !== selfId && (projCodes[r.id] === code || oldCodes[code] === r.id));
+    if (clash) throw new ApiError(409, 'CODE_TAKEN', `「${code}」已經是「${clash.name}」的代號（或舊代號）`);
     return code;
   }
   route('PUT', '/api/projects/:id/code', async ({ ctx, me, req, params }) => {
@@ -1666,7 +1698,8 @@ ${trial
     const code = readCode((await readJson(req)).code, row.id);
     if (code === projCodes[row.id]) return projectsResponse(ctx);
     const at = nowIso();
-    await db.batch([["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['pcode:' + row.id, code]], projEvent(row.id, me.id, `${me.name} 把專案代號改成 ${code}`, at)]);
+    const upsert = "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+    await db.batch([[upsert, ['pcode:' + row.id, code]], ...(projCodes[row.id] ? [[upsert, ['pcodeold:' + projCodes[row.id], row.id]]] : []), projEvent(row.id, me.id, `${me.name} 把專案代號改成 ${code}`, at)]); // C-382：舊代號留作別名
     invalidateProjects();
     return projectsResponse(ctx);
   });
@@ -1682,7 +1715,8 @@ ${trial
     const clash = projectRows.find(r => r.id !== row.id && (all[r.id] === slug || r.id.toLowerCase() === slug));
     if (clash) throw new ApiError(409, 'SLUG_TAKEN', `「${slug}」已經是「${clash.name}」在用的網址名`);
     const at = nowIso();
-    await db.batch([["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['slug:' + row.id, slug]], projEvent(row.id, me.id, `${me.name} 把網址英文名改成 ${slug}`, at)]);
+    const pinCode = (await db.get('SELECT 1 AS x FROM app_settings WHERE key = ?', 'pcode:' + row.id)) || !projCodes[row.id] ? [] : [["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", ['pcode:' + row.id, projCodes[row.id]]]]; // C-382
+    await db.batch([...pinCode, ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['slug:' + row.id, slug]], projEvent(row.id, me.id, `${me.name} 把網址英文名改成 ${slug}`, at)]);
     return projectsResponse(ctx);
   });
   route('PUT', '/api/projects/:id/dm', async ({ ctx, me, req, params }) => {
@@ -1826,12 +1860,17 @@ ${trial
     return s;
   };
   // 工作卡狀態（轉成工作卡的回報、排入的願望跟著卡走）
-  async function cardStates(ids) {
-    const seqs = [...new Set(ids.map(cardSeq).filter(x => x !== null))];
-    if (!seqs.length) return new Map();
-    const rows = await db.all('SELECT seq, status FROM cards WHERE seq IN (SELECT value FROM json_each(?))', JSON.stringify(seqs));
-    return new Map(rows.map(r => [`C-${r.seq + 100}`, r.status]));
+  // C-382：回傳 Map（原本存的卡號 → { status, cardId＝專案卡號 }）；舊資料是 C-xxx，新的是 PLAT-xxx
+  async function cardInfos(ids) {
+    const list = [...new Set(ids.filter(Boolean).map(String))];
+    const bySeq = new Map();
+    for (const id of list) { const seq = await seqOfCardId(id); if (Number.isInteger(seq) && seq >= 1) bySeq.set(id, seq); }
+    if (!bySeq.size) return new Map();
+    await loadProjects();
+    const rows = new Map((await db.all('SELECT seq, status, project, proj_no FROM cards WHERE seq IN (SELECT value FROM json_each(?))', JSON.stringify([...new Set(bySeq.values())]))).map(r => [r.seq, r]));
+    return new Map([...bySeq].filter(([, seq]) => rows.has(seq)).map(([id, seq]) => [id, { status: rows.get(seq).status, cardId: pubNo(rows.get(seq)) }]));
   }
+  const cardStates = async ids => new Map([...(await cardInfos(ids))].map(([id, v]) => [id, v.status]));
   const cardDone = st => st === '已完成' || st === '已封存';
   // 叫醒平台 PO（AI）：在平台專案發一則提及 PO 的訊息（作者＝回報的人；他不在平台也看不到這則）
   async function notifyPo(ctx, author, text, requestId) {
@@ -1862,13 +1901,13 @@ ${trial
   }
   async function reportViews(ctx, rows) {
     const people = await peopleMap(ctx);
-    const cards = await cardStates(rows.map(r => r.card_id));
+    const cards = await cardInfos(rows.map(r => r.card_id));
     const shots = rows.length ? await db.all('SELECT id, report_seq, mime, size, created_at FROM report_shots WHERE data IS NOT NULL AND report_seq IN (SELECT value FROM json_each(?)) ORDER BY created_at', JSON.stringify(rows.map(r => r.seq))) : [];
     return rows.map(r => {
-      const cs = r.card_id ? cards.get(r.card_id) : null;
+      const ci = r.card_id ? cards.get(r.card_id) : null, cs = ci?.status || null;
       return { reportId: rNo(r.seq), seq: r.seq, title: r.title, detail: r.detail, context: JSON.parse(r.context || '{}'),
         reporter: { participantId: r.reporter_id, name: people.get(r.reporter_id)?.name || '?' }, reporterProject: r.reporter_project ? { id: r.reporter_project, name: nameOf(r.reporter_project) } : null,
-        status: r.status === '已轉工作卡' && cardDone(cs) ? '已修好' : r.status, severity: r.severity, cardId: r.card_id || null, cardStatus: cs || null,
+        status: r.status === '已轉工作卡' && cardDone(cs) ? '已修好' : r.status, severity: r.severity, cardId: ci?.cardId || r.card_id || null, cardStatus: cs || null,
         mergedInto: r.merged_into ? rNo(r.merged_into) : null, note: r.note,
         shots: shots.filter(s => s.report_seq === r.seq).map(s => ({ id: s.id, mime: s.mime, size: s.size, expiresAt: iso(s.created_at + SHOT_DAYS * 86400_000) })),
         createdAt: r.created_at, updatedAt: r.updated_at };
@@ -1933,9 +1972,9 @@ ${trial
     if (body.severity !== undefined) { if (!SEVERITIES.includes(body.severity)) throw invalid(`severity 需為：${SEVERITIES.filter(Boolean).join('、')}（或空字串）`); next.severity = body.severity; }
     if (body.note !== undefined) next.note = shortText(body.note, 500, '備註');
     if (body.cardId !== undefined && body.cardId !== null) {
-      const cs = (await cardStates([body.cardId])).get(String(body.cardId));
+      const info = (await cardInfos([body.cardId])).get(String(body.cardId)), cs = info?.status;
       if (!cs) throw invalid(`找不到工作卡 ${body.cardId}`);
-      Object.assign(next, { card_id: String(body.cardId), status: '已轉工作卡', merged_into: null });
+      Object.assign(next, { card_id: info?.cardId || String(body.cardId), status: '已轉工作卡', merged_into: null });
     } else if (body.mergedInto !== undefined && body.mergedInto !== null) {
       const t = await db.get('SELECT seq FROM reports WHERE seq = ?', rSeq(body.mergedInto));
       if (!t || t.seq === r.seq) throw invalid('mergedInto 需為另一則回報（R-xx）');
@@ -1950,12 +1989,12 @@ ${trial
 
   // 許願池：所有登入的人看得到願望、+1；作者所在專案只給同專案的人看
   async function wishViews(me, rows) {
-    const cards = await cardStates(rows.map(w => w.card_id));
+    const cards = await cardInfos(rows.map(w => w.card_id));
     const mine = new Set(rows.length ? (await db.all('SELECT wish_seq FROM wish_votes WHERE participant_id = ? AND wish_seq IN (SELECT value FROM json_each(?))', me.id, JSON.stringify(rows.map(w => w.seq)))).map(v => v.wish_seq) : []);
     return rows.map(w => {
-      const cs = w.card_id ? cards.get(w.card_id) : null;
+      const ci = w.card_id ? cards.get(w.card_id) : null, cs = ci?.status || null;
       const status = w.card_id && w.status !== '先不做' ? (cardDone(cs) ? '已上線' : '排入') : w.status;
-      return { wishId: `W-${w.seq}`, seq: w.seq, title: w.title, why: w.why, status, statusNote: w.status_note, cardId: w.card_id || null, votes: w.votes, voted: mine.has(w.seq), mine: w.author_id === me.id,
+      return { wishId: `W-${w.seq}`, seq: w.seq, title: w.title, why: w.why, status, statusNote: w.status_note, cardId: ci?.cardId || w.card_id || null, votes: w.votes, voted: mine.has(w.seq), mine: w.author_id === me.id,
         project: w.author_project && projectsOf(me).includes(w.author_project) ? { id: w.author_project, name: nameOf(w.author_project) } : null, createdAt: w.created_at };
     });
   }
@@ -1997,8 +2036,10 @@ ${trial
     const note = body.statusNote !== undefined ? shortText(body.statusNote, 200, '原因') : w.status_note;
     if (!WISH_STATUS.includes(status)) throw invalid(`status 需為：${WISH_STATUS.join('、')}`);
     if (status === '排入' || status === '已上線') {
-      if (!cardId) throw invalid('排入要帶 cardId（工作卡 C-xxx）');
-      if (!(await cardStates([cardId])).get(String(cardId))) throw invalid(`找不到工作卡 ${cardId}`);
+      if (!cardId) throw invalid('排入要帶 cardId（工作卡，例如 PLAT-12）');
+      const info = (await cardInfos([cardId])).get(String(cardId));
+      if (!info) throw invalid(`找不到工作卡 ${cardId}`);
+      cardId = info.cardId;
       status = '排入';
     } else if (body.status !== undefined) cardId = null;
     if (status === '先不做' && !note) throw invalid('先不做請寫原因（statusNote）');
@@ -2312,7 +2353,7 @@ ${trial
       const ct = { title: strField(t.title, 'currentTask.title', 100, { required: true }) };
       const stage = strField(t.stage, 'currentTask.stage', 30); if (stage) ct.stage = stage;
       const sha = strField(t.sha, 'currentTask.sha', 40); if (sha) { if (!/^[0-9a-f]{40}$/.test(sha)) throw invalid('currentTask.sha 需為完整 40 碼'); ct.sha = sha; }
-      const cardId = strField(t.cardId, 'currentTask.cardId', 12); if (cardId) { if (!/^C-\d+$/.test(cardId)) throw invalid('currentTask.cardId 需為 C-數字'); ct.cardId = cardId; }
+      const cardId = strField(t.cardId, 'currentTask.cardId', 12); if (cardId) { if (!/^(?:C|[A-Z]{2,5})-\d+$/.test(cardId)) throw invalid('currentTask.cardId 需為卡號，例如 PLAT-12'); ct.cardId = cardId; } // C-382：專案卡號（舊的 C-xxx 也收）
       out.currentTask = ct;
     } else out.currentTask = null;
     if (raw.backlog !== undefined) {
@@ -2545,7 +2586,7 @@ ${trial
     const ai = await myAi(me, params.id);
     if (String(body.confirmName ?? '').trim() !== ai.name) throw invalid('confirmName 必須和 AI 名稱完全相同');
     const at = nowIso();
-    const cards = await db.all("SELECT seq, title FROM cards WHERE owner_id = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') ORDER BY seq", ai.id);
+    const cards = await db.all("SELECT seq, title, project, proj_no FROM cards WHERE owner_id = ? AND status IN ('待整理','待處理','進行中','待確認','受阻') ORDER BY seq", ai.id);
     const stmts = [
       ["UPDATE participants SET status = 'deleted', token = ?, token_expires_at = 0, updated_at = ? WHERE id = ?", ['deleted_' + ai.id, at, ai.id]],
       ["UPDATE notifications SET status = 'acked', acked_at = ? WHERE recipient_id = ? AND status = 'pending'", [at, ai.id]],
@@ -2561,13 +2602,14 @@ ${trial
     if (cards.length) {
       const people = await peopleMap({});
       const pos = [...people.values()].filter(p => p.status === 'active' && p.kind === 'ai' && p.role_key === 'PO').map(p => p.id);
-      const list = cards.map(c => 'C-' + (c.seq + 100)).join('、');
+      await loadProjects();
+      const list = cards.map(pubNo).join('、');
       try {
         await createMessage(ctx, me, { text: `[通知] 【全部專案】AI「${ai.name}」已被刪除，它負責的 ${cards.length} 張卡變成未指派（待處理）：${list}。請重新安排或由成員認領。`, requestId: 'aidel_' + ai.id, recipientIds: pos });
         noticed = true;
       } catch (err) { console.error('ai delete notify failed:', err.message); }
     }
-    return { deleted: true, name: ai.name, unassignedCards: cards.map(c => 'C-' + (c.seq + 100)), notified: noticed };
+    return { deleted: true, name: ai.name, unassignedCards: cards.map(pubNo), notified: noticed };
   });
   route('POST', '/api/my-ais/:id/enable', ({ me, params, ctx }) => { requireHuman(me); return setAiStatus(ctx, me, params.id, 'active'); });
   // C-229 長期授權：只有所屬人類能看、能改
@@ -2856,7 +2898,7 @@ ${trial
     if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return { data: teamCache.data, priv: teamCache.priv };
     // C-240：互不相關的查詢同時送（每次查詢都可能要跨洲來回）
     const [people, recent, cardWork, pending, aiRows] = await Promise.all([
-      peopleMap(ctx), recentMessages(), teamCards(db),
+      peopleMap(ctx), recentMessages(), loadProjects().then(() => teamCards(db, pubNo)),
       pendingRows(), // C-245 起只讀一次；C-320 起不 JOIN 訊息（訊息已不在的通知照舊算進待處理數）
       db.all('SELECT participant_id, state, updated_at FROM ai_state'),
     ]);
@@ -3004,7 +3046,7 @@ ${trial
     const { cards, stateMsgs, pendRows } = priv;
     const mine = projectsOf(me), since = await isolationSince(), joined = me.created_at || '';
     const seeMsg = (project, at) => (project && mine.includes(project)) || !since || (at >= since ? !project : at >= joined);
-    const work = workFrom(cards, c => mine.includes(c.project));
+    const work = workFrom(cards, c => mine.includes(c.project), pubNo);
     const msgState = new Map();
     for (const m of stateMsgs) if (!msgState.has(m.authorId) && seeMsg(m.project, m.created_at)) msgState.set(m.authorId, m.s);
     const pend = new Map();
