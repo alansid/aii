@@ -14,6 +14,11 @@ try {
   await login(liu.token);
   await until(async () => /管理員/.test(await meLine()), 8000, '管理員名片');
   assert.ok(!/Sponsor/.test(await meLine()), `管理員名片不顯示舊角色（${await meLine()}）`);
+  // 管理員進專案：不跳「你在 平台 還沒設角色」
+  await js("history.pushState(null, '', '/p/platform/messages'); dispatchEvent(new PopStateEvent('popstate')); true");
+  await until(() => js("/平台/.test(document.querySelector('#crumbs')?.textContent || '')"), 8000, '進平台');
+  await new Promise(r => setTimeout(r, 600));
+  assert.equal(await js("document.querySelector('#role-banner').hidden"), true, '管理員不提示設角色');
 
   await login(kang.token);
   await until(async () => /BA/.test(await meLine()), 8000, '一般成員名片');

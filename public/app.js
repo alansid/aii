@@ -1157,12 +1157,12 @@
     });
     drawChrome();
   }
-  // C-219：剛被加進某專案、角色還沒設：進那個專案時頂端一行提示，按掉不再出現
+  // C-219：剛被加進某專案、角色還沒設：進那個專案時頂端一行提示，按掉不再出現（C-380：管理員不掛角色，不提示）
   function drawRoleBanner() {
     const b = $('#role-banner');
     if (!b) return;
     const pj = projectView(), me = state.me;
-    const show = !!me && me.memberType === 'human' && myProjects().includes(pj) && !!me.projectRoles && !(me.projectRoles[pj]) && !store.get(`aigile-role-hint:${me.participantId}:${pj}`);
+    const show = !!me && me.memberType === 'human' && !isAdmin() && myProjects().includes(pj) && !!me.projectRoles && !(me.projectRoles[pj]) && !store.get(`aigile-role-hint:${me.participantId}:${pj}`);
     b.hidden = !show;
     b.innerHTML = show ? `<span>你在 <b>${esc(projName(pj))}</b> 還沒設角色</span><button type="button" class="link" data-role-set>設定</button><button type="button" class="icon-btn" data-role-dismiss="${esc(pj)}" aria-label="不再提醒">×</button>` : '';
   }
