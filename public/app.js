@@ -372,7 +372,7 @@
   document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
 
   function drawMe() {
-    const meCard = `<button type="button" class="me-avatar-btn" data-open-profile title="個人資料" aria-label="個人資料（更換頭像）">${avatar(state.me)}</button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(state.me.role || '未設定角色')} · 本人</span></div>`;
+    const meCard = `<button type="button" class="me-avatar-btn" data-open-profile title="個人資料" aria-label="個人資料（更換頭像）">${avatar(state.me)}</button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(roleNoPj(state.me) || '未設定角色')} · 本人</span></div>`;
     $('#sheet-me').innerHTML = meCard;
   }
 
@@ -669,7 +669,7 @@
   function subLine(a, pj) {
     if (a.memberType === 'ai') return [a.role, 'AI', a.ownerName, a.environment].filter(Boolean).join(' · ');
     if (a.memberType === 'system') return '系統';
-    const r = pj === undefined ? a.role || '' : roleIn(a, pj); // C-219：依那則訊息的專案；跨專案頻道（pj＝null）不顯示
+    const r = pj === undefined ? roleNoPj(a) : roleIn(a, pj); // C-219：依那則訊息的專案；跨專案頻道（pj＝null）不顯示
     return [r, a.environment].filter(Boolean).join(' · ') || '人類';
   }
   function statusTags(m, toMe, replyMe) {
@@ -968,6 +968,8 @@
     if (q.memberType !== 'human' || !q.projectRoles) return q.role || '';
     return PROJECTS.includes(pj) ? q.projectRoles[pj] || '' : '';
   };
+  // C-380：不分專案的地方（名片、搜尋、沒有專案的訊息），管理員顯示「管理員」，不露出舊的跨專案角色
+  const roleNoPj = p => (p?.memberType === 'human' && p.participantId && p.participantId === state.projMeta.adminId ? '管理員' : p?.role || '');
   // ---------- C-368 找人：成員與權限、@ 選人、我的 AI 共用 ----------
   // 比對名字、代號（RVVW）、角色名稱與代碼（PG），不分大小寫；篩選在網頁做，不加讀取
   const findQ = q => (q || '').trim().toLowerCase();
@@ -1067,6 +1069,7 @@
     state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {}, join: d.join || {}, feedbackProject: d.feedbackProject || '平台' }; // C-369 join // C-294、C-300
     document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
     if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
+    if (state.me) drawMe(); // C-380：知道誰是管理員後重畫名片
     PROJECTS.length = 0;
     PROJECTS.push(...state.projectList.filter(p => !p.archived).map(p => p.id));
   }
@@ -7259,7 +7262,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       !list ? `<p class="muted small">${err}</p>` : list.length ? list.map(row).join('') : '<p class="muted small">沒有符合的。</p>'}</section>`;
     res.innerHTML = sec('卡片', cs, c => `<button type="button" class="sr-row" data-sr-card="${esc(c.cardId)}"><span class="sr-k">${esc(ckeyOf(c))}</span><span class="sr-t">${markHit(c.title, q)}</span><span class="sr-m muted small">${esc(c.status)}${c.project ? ' · ' + esc(projName(c.project)) : ''}</span></button>`, esc(cards.reason?.message || '卡片搜尋失敗，請再按一次 Enter。'))
       + sec('訊息', ms, m => `<button type="button" class="sr-row" data-sr-msg="${esc(m.messageId)}" data-sr-pj="${esc(m.project || '')}"><span class="sr-k">${esc(m.author?.name || '?')}</span><span class="sr-t">${snippet(m.text, q)}</span><span class="sr-m muted small">${esc(fmtTime(m.createdAt).slice(0, -3))}${m.project ? ' · ' + esc(projName(m.project)) : ''}</span></button>`, esc(msgs.reason?.message || '訊息搜尋失敗，請再按一次 Enter。'))
-      + sec('成員', ps, p => `<button type="button" class="sr-row" data-sr-person="${esc(p.name)}">${avatarDot(p)}<span class="sr-t">${markHit(p.name, q)}</span><span class="sr-m muted small">${esc(p.role || '')}${p.memberType === 'ai' && p.ownerName ? ' · 所屬 ' + esc(p.ownerName) : ''}</span></button>`, '成員載入失敗。');
+      + sec('成員', ps, p => `<button type="button" class="sr-row" data-sr-person="${esc(p.name)}">${avatarDot(p)}<span class="sr-t">${markHit(p.name, q)}</span><span class="sr-m muted small">${esc(roleNoPj(p))}${p.memberType === 'ai' && p.ownerName ? ' · 所屬 ' + esc(p.ownerName) : ''}</span></button>`, '成員載入失敗。');
   }
   document.addEventListener('submit', e => {
     const f = e.target.closest?.('[data-search-form]'); if (!f) return;

@@ -38,9 +38,12 @@ const call = async (token, p, method = 'GET', body) => {
 
     // ⑥ 上線時把現有人類的角色帶到他所在的每個專案
     let P = await people();
-    assert.deepEqual(P.get(id(liu)).projectRoles, { 平台: 'Sponsor', 銀行系統: 'Sponsor' }, '現有角色帶到每個專案');
+    // C-380：管理員不帶（他在每個專案）；其他人照舊帶到每個專案
+    assert.deepEqual(P.get(id(liu)).projectRoles, { 平台: '', 銀行系統: '' }, '管理員不自動帶角色');
+    assert.deepEqual(P.get(id(percy)).projectRoles, { 平台: 'PO', 銀行系統: 'PO' }, '現有角色帶到每個專案');
     assert.deepEqual(P.get(id(kang)).projectRoles, { 平台: 'BA', 銀行系統: 'BA' });
-    assert.deepEqual((await call(liu.token, '/api/me')).body.projectRoles, { 平台: 'Sponsor', 銀行系統: 'Sponsor' }, '/api/me 也帶自己的');
+    assert.deepEqual((await call(kang.token, '/api/me')).body.projectRoles, { 平台: 'BA', 銀行系統: 'BA' }, '/api/me 也帶自己的');
+    assert.deepEqual((await call(liu.token, '/api/me')).body.projectRoles, { 平台: '', 銀行系統: '' }, '管理員的 /api/me 也是未設定');
 
     // ⑤ 之後新加入的：未設定
     const wang = (await call(null, '/api/join', 'POST', { name: '王小明', role: 'UX' })).body;

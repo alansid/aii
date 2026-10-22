@@ -1152,8 +1152,11 @@ ${trial
     let r = await db.get("SELECT value FROM app_settings WHERE key = 'project_roles'").catch(() => null);
     if (!r) {
       // 第一次上線：把現有人類的角色帶到他所在的每個專案（昱志第 1565 則選 A）
-      const init = {};
-      for (const p of await db.all("SELECT * FROM participants WHERE kind = 'human' AND status = 'active'")) {
+      // C-380：管理員不帶（他在每個專案，帶了就到處掛舊角色）
+      const init = {}, humans = await db.all("SELECT * FROM participants WHERE kind = 'human' AND status = 'active'");
+      const adminId = adminOf(new Map(humans.map(p => [p.id, p])))?.id;
+      for (const p of humans) {
+        if (p.id === adminId) continue;
         const role = String(p.role || '').trim().slice(0, 10);
         if (role) init[p.id] = Object.fromEntries(projectsOf(p).map(pj => [pj, role]));
       }
