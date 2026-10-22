@@ -452,7 +452,7 @@
       store.del(TOKEN_KEY);
       state.token = null;
       state.me = null;
-      $('#token-error').textContent = '這是 AI 助手的 Token，只能透過 API 存取，不能登入網頁。';
+      $('#token-error').textContent = '這是 AI 的 Token，只能透過 API 存取，不能登入網頁。';
       return showJoin();
     }
     // C-202：舊的登入方式（瀏覽器存著登入碼、或掃 QR Code 進來）自動換成「這台裝置」的登入，之後可在「我的裝置」管理
@@ -1099,7 +1099,7 @@
   const cardInView = c => { const v = projectView(); return v === 'hub' || (v !== 'cross' && c.project === v); };
   const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
   const viewLabel = v => (v === 'hub' ? '總覽' : v === 'cross' ? '跨專案頻道' : projName(v)); // C-298：第一層改叫「總覽」
-  // 各檢視「要你做的」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
+  // 各檢視「要你處理」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
   // C-314：「要你處理」只有一個來源。數字（側欄、分頁標題、各專案）和總覽右側清單都從這裡算，不會一邊 4 件、一邊目前沒有
   // 決策／[需確認]、AI 建議、等你驗收（C-242）、要你回覆（C-259）、私訊（C-270）
   function todoItems() {
@@ -1131,11 +1131,11 @@
     document.querySelectorAll('[data-proj-only]').forEach(b => { b.hidden = v === 'hub'; });
     document.querySelectorAll('[data-no-cross]').forEach(b => { b.hidden = v === 'hub' || v === 'cross'; });
     const opts = [...myProjects(), 'cross'];
-    const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你做的 ${counts[k]} 件">${counts[k]}</span>` : '');
+    const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你處理 ${counts[k]} 件">${counts[k]}</span>` : '');
     document.querySelectorAll('.proj-switch').forEach((el, i) => {
       // C-298：總覽時側欄直接列專案（側欄那份；手機選單照舊用卡片）
       if (v === 'hub' && !el.classList.contains('sheet-proj')) {
-        const n = k => counts[k] ? `<span class="hs-n" aria-label="要你做的 ${counts[k]} 件">${counts[k] > 99 ? '99+' : counts[k]}</span>` : '';
+        const n = k => counts[k] ? `<span class="hs-n" aria-label="要你處理 ${counts[k]} 件">${counts[k] > 99 ? '99+' : counts[k]}</span>` : '';
         const cur = state.page === 'hub';
         el.innerHTML = `<nav class="hub-side" aria-label="總覽">
           <button type="button" class="hs-item${cur ? ' on' : ''}" data-proj="hub"${cur ? ' aria-current="page"' : ''}><span class="hs-ico" aria-hidden="true">🏠</span><span class="hs-name">總覽</span></button>
@@ -2810,7 +2810,7 @@
       ${decSection}
       ${suggHtml()}
       <div class="wpanels">
-        ${panel('等你處理', 'mine', waitMe, '目前沒有等你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`)}
+        ${panel('要你處理', 'mine', waitMe, '目前沒有要你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`)}
         ${panel('受阻', 'blocked', blocked, '沒有受阻的卡片。', c => waitText(c) || '未填寫阻塞原因')}
         ${panel('最近完成（7 天）', 'done', done, '最近 7 天沒有完成的卡片。', c => `${c.verified ? (archiveLeftMs(c) < DAY_MS ? '已驗證 · 明天收起' : '已驗證') : pendingDays(c) > ARCHIVE_DAYS ? `待驗證 ${pendingDays(c)} 天` : '待驗證'} · ${c.done?.by?.name || ''} · ${shortTime(c.done?.at || c.updatedAt)}`,
           work.archived.count ? `<button type="button" class="link small" data-filter="已封存">更早的 ${work.archived.count} 張已封存</button>` : '')}
@@ -2850,7 +2850,7 @@
     const ok = e.target.closest?.('[data-ver-ok]'), no = e.target.closest?.('[data-ver-no]');
     if (ok) acceptCard(ok.dataset.verOk); else if (no) rejectCard(no.dataset.verNo);
   });
-  // ---------- 收件匣（C-134）：要你做的＋給你知道的 ----------
+  // ---------- 收件匣（C-134）：要你處理＋給你知道的 ----------
   work.notes = [];
   async function loadNotes() {
     work.notesAt = Date.now();
@@ -2904,7 +2904,7 @@
       await Promise.all(chunks.map(ackNotes));
     } catch (err) { work.notes = backup; renderWork(); toast('沒有標成已讀：' + err.message); }
   }
-  // 「給你知道的」：同一則已經出現在「要你做的」的 [需確認]，不重複顯示
+  // 「給你知道的」：同一則已經出現在「要你處理」的 [需確認]，不重複顯示
   // C-259／C-268：「要你回覆」只看通知（跟徽章同一個來源）；[需確認]、交接、等你驗收／決定的卡已在別區，不重複
   const askNoteRaw = () => { const dup = new Set(legacyConfirms().map(d => d.messageId));
     return (work.notes || []).filter(n => !n.dm && n.ask === true && !work.answered.has(n.messageId) && !dup.has(n.messageId) && !/^\s*\[(需確認|交接)\]/.test(n.preview || '') && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !askCardElsewhere(n)); };
@@ -2949,7 +2949,7 @@
       const n = projStats(p), m = lastMsgOf(p);
       const st = (label, v, cls) => `<span class="hs${v && cls ? ' ' + cls : ''}${v ? '' : ' zero'}">${label}<b>${v}</b></span>`;
       return `<button type="button" class="hub-card" style="--pc:${projColor(p)}" data-proj="${esc(p)}" aria-label="進入 ${esc(projName(p))}">
-        <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}${leadersOf(p).length ? ` · ★ leader：${esc(leadersOf(p).map(id => state.participants.get(id)?.name).filter(Boolean).join('、'))}` : ''}</span></span>${counts[p] ? `<span class="hc-todo">要你做 ${counts[p]}</span>` : ''}</span>
+        <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}${leadersOf(p).length ? ` · ★ leader：${esc(leadersOf(p).map(id => state.participants.get(id)?.name).filter(Boolean).join('、'))}` : ''}</span></span>${counts[p] ? `<span class="hc-todo">要你處理 ${counts[p]}</span>` : ''}</span>
         <span class="hc-stats">${st('今日完成', n.done)}${st('進行中', n.doing)}${st('受阻', n.blocked, 'bad')}${st('待驗收', n.verify, 'warn')}</span>
         <span class="hc-last">${m ? `最新：${esc(m.author.name)}「${esc(oneLine(m.text, 50))}」` : '最近 12 小時沒有新訊息'}</span>
         <span class="hc-go">進入 ›</span></button>`;
@@ -2997,8 +2997,8 @@
   function inboxHtml() {
     const all = [...work.cards.values()].filter(cardInView);
     const open = todoByView()[projectView()] || 0;
-    return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你做` : '沒有要你做的事'}</span></div></div>
-      <div class="inbox-block-title">要你做的</div>
+    return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你處理` : '沒有要你處理的事'}</span></div></div>
+      <div class="inbox-block-title">要你處理</div>
       ${todoHtml(all)}
       ${noteList().length || work.sec?.length ? `<div class="inbox-block-title">給你知道的</div>
       ${notesHtml()}` : ''}`;
@@ -3021,7 +3021,7 @@
     const verifyMe = all.filter(verifyingMe); // C-242
     const asks = askNotes(), dms = dmNotes();
     const joins = (work.joins || []).filter(j => projectView() === 'hub' || j.project === projectView()); // C-369
-    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length) return '<section class="wpanel"><p class="muted">目前沒有要你做的事。</p></section>';
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length) return '<section class="wpanel"><p class="muted">目前沒有要你處理的事。</p></section>';
     const askSection = asks.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>要你回覆</h3><span class="wcount ora">${asks.length}</span><span class="muted small">別人指定要你回覆的訊息；回覆了或按「不用回」就移走</span></div>
         ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
@@ -3333,13 +3333,13 @@
   // 短名：名字很長的 AI 用代號（RVVW），其他照原名
   const shortOf = name => name; // C-269：一律顯示名字、不顯示代碼；太長的由 CSS 截斷加…，滑過看全名
   const actBtn = (act, label, desc, pri = false) => `<button type="button" class="act-btn${pri ? ' pri' : ''}" data-act="${act}"><b>${label}</b><span>${esc(desc)}</span></button>`;
-  // 「現在要你做的」：依情況只露 1～2 顆大按鈕；不是你的卡不顯示
+  // 「現在要你處理」：依情況只露 1～2 顆大按鈕；不是你的卡不顯示
   function nowActsHtml(d) {
     const prev = prevHandName(d);
     let acts = '';
     if (verifyingMe(d)) acts = actBtn('ver-ok', '驗收通過', '確認做好了，這張卡結案', true) + actBtn('ver-no', '退回…', `有問題，寫原因退回給 ${prev ? shortOf(prev) : '上一棒'}`);
     else if (ownsOpen(d)) acts = actBtn('done', '標為已完成', '你自己做完了', true) + (canHandover(d) ? actBtn('handover', '交接…', '換人負責') : '');
-    return acts ? `<section class="now-acts" aria-label="現在要你做的"><b class="now-title">現在要你做的</b>${acts}</section>` : '';
+    return acts ? `<section class="now-acts" aria-label="現在要你處理"><b class="now-title">現在要你處理</b>${acts}</section>` : '';
   }
   const ownsOpen = d => d.type !== '決策' && isMeRef(d.owner) && !closedSt(d.status) && d.status !== '待確認';
   // 「⋯ 其他動作」：每項一句說明；人類畫面不再有「標為已驗證」（人類按驗收通過就同時完成＋驗證）
@@ -5140,7 +5140,7 @@
       const soon = act.filter(maWarn).length, on = act.filter(a => a.isOnline).length, sw = act.filter(a => a.skillsWaiting > 0).length;
       body.querySelector('#ma-sum').innerHTML = `${scope ? `<b>${esc(projName(scope))}</b> 的 AI · ` : ''}${items.length} 個 · ${on} 在線${soon ? ` · <span class="warn-text">${soon} 個 Token 快到期</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 個有技能等你允許</span>` : ''}`;
       body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId, q)).join('')
-        : items.length ? findEmptyHtml('myai', true) : '<p class="muted">還沒有 AI 助手。按「＋ 新增 AI」選一個角色範例開始。</p>';
+        : items.length ? findEmptyHtml('myai', true) : '<p class="muted">還沒有 AI。按「＋ 新增 AI」選一個角色範例開始。</p>';
       for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
     }
     async function draw() {
@@ -5204,12 +5204,12 @@
           loadParticipants().catch(() => {});
           openTokenOnly(r);
         } else if (b.dataset.act === 'disable') {
-          if (!await confirmDialog({ title: '停用 AI 助手？', confirmText: '停用', danger: true,
+          if (!await confirmDialog({ title: '停用 AI？', confirmText: '停用', danger: true,
             message: `停用後 <b>${esc(ai.name)}</b> 的 Token 會立即失效，它將無法再讀寫群組，之後可以重新啟用。` })) return;
           await api(`/api/my-ais/${id}/disable`, { method: 'POST' });
           await draw();
         } else if (b.dataset.act === 'delete') {
-          if (!await confirmDialog({ title: '永久刪除 AI 助手？', confirmText: '永久刪除', danger: true, expectText: ai.name,
+          if (!await confirmDialog({ title: '永久刪除 AI？', confirmText: '永久刪除', danger: true, expectText: ai.name,
             message: `<b>${esc(ai.name)}</b> 的 Token 會立即失效，從成員名單、@ 選單、團隊狀態消失，<b>不可復原</b>。它發過的訊息與卡片紀錄會保留並標「（已刪除）」；它負責且未完成的卡片會變成未指派。` })) return;
           const r = await api(`/api/my-ais/${id}/delete`, { method: 'POST', body: { confirmName: ai.name } });
           toast(r.unassignedCards.length ? `已刪除；${r.unassignedCards.join('、')} 變成未指派` : '已刪除');
@@ -5227,7 +5227,7 @@
   function shortOnboardingText(ai, r) {
     const dir = `.aigile/${r.agent || 'AI'}`;
     // C-356：Codex 沒開網路時連規格都下載不到，所以開網路的說明要寫在這段貼上的文字裡
-    return `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI 助手（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
+    return `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
 0. 如果你是 Codex：預設沙盒不能連網。~/.codex/config.toml 要有這兩行（改完重開 Codex，不用開完全權限）：
 sandbox_mode = "workspace-write"
 [sandbox_workspace_write] 底下 network_access = true
@@ -5694,7 +5694,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const envKeys = environments.map(e => e.key);
     const cur = editing ? (ai.environment || '') : '';
     const envOpts = [...envKeys, ...(cur && !envKeys.includes(cur) ? [cur] : []), ''];
-    const body = openModal(editing ? '編輯 AI 助手' : '新增 AI 助手', `
+    const body = openModal(editing ? '編輯 AI' : '新增 AI', `
       <form id="ai-form" class="stack">
         <label>角色範本
           <select name="roleKey">${roleOptionsHtml(roles)}</select>
@@ -5728,7 +5728,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       </form>`, {
       size: 'form',
       foot: `<button class="btn" type="button" data-close>取消</button>
-             <button class="btn primary" type="submit" form="ai-form">${editing ? '儲存變更' : '建立 AI 助手'}</button>`,
+             <button class="btn primary" type="submit" form="ai-form">${editing ? '儲存變更' : '建立 AI'}</button>`,
     });
     const form = body.querySelector('#ai-form');
     const counts = () => { for (const f of fields) body.querySelector(`[data-count="${f.key}"]`).textContent = `${form[f.key].value.length}/1000`; };
@@ -5866,7 +5866,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   }
 
   // 通知收件匣
-  // 收件匣：有新訊息通知時更新（徽章只算「要你做的」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
+  // 收件匣：有新訊息通知時更新（徽章只算「要你處理」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
   async function refreshInboxCount() {
     try {
       if ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > (dm.waitUntil > Date.now() ? 60_000 : 300_000)) { await loadNotes(); if (state.page === 'inbox') renderWork(); if ((work.notes || []).some(n => n.dm)) dm.waitUntil = 0; } // C-270：只在送出私訊、AI 還沒回的 30 分鐘內每分鐘看一次；其他時間照舊 5 分鐘 // C-245：沒新訊息就不重抓；C-268：徽章要算要你回覆，所以每頁都更新

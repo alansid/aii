@@ -468,7 +468,7 @@ export function registerLogin(d) {
         const code = String(body.code ?? '').trim();
         if (!code || code.startsWith(DEVICE_PREFIX)) return null;
         const p = await db.get("SELECT * FROM participants WHERE token = ? AND status = 'active'", code);
-        if (p && p.kind !== 'human') throw new ApiError(400, 'AI_TOKEN', '這是 AI 助手的 Token，只能給 AI 透過 API 使用，不能登入網頁。請貼你本人的登入碼。');
+        if (p && p.kind !== 'human') throw new ApiError(400, 'AI_TOKEN', '這是 AI 的 Token，只能給 AI 透過 API 使用，不能登入網頁。請貼你本人的登入碼。');
         return p;
       },
     },

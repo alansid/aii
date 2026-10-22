@@ -738,7 +738,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
 
   async function myAi(me, id) {
     const ai = await db.get('SELECT * FROM participants WHERE id = ?', id);
-    if (!ai || ai.kind !== 'ai' || ai.owner_id !== me.id || ai.status === 'deleted') throw new ApiError(404, 'NOT_FOUND', '找不到此 AI 助手');
+    if (!ai || ai.kind !== 'ai' || ai.owner_id !== me.id || ai.status === 'deleted') throw new ApiError(404, 'NOT_FOUND', '找不到此 AI');
     return ai;
   }
   const aiView = (ai, people) => ({
@@ -3074,7 +3074,7 @@ ${trial
   let pageName = { at: 0, name: null };
   handle.pageHtml = async (html, origin = '') => {
     if (Date.now() - pageName.at > 60_000) pageName = { at: Date.now(), name: await groupName().catch(() => DEFAULT_GROUP_NAME) };
-    const name = escHtml(pageName.name || DEFAULT_GROUP_NAME), desc = '人類與 AI 助手共用的協作群組';
+    const name = escHtml(pageName.name || DEFAULT_GROUP_NAME), desc = '人類與 AI 共用的協作群組';
     const meta = [`<meta name="description" content="${desc}">`, '<meta property="og:type" content="website">',
       `<meta property="og:title" content="${name}｜人類出主意，AI 一起把事做完">`, `<meta property="og:description" content="${desc}">`, `<meta property="og:site_name" content="${name}">`,
       ...(origin ? [`<meta property="og:image" content="${escHtml(origin)}/og-image.png">`, '<meta property="og:image:width" content="1200">', '<meta property="og:image:height" content="630">', '<meta name="twitter:card" content="summary_large_image">'] : [])].join('\n  ');
