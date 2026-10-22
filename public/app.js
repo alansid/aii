@@ -982,6 +982,9 @@
   };
   // C-380：不分專案的地方（名片、搜尋、沒有專案的訊息），管理員顯示「管理員」，不露出舊的跨專案角色
   const roleNoPj = p => (p?.memberType === 'human' && p.participantId && p.participantId === state.projMeta.adminId ? '管理員' : p?.role || '');
+  // C-380（PLAT-235）：管理員看得到、管得了所有專案，但在沒有專案角色的專案不算成員（名單、人數、交接、@ 選人都不列）
+  const ghostAdmin = (p, pj) => !!p && p.memberType === 'human' && !!p.participantId && p.participantId === state.projMeta.adminId && PROJECTS.includes(pj) && !(state.participants.get(p.participantId) || p).projectRoles?.[pj];
+  const memberIn = (p, pj) => (p?.projects || []).includes(pj) && !ghostAdmin(p, pj);
   // ---------- C-368 找人：成員與權限、@ 選人、我的 AI 共用 ----------
   // 比對名字、代號（RVVW）、角色名稱與代碼（PG），不分大小寫；篩選在網頁做，不加讀取
   const findQ = q => (q || '').trim().toLowerCase();
@@ -994,7 +997,7 @@
   const NO_FIND = { kind: '', role: '', proj: '' };
   const findPrefs = place => { try { return { ...NO_FIND, ...JSON.parse(store.get('aigile-find:' + place) || '{}') }; } catch { return { ...NO_FIND }; } };
   const saveFindPrefs = (place, f) => store.set('aigile-find:' + place, JSON.stringify({ kind: f.kind || '', role: f.role || '', proj: f.proj || '' }));
-  const findPass = (p, f, pj) => (!f.kind || p.memberType === f.kind) && (!f.role || roleIn(p, pj) === f.role) && (!f.proj || (p.projects || []).includes(f.proj));
+  const findPass = (p, f, pj) => (!f.kind || p.memberType === f.kind) && (!f.role || roleIn(p, pj) === f.role) && (!f.proj || memberIn(p, f.proj));
   const findOn = s => !!(findQ(s.q) || s.f.kind || s.f.role || s.f.proj);
   const findRoles = (list, pj) => [...new Set(list.map(p => roleIn(p, pj)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
   const finders = {};
@@ -1136,7 +1139,7 @@
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
   const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
   const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc([...projName(p)][0] || '?')}</span>`;
-  const projMembers = p => [...state.participants.values()].filter(x => x.status !== 'disabled' && (x.projects || []).includes(p)).length;
+  const projMembers = p => [...state.participants.values()].filter(x => x.status !== 'disabled' && memberIn(x, p)).length;
   // 側欄頂端：「‹ 我的專案」＋專案名＋⇅（不必先回第一層就能切到別的專案）；只屬一個專案的人沒有「‹ 我的專案」與 ⇅
   function drawProjSwitch() {
     const v = projectView(), counts = todoByView();
@@ -1703,7 +1706,7 @@
   // @ 選單候選（C-150）：不截斷，清單可捲動；所有人在最前，再來是跟我同專案的成員
   // C-174：專案內只列該專案的成員（跨專案角色本來就屬於每個專案），「所有人」寫成「所有人（平台）」；跨專案頻道列全部
   const mentionScope = () => { const t = sendTarget(); return t === 'all' ? null : t; };
-  const inScope = (p, scope) => !scope || (p.projects || []).includes(scope);
+  const inScope = (p, scope) => !scope || memberIn(p, scope);
   // C-368：最近 @ 過的人記在這台裝置（最多 10 位，選單用前 5 位）
   const RECENT_AT = 'aigile-recent-at';
   const recentAt = () => { try { return JSON.parse(store.get(RECENT_AT) || '[]'); } catch { return []; } };
@@ -2392,7 +2395,7 @@
   const decisionActions = c => inlineHtml('c:' + c.cardId, 'decision', c);
   // C-162：卡片回覆的收件人
   work.inlRm = {}; // key → 使用者按 × 移除的成員
-  const cardMembers = c => [...state.participants.values()].filter(p => p.status !== 'disabled' && (p.projects || []).includes(c.project));
+  const cardMembers = c => [...state.participants.values()].filter(p => p.status !== 'disabled' && memberIn(p, c.project));
   const cardMentionCandidates = c => raw => { const q = raw.toLowerCase(); return cardMembers(c).map(p => ({ ...p, role: roleIn(p, c.project) })).filter(p => p.participantId !== meId() && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q))); };
   function cardRecipients(key, c) {
     const text = work.drafts[key] || '', out = new Map();
@@ -3412,7 +3415,7 @@
   }
   function openHandover() {
     const d = work.detail;
-    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && (p.projects || []).includes(d.project));
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && memberIn(p, d.project));
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
         <div class="info-box">${esc(ckeyOf(d))} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
@@ -3447,7 +3450,7 @@
     if (back?.isConnected) back.focus(); // 回到原本點的膠囊
   }
   // C-180：負責人、等誰只列該專案的成員（決策者不限）；目前值不在專案內也保留，才看得出原本是誰
-  const projPeople = project => [...state.participants.values()].filter(p => p.status !== 'disabled' && (!project || (p.projects || []).includes(project)));
+  const projPeople = project => [...state.participants.values()].filter(p => p.status !== 'disabled' && (!project || memberIn(p, project)));
   function peopleOpts(project, cur, none) {
     const list = projPeople(project), extra = cur && !list.some(p => p.participantId === cur) && state.participants.get(cur);
     return `<option value="">${none}</option>` + [...list, ...(extra ? [extra] : [])].map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(p.name)}${roleIn(p, project) ? '（' + esc(roleIn(p, project)) + '）' : ''}${p === extra ? '（不在此專案）' : ''}</option>`).join('');
@@ -4549,7 +4552,7 @@
     return `<span class="spill spill-${k}">${esc(st)}</span>`;
   };
   // C-188：專案內的團隊頁只列本專案的人；跨專案頻道、第一層列全部
-  const inViewPerson = id => { const v = projectView(); return v === 'hub' || v === 'cross' || (state.participants.get(id)?.projects || []).includes(v); };
+  const inViewPerson = id => { const v = projectView(); return v === 'hub' || v === 'cross' || memberIn(state.participants.get(id), v); };
   function aiStateHtml(t) {
     const ais = t.members.filter(m => m.memberType === 'ai' && inViewPerson(m.participantId));
     if (!ais.length) return '';
@@ -6533,6 +6536,8 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   const narrowPerm = () => matchMedia('(max-width: 899px)').matches;
   const permProjects = () => (isAdmin() ? PROJECTS : myLeadProjects());
   const inProj = (p, pj) => { const c = permCur(p); return c.cross || c.projects.has(pj); };
+  const pmGhost = (p, pj) => p.memberType === 'human' && p.participantId === state.projMeta.adminId && !permCur(p).roles?.get(pj); // C-380：照草稿的角色判斷
+  const pmMember = (p, pj) => inProj(p, pj) && !pmGhost(p, pj);
   const ownerOf = p => state.participants.get(p.ownerParticipantId);
   const permSub = p => (p.memberType === 'ai' ? [`${ownerOf(p)?.name || ''}的`, p.environment].filter(Boolean).join(' · ') : p.environment || '');
   const pmSw = (on, attrs, chg, label, extra = '') => `<button type="button" class="pm-sw${chg ? ' chg' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" ${attrs} ${extra}></button>`;
@@ -6606,9 +6611,11 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const pj = perm.selProj, admin = isAdmin(), q = perm.pq.trim().toLowerCase();
     const list = all.filter(x => !q || projName(x).toLowerCase().includes(q));
     const left = `<section class="pm-col pm-list" aria-label="專案清單"><div class="pm-search">${pmViewSeg()}<input id="pm-pq" type="search" placeholder="搜尋專案（${all.length} 個）" aria-label="搜尋專案" value="${esc(perm.pq)}"></div>
-      ${list.map(x => { const n = permPeople().filter(p => inProj(p, x)).length, ch = projChanges(x); return `<button type="button" class="pm-li${x === pj ? ' sel' : ''}" data-pm-proj="${esc(x)}" aria-current="${x === pj}"><b>${esc(projName(x))}</b>${ch ? `<span class="pm-chg-tag">${ch} 變更</span>` : ''}<span class="muted small">${n}</span></button>`; }).join('') || '<p class="muted small pm-pad">找不到專案</p>'}</section>`;
+      ${list.map(x => { const n = permPeople().filter(p => pmMember(p, x)).length, ch = projChanges(x); return `<button type="button" class="pm-li${x === pj ? ' sel' : ''}" data-pm-proj="${esc(x)}" aria-current="${x === pj}"><b>${esc(projName(x))}</b>${ch ? `<span class="pm-chg-tag">${ch} 變更</span>` : ''}<span class="muted small">${n}</span></button>`; }).join('') || '<p class="muted small pm-pad">找不到專案</p>'}</section>`;
     if (!pj) return `<div class="pm-split">${left}</div>`;
-    const members = permPeople().filter(p => inProj(p, pj));
+    const members = permPeople().filter(p => pmMember(p, pj));
+    const adm = state.participants.get(state.projMeta.adminId), admNote = adm && pmGhost(adm, pj)
+      ? `<p class="muted small pm-admin-note">管理員 ${esc(adm.name)} 可以看所有專案${admin ? `，在這裡沒有角色所以不列在成員裡。<button type="button" class="link small" data-pm-goto-mem="${esc(adm.participantId)}">設定他在這個專案的角色</button>` : ''}</p>` : '';
     // C-222 表格「成員｜角色｜leader｜移出」；C-233：名字可以點，跳到依成員
     const row = p => {
       const c = permCur(p), b = permBase(p), isNew = !(b.cross || b.projects.has(pj)), lchg = (c.leaders || b.leaders).has(pj) !== b.leaders.has(pj), isAdm = p.participantId === state.projMeta.adminId;
@@ -6632,6 +6639,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
         ${admin ? '<button type="button" class="btn small" data-pm-invite>邀請新的人</button>' : ''}${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
       ${pr ? repoLine(pr, permCanEdit(pj), { code: false }) : ''}
       ${permCanEdit(pj) ? joinPanelHtml(pj) : ''}
+      ${admNote}
       ${findBarHtml('perm', { roles: findRoles(members, pj), shown: shown.length, total: members.length, unit: '人' })}
       <table class="pm-table">${pmHead('成員')}
       <tbody>${fs.f.kind === 'ai' ? '' : pmGrp(`人類 · ${humans.length}`) + (humans.map(row).join('') || `<tr><td colspan="4" class="muted small">${findOn(fs) ? '沒有符合的人類' : '沒有人類成員'}</td></tr>`)}

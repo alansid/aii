@@ -288,11 +288,13 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   });
 
   // C-219：查詢帶 ?project= 時，人類的 role 換成那個專案的角色（未設定＝空字串）；沒帶給原本的值
-  function roleForProject(items, url) {
+  // C-380（PLAT-235）：管理員看得到、管得了所有專案，但在沒有專案角色的專案不算成員（名單、人數、團隊狀態、@所有人都不算）
+  const ghostAdminIn = (p, pj, adminId) => !!p && p.kind === 'human' && p.id === adminId && !!pj && !projRoles[p.id]?.[pj];
+  function roleForProject(items, url, adminId = null) {
     const pj = url?.searchParams.get('project');
     if (!pj || !PROJECTS.includes(pj)) return items;
     for (const it of items) if (it.memberType === 'human' && it.projectRoles) it.role = it.projectRoles[pj] || '';
-    return items;
+    return adminId ? items.filter(it => !(it.memberType === 'human' && it.participantId === adminId && !projRoles[adminId]?.[pj])) : items;
   }
   const settingsOf = p => ({
     roleKey: p.role_key, duties: p.duties, style: p.style, autonomy: p.autonomy,
@@ -553,7 +555,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     }
     const id = randId('msg');
     const createdAt = nowIso();
-    if (audience && project) for (const rid of [...recipientIds]) if (!projectsOf(people.get(rid)).includes(project)) recipientIds.delete(rid);
+    if (audience && project) { await loadProjectRoles(); const adminId = adminOf(people)?.id; for (const rid of [...recipientIds]) if (!projectsOf(people.get(rid)).includes(project) || ghostAdminIn(people.get(rid), project, adminId)) recipientIds.delete(rid); } // C-380：沒角色的管理員不通知
     const reasons = new Map();
     for (const rid of recipientIds) reasons.set(rid, [audience ? 'all' : 'mention']);
     const replyPerson = replyTo && people.get(replyTo.author_id);
@@ -1299,11 +1301,12 @@ ${trial
     const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status IN ('待整理','待處理','進行中','待確認','受阻') GROUP BY project")).map(r => [r.project, r.n]));
     const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(), slugs = await slugMap(); // C-280、C-285
     await loadProjectRoles();
+    const adminId = adminOf(people)?.id;
     const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
     return projectRows.map(r => ({ id: r.id, name: r.name, slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // C-229；C-285 網址英文名
       roles: (rdefs[r.id] || []).map(d => ({ ...d, createdByName: people.get(d.createdBy)?.name || null, inUse: inUse(r.id, d) })), // C-280 本專案角色
       dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null }, // C-270
-      memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id)).length,
+      memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id) && !ghostAdminIn(p, r.id, adminId)).length, // C-380
       openCards: counts.get(r.id) || 0 }));
   }
   async function projectsResponse(ctx, extra = {}) {
@@ -2438,8 +2441,7 @@ ${trial
       .map(p => publicParticipant(p, people, now));
     // C-188 補（UX 第 1332 則）：不屬於全部專案的人，別人的 projects 只列自己也在的專案，不露出別專案名稱
     if (isolatedFrom(me)) { const mine = projectsOf(me); for (const it of items) if (it.participantId !== me.id) { it.projects = (it.projects || []).filter(x => mine.includes(x)); if (it.projectRoles) it.projectRoles = Object.fromEntries(Object.entries(it.projectRoles).filter(([k]) => mine.includes(k))); } }
-    roleForProject(items, url);
-    return { items };
+    return { items: roleForProject(items, url, adminOf(people)?.id) };
   });
 
   route('GET', '/api/messages', ({ ctx, url, me }) => listMessages(ctx, url, me));
@@ -3070,7 +3072,7 @@ ${trial
     await loadCrossRoles();
     const sees = id => { const p = people.get(id); return !!p && seesPerson(me, p); }; // C-188
     return { ...d, decisions, unanswered: d.unanswered.filter(u => sees(u.participantId)),
-      members: roleForProject((await scopeTeamMembers(me, d.members, priv)).filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url) }; // 工作記憶依專案可見；C-219 角色依專案
+      members: roleForProject((await scopeTeamMembers(me, d.members, priv)).filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url, adminOf(people)?.id) }; // 工作記憶依專案可見；C-219 角色依專案
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);

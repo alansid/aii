@@ -29,7 +29,7 @@ const people = [
 ];
 const mem = new Map();
 const env = {
-  state: { participants: new Map(people.map(p => [p.participantId, p])) },
+  state: { participants: new Map(people.map(p => [p.participantId, p])), projMeta: { adminId: 'me' } },
   PROJECTS: ['平台', '銀行'],
   store: { get: k => mem.get(k) ?? null, set: (k, v) => mem.set(k, v) },
   esc: s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
@@ -38,7 +38,7 @@ const env = {
   meId: () => 'me', myProjects: () => ['平台'], projName: x => x, projectView: () => '平台', roOf: () => false,
   sendTarget: () => '平台',
 };
-const names = ['roleIn', 'findQ', 'findHit', 'markQ', 'NO_FIND', 'findPrefs', 'saveFindPrefs', 'findPass', 'mentionScope', 'inScope', 'recentAt', 'noteRecentAt', 'mentionCandidates', 'mentionItemsHtml'];
+const names = ['roleIn', 'ghostAdmin', 'memberIn', 'findQ', 'findHit', 'markQ', 'NO_FIND', 'findPrefs', 'saveFindPrefs', 'findPass', 'mentionScope', 'inScope', 'recentAt', 'noteRecentAt', 'mentionCandidates', 'mentionItemsHtml'];
 const fns = new Function(...Object.keys(env), `${names.map(fnSrc).join('\n')}\nreturn { ${names.join(', ')} };`)(...Object.values(env));
 const ids = list => list.map(p => p.participantId);
 
