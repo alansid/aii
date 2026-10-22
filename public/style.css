@@ -2794,3 +2794,10 @@ html, body { overflow-x: clip; }
 .pick-row input { width: 20px; height: 20px; flex: none; margin: 0; }
 .docs-log { padding-left: 18px; margin: 6px 0; display: grid; gap: 2px; }
 @media (max-width: 600px) { .doc-acts { width: 100%; } }
+/* C-374 手機上方列：每頁同一組（‹／標題、搜尋、私訊、選單、頭像），375px 不擠掉頭像 */
+.mobile-top .dm-top-btn { padding: 0 11px; }
+.mobile-top .dm-top-btn .dm-btn-t { display: none; }
+.mobile-top .dm-top-btn.off { opacity: .45; }
+.mobile-top .menu-btn .badge[hidden] { display: none; }
+.mobile-top .top-btn, .mobile-top .av-btn { flex: none; }
+.sheet-emoji { width: 22px; text-align: center; font-size: 17px; line-height: 1; }

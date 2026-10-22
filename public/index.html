@@ -138,12 +138,10 @@
           <h1 id="m-title">昱志的血汗勞工</h1>
           <button class="presence" type="button" data-open="members"><span class="dot on"></span><span class="presence-text">…</span></button>
         </div>
-        <button type="button" class="top-btn" data-nav="inbox" data-proj-only>收件匣 <span class="badge inbox-badge" hidden></span></button>
-        <button type="button" class="top-btn fb-top-btn" data-fb-toggle aria-controls="fb-panel" aria-expanded="false" aria-label="回報問題或許願" hidden><span aria-hidden="true">🐞</span></button>
-        <button type="button" class="top-btn dm-top-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊" hidden><span class="dm-ico" aria-hidden="true">💬</span><span class="dm-btn-t" aria-hidden="true">私訊</span><span class="badge" hidden></span></button>
-        <button type="button" class="top-btn m-todo" id="m-todo" hidden>要你處理 <span class="badge m-todo-n" hidden></span></button>
+        <!-- C-374：每頁同一組、同順序（‹／標題、搜尋、私訊、選單、頭像）；要你處理、收件匣、回報在選單裡 -->
         <button type="button" class="top-btn" data-search-open aria-label="搜尋卡片、訊息、成員"><span aria-hidden="true">🔍</span></button>
-        <button type="button" class="top-btn" id="menu-btn" aria-haspopup="dialog" aria-controls="sheet">選單</button>
+        <button type="button" class="top-btn dm-top-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊" hidden><span class="dm-ico" aria-hidden="true">💬</span><span class="dm-btn-t" aria-hidden="true">私訊</span><span class="badge" hidden></span></button>
+        <button type="button" class="top-btn menu-btn" id="menu-btn" aria-haspopup="dialog" aria-controls="sheet" aria-expanded="false">選單 <span class="badge menu-n" hidden></span></button>
         <button type="button" class="av-btn m-av" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu"></button>
       </header>
       <div id="token-alert" class="token-alert" role="status" hidden></div>
@@ -223,6 +221,7 @@
         <div class="sheet-grab" aria-hidden="true"></div>
         <div id="sheet-me" class="sheet-me"></div>
         <div class="proj-switch sheet-proj" aria-label="專案"></div>
+        <button type="button" class="m-todo" id="m-todo" hidden><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10l4 4 8-8"/></svg>要你處理 <span class="badge m-todo-n" hidden></span></button>
         <button type="button" data-nav="messages" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
         <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
         <button type="button" data-nav="work" data-proj-only data-no-cross><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="14" rx="1.5"/><rect x="11" y="3" width="6" height="9" rx="1.5"/></svg>工作</button>
@@ -235,6 +234,7 @@
         </div>
         </div>
         <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
+        <button type="button" class="sheet-fb" data-fb-toggle aria-controls="fb-panel" aria-expanded="false" hidden><span class="ni-ico sheet-emoji" aria-hidden="true">🐞</span>回報</button>
       </div>
     </div>
   </section>

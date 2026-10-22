@@ -1183,8 +1183,11 @@
     const counts = todoByView(), here = counts[v] || 0; // 收件匣徽章＝所在專案的件數，切專案就跟著變
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !here; b.textContent = here > 99 ? '99+' : here; });
     const todo = $('#m-todo'), n = counts.hub, nb = todo.querySelector('.m-todo-n');
-    todo.hidden = v !== 'hub' || top;
+    todo.hidden = !hasHub(); // C-374：在手機選單裡，每頁都有（各專案彙總）
     nb.hidden = !n; nb.textContent = n > 99 ? '99+' : n;
+    const mn = $('#menu-btn .menu-n'), mc = hasHub() ? n : here; // 選單鈕帶「要你處理」件數（按鈕收進選單後還看得到）
+    mn.hidden = !mc; mn.textContent = mc > 99 ? '99+' : mc;
+    $('#menu-btn').setAttribute('aria-label', mc ? `選單，${mc} 件要你處理` : '選單');
     drawSendTo();
     const ro = !!state.me && meRO(); // C-294
     document.body.classList.toggle('ro-here', ro);
@@ -2982,7 +2985,7 @@
     work.focusItem = { sel: key[0] === 'n' ? `#fyi-${CSS.escape(id)}` : `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row', v: 'data-ver-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
     if (!applyFocusItem() && key[0] === 'c') openCard(id);
   });
-  $('#m-todo').addEventListener('click', () => openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }));
+  $('#m-todo').addEventListener('click', () => { closeSheet(false); openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }); });
   // C-298：總覽側欄「要你處理」捲到右邊清單（窄畫面沒有右欄就開視窗）；「＋ 新增專案」
   document.addEventListener('click', e => {
     if (e.target.closest?.('[data-hub-todo-open]')) {
@@ -4059,7 +4062,7 @@
   document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
   // 手機選單（底部滑出）
   const sheet = $('#sheet');
-  function openSheet() { sheet.hidden = false; $('#menu-btn').setAttribute('aria-expanded', 'true'); sheet.querySelector('.sheet-panel > button').focus(); }
+  function openSheet() { sheet.hidden = false; $('#menu-btn').setAttribute('aria-expanded', 'true'); sheet.querySelector('.sheet-panel > button:not([hidden])')?.focus(); }
   function closeSheet(refocus = true) {
     if (sheet.hidden) return;
     sheet.hidden = true; $('#menu-btn').setAttribute('aria-expanded', 'false');
@@ -4182,6 +4185,7 @@
   const dmUnread = id => (work.notes || []).filter(n => n.dm && n.sender.participantId === id).length;
   // 這個專案可以看到私訊入口（有自己名下、在這專案的 AI）；沒開時入口淡色，點了說明怎麼開（C-270 退回）
   const dmEntry = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && myAisHere().length > 0 && !meRO(); // C-294 唯讀沒有私訊
+  const dmWhyNot = () => !PROJECTS.includes(projectView()) ? '私訊在專案裡：先進入一個專案' : meRO() ? '你在這個專案是唯讀，沒有私訊' : '這個專案還沒有你的 AI，私訊不了';
   async function dmEnable() {
     const pv = projectView(), can = isAdmin() || myLeadProjects().includes(pv);
     if (!can) {
@@ -4204,7 +4208,10 @@
     document.querySelectorAll('[data-fb-toggle]').forEach(b => { b.hidden = state.me?.memberType !== 'human'; }); // C-281
     document.querySelectorAll('[data-wishes]').forEach(b => { b.hidden = !state.me; });
     document.querySelectorAll('[data-dm-toggle]').forEach(b => {
-      b.hidden = !entry;
+      // C-374：手機上方列的私訊每頁都在（人類）；這裡不能私訊就淡色，點了說明原因
+      const fixed = b.classList.contains('dm-top-btn');
+      b.hidden = fixed ? state.me?.memberType !== 'human' : !entry;
+      if (fixed) b.classList.toggle('off', !entry);
       const bd = b.querySelector('.badge'); bd.hidden = !n; bd.textContent = n > 99 ? '99+' : n;
       b.setAttribute('aria-label', n ? `私訊，${n} 則未讀` : '私訊'); // C-279
     });
@@ -4418,7 +4425,11 @@
     const o = e.target.closest?.('[data-dm-open]');
     if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen); }
     if (e.target.closest?.('[data-dm-more]')) { state.dmMore = !state.dmMore; return drawDmList(dmVisible() ? myAisHere() : []); }
-    if (e.target.closest?.('[data-dm-toggle]')) { if (e.target.closest('#sheet')) closeSheet(false); return dmPanel(!dmIsOpen()); }
+    if (e.target.closest?.('[data-dm-toggle]')) {
+      if (e.target.closest('#sheet')) closeSheet(false);
+      if (!dmEntry() && !dmIsOpen()) return toast(dmWhyNot()); // C-374：手機上方列的私訊每頁都在
+      return dmPanel(!dmIsOpen());
+    }
     if (e.target.closest?.('[data-dm-close]')) { dmPanel(false); return document.querySelector('[data-dm-toggle]:not([hidden])')?.focus(); }
     const en = e.target.closest?.('[data-dm-enable]');
     if (en) { if (en.closest('#sheet')) closeSheet(false); if (en.closest('#modal-root')) closeModal(); return dmEnable(); }
