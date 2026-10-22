@@ -1023,6 +1023,18 @@
     const q = document.getElementById('fb-q-' + place);
     if (typing && q && document.activeElement !== q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   };
+  // C-385（PLAT-238）：注音、倉頡、拼音還在選字時，搜尋框不重畫（重畫會打斷輸入法，變成一串ㄓㄨㄥ）；選完字再篩選一次
+  // 全站搜尋框都是 type="search"，在最外層攔一次就好；英文沒有組字，照舊每打一個字就篩
+  const imeLast = new WeakMap(), isSearchBox = t => t?.tagName === 'INPUT' && t.type === 'search';
+  window.addEventListener('input', e => {
+    if (!isSearchBox(e.target)) return;
+    if (e.isComposing) { e.stopImmediatePropagation(); return; }
+    imeLast.set(e.target, e.target.value);
+  }, true);
+  window.addEventListener('compositionend', e => {
+    const t = e.target;
+    if (isSearchBox(t)) setTimeout(() => { if (t.isConnected && imeLast.get(t) !== t.value) t.dispatchEvent(new Event('input', { bubbles: true })); }); // Chrome 選完字不會再送 input，補一次；Firefox 會送，就不重複
+  }, true);
   document.addEventListener('input', e => { const pl = e.target.dataset?.fbQ; if (pl && finders[pl]) { finders[pl].q = e.target.value; findRedraw(pl, true); } });
   document.addEventListener('change', e => {
     const t = e.target, pl = t.dataset?.fbRole || t.dataset?.fbProj, st = pl && finders[pl];
