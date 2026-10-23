@@ -1025,16 +1025,34 @@
   };
   // C-385（PLAT-238）：注音、倉頡、拼音還在選字時，搜尋框不重畫（重畫會打斷輸入法，變成一串ㄓㄨㄥ）；選完字再篩選一次
   // 全站搜尋框都是 type="search"，在最外層攔一次就好；英文沒有組字，照舊每打一個字就篩
-  const imeLast = new WeakMap(), isSearchBox = t => t?.tagName === 'INPUT' && t.type === 'search';
+  // PLAT-238 退回（昱志 10/23 我的 AI 打出「ㄘㄜˋㄕˋ」）：Windows 有的輸入法組字中送的 input 沒標 isComposing，
+  // 只看 isComposing 會漏 → 自己記 compositionstart／end，inputType＝insertCompositionText 也算組字中
+  const imeLast = new WeakMap(), imeOn = new WeakSet(), isSearchBox = t => t?.tagName === 'INPUT' && t.type === 'search';
+  const imeComposing = (e, t = e.target) => e.isComposing || imeOn.has(t) || e.inputType === 'insertCompositionText';
+  window.addEventListener('compositionstart', e => { if (isSearchBox(e.target)) imeOn.add(e.target); }, true);
   window.addEventListener('input', e => {
     if (!isSearchBox(e.target)) return;
-    if (e.isComposing) { e.stopImmediatePropagation(); return; }
+    if (imeComposing(e)) { e.stopImmediatePropagation(); return; }
     imeLast.set(e.target, e.target.value);
   }, true);
   window.addEventListener('compositionend', e => {
     const t = e.target;
-    if (isSearchBox(t)) setTimeout(() => { if (t.isConnected && imeLast.get(t) !== t.value) t.dispatchEvent(new Event('input', { bubbles: true })); }); // Chrome 選完字不會再送 input，補一次；Firefox 會送，就不重複
+    if (!isSearchBox(t)) return;
+    imeOn.delete(t);
+    setTimeout(() => { if (t.isConnected && !imeOn.has(t) && imeLast.get(t) !== t.value) t.dispatchEvent(new Event('input', { bubbles: true })); }); // Chrome 選完字不會再送 input，補一次；Firefox 會送，就不重複
   }, true);
+  // 篩選列重畫時不換掉搜尋框（換掉正在打字的輸入框會打斷輸入法）：只換篩選、筆數，搜尋框留著
+  function patchFindBar(box, html) {
+    const cur = box.querySelector(':scope > .fb'), q = cur?.querySelector(':scope > .fb-q');
+    const t = document.createElement('template'); t.innerHTML = html.trim();
+    const nu = t.content.firstElementChild?.classList.contains('fb') ? t.content.firstElementChild : null;
+    if (!cur || !q || !nu || q.id !== nu.querySelector('.fb-q')?.id) { box.innerHTML = html; return; }
+    cur.className = nu.className;
+    const v = nu.querySelector('.fb-q').getAttribute('value') || '';
+    if (q.value !== v && !imeOn.has(q)) q.value = v; // 「清除篩選」要清掉框裡的字；組字中不動
+    for (const c of [...cur.children]) if (c !== q) c.remove();
+    for (const c of [...nu.children]) if (!c.classList.contains('fb-q')) cur.appendChild(c);
+  }
   document.addEventListener('input', e => { const pl = e.target.dataset?.fbQ; if (pl && finders[pl]) { finders[pl].q = e.target.value; findRedraw(pl, true); } });
   document.addEventListener('change', e => {
     const t = e.target, pl = t.dataset?.fbRole || t.dataset?.fbProj, st = pl && finders[pl];
@@ -5164,7 +5182,7 @@
       const q = fq(), f = useFind() ? fs.f : NO_FIND;
       const list = items.filter(a => findHit(a, q) && findPass(a, f)).sort((a, b) => maRank(a) - maRank(b));
       const pjs = scope ? null : PROJECTS.filter(p => items.some(a => (a.projects || []).includes(p)));
-      body.querySelector('#ma-find').innerHTML = useFind() ? findBarHtml('myai', { roles: findRoles(items), projs: pjs && pjs.length > 1 ? pjs : null, kinds: false, shown: list.length, total: items.length }) : '';
+      patchFindBar(body.querySelector('#ma-find'), useFind() ? findBarHtml('myai', { roles: findRoles(items), projs: pjs && pjs.length > 1 ? pjs : null, kinds: false, shown: list.length, total: items.length }) : '');
       const act = items.filter(a => a.status === 'active');
       const soon = act.filter(maWarn).length, on = act.filter(a => a.isOnline).length, sw = act.filter(a => a.skillsWaiting > 0).length;
       body.querySelector('#ma-sum').innerHTML = `${scope ? `<b>${esc(projName(scope))}</b> 的 AI · ` : ''}${items.length} 個 · ${on} 在線${soon ? ` · <span class="warn-text">${soon} 個 Token 快到期</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 個有技能等你允許</span>` : ''}`;

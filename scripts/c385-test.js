@@ -52,6 +52,30 @@ try {
   await until(() => js("!!document.querySelector('[data-pm-proj]')"), 8000, '專案清單');
   await js("document.querySelector('[data-pm-proj=\"平台\"]').click(); true");
   await ime('#fb-q-perm', '.pm-table .c-name', '專案成員篩選');
+
+  // 3. PLAT-238 退回（昱志 10/23）：我的 AI 搜尋框（8 個 AI 才出現篩選列）
+  for (const n of ['中文助手', '測試一', '測試二', 'PG甲', 'PG乙', 'QA丙', 'UX丁', 'BA戊']) await kit.call(liu.token, '/api/my-ais', 'POST', { projects: ['平台'], roleKey: 'PG', role: 'PG', name: n, duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' });
+  await go('/my-ai');
+  assert.equal(await ime('#fb-q-myai', '.ma-row', '我的 AI'), 1, '我的 AI 只剩「中文助手」');
+  assert.equal(await js("document.querySelector('#fb-q-myai').__keep"), 1, '篩選後搜尋框還是同一個（不換掉，輸入法不會被打斷）');
+  // Windows 有的輸入法組字中送的 input 沒標 isComposing（修正前就是這樣被篩成 0 筆、留下注音）
+  await js("(() => { const q = document.querySelector('#fb-q-myai'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await until(() => js("document.querySelectorAll('.ma-row').length === 8"), 5000, '清空後 8 個');
+  const quirk = async (text, composing) => js(`(() => { const q = document.querySelector('#fb-q-myai'); q.focus(); q.value = ${JSON.stringify(text)};
+    q.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: ${JSON.stringify(composing ? 'insertCompositionText' : 'insertText')}, isComposing: false })); return true; })()`);
+  await js("document.querySelector('#fb-q-myai').dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' })); true");
+  for (const t of ['ㄘ', 'ㄘㄜ', 'ㄘㄜˋ', '測ㄕ', '測ㄕˋ']) { await quirk(t, true); await sleep(80); }
+  assert.equal(await js("document.querySelectorAll('.ma-row').length"), 8, '沒標 isComposing 的組字 input 也不篩');
+  assert.equal(await js("document.querySelector('#fb-q-myai').__keep"), 1, '組字中搜尋框沒被換掉');
+  await js("(() => { const q = document.querySelector('#fb-q-myai'); q.value = '測試'; q.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '測試' })); return true; })()");
+  await until(() => js("document.querySelectorAll('.ma-row').length === 2"), 5000, '選完字才篩（測試一、測試二）');
+  assert.equal(await js("document.querySelector('#fb-q-myai').value"), '測試');
+  // 搜尋框留著不換，「清除篩選」還是要清掉框裡的字
+  await js("(() => { const q = document.querySelector('#fb-q-myai'); q.value = 'zzz'; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await until(() => js("!!document.querySelector('[data-fb-clear=\"myai\"]')"), 5000, '沒有符合的');
+  await js("document.querySelector('[data-fb-clear=\"myai\"]').click(); true");
+  await until(() => js("document.querySelectorAll('.ma-row').length === 8"), 5000, '清除後 8 個');
+  assert.equal(await js("document.querySelector('#fb-q-myai').value"), '', '框裡的字清掉');
   console.log('c385-test：全部通過');
 } catch (e) {
   console.error('c385-test 失敗：', e.message);
