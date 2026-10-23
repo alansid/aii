@@ -93,6 +93,9 @@ try {
   const ob = (await call(liu.token, `/api/my-ais/${pg.id}/onboarding`)).body.text;
   assert.match(ob, new RegExp(`新對話讀一次 \\.aigile/${pg.ag}/skills/\\*/SKILL\\.md（範本用到才讀）`), '第零節：新對話讀一次角色技能');
   assert.match(ob, /同步技能（角色技能裝在你的代號資料夾）/, '第四節：角色技能裝在代號資料夾');
+  // 技能排在優先順序最後，不能蓋過角色設定六題
+  assert.match(spec, /＞ 角色設定六題 ＞ 技能。/, '規格鐵律 7：技能排最後');
+  assert.match(ob, /＞ 角色設定 ＞ 技能。/, '接入設定優先順序：技能排最後');
   console.log('c387-test：全部通過');
 } catch (e) {
   console.error('c387-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('c387-test')) || '');
