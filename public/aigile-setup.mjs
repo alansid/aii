@@ -12,7 +12,8 @@
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
 // 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|other] [--skills-only]
-//   --tool 決定技能裝哪裡：claude → .claude/skills、codex → .agents/skills、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
+//   --tool 決定沒勾角色的技能裝哪裡：claude → .claude/skills、codex → .agents/skills、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
+//   有勾角色的技能一律裝 .aigile/<代號>/skills（PLAT-239：同資料夾別的 AI 不會載入）
 //   --skills-only 只同步技能（主人在網頁按「同步」時用），不動 watcher
 //   Token 先讀 .aigile/<代號>/.token；沒有檔才用環境變數 AIGILE_TOKEN_<代號>（例 AIGILE_TOKEN_PG）或 AIGILE_TOKEN。
 //   環境變數跟檔案不一樣會提醒（舊的環境變數會蓋掉 watcher 讀的檔案，換了 Token 還是 401）。代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1。
@@ -90,6 +91,9 @@ async function syncSkills() {
   if (!r.ok) fail('技能', `/api/me/skills 回 HTTP ${r.status}`, '把這行告訴所屬人類');
   const list = (await r.json()).items;
   const root = { claude: '.claude/skills', codex: '.agents/skills' }[TOOL] || path.join(DIR, 'skills');
+  // PLAT-239：有勾角色的技能一律裝到自己的代號資料夾（同資料夾的別的 AI 不會載入）；沒勾角色的才照 --tool 裝到共用區
+  const own = path.join(DIR, 'skills');
+  const dirOf = it => path.join(it.roles?.length ? own : root, it.name);
   const manPath = path.join(DIR, 'skills.json');
   let man = {}; try { man = JSON.parse(fs.readFileSync(manPath, 'utf8')); } catch {}
   const mark = dir => { try { return JSON.parse(fs.readFileSync(path.join(dir, '.aigile-skill.json'), 'utf8')); } catch { return null; } };
@@ -99,13 +103,16 @@ async function syncSkills() {
   let add = 0, upd = 0, rm = 0;
   for (const [name, m] of Object.entries(man)) {
     const w = want.get(name);
-    if (w && m.dir === path.join(root, name)) continue;
+    if (w && m.dir === dirOf(w)) continue;
     if (mine(m.dir)) fs.rmSync(m.dir, { recursive: true, force: true });
     delete man[name];
     if (!w) rm++;
   }
   for (const [name, it] of want) {
-    const dir = path.join(root, name);
+    const dir = dirOf(it);
+    // 角色技能以前裝在共用區（PLAT-239 以前）：自己裝的搬走，別人裝的不碰
+    const shared = path.join(root, name);
+    if (it.roles?.length && shared !== dir && mine(shared)) { fs.rmSync(shared, { recursive: true, force: true }); if (man[name]?.dir === shared) delete man[name]; }
     if (man[name]?.sha256 === it.sha256 && fs.existsSync(path.join(dir, 'SKILL.md'))) continue;
     const other = fs.existsSync(dir) && !mine(dir) ? mark(dir) : null;
     if (fs.existsSync(dir) && !mine(dir)) {
@@ -132,9 +139,10 @@ async function syncSkills() {
     fs.writeFileSync(ep, t);
   }
   // 回報裝了哪些版本（技能庫的「已裝」）；同資料夾別的 AI 已裝同一版也算
-  const have = [...want.values()].filter(it => mark(path.join(root, it.name))?.sha256 === it.sha256).map(it => it.skillId);
+  const have = [...want.values()].filter(it => mark(dirOf(it))?.sha256 === it.sha256).map(it => it.skillId);
   await fetch(BASE + '/api/me/skills/installed', { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'setup' }, body: JSON.stringify({ skillIds: have }), signal: AbortSignal.timeout(20_000) }).catch(() => {});
-  out(`✓ 技能（${TOOL} → ${root.replace(/\\/g, '/')}）：新裝 ${add}、更新 ${upd}、移除 ${rm}，共 ${Object.keys(man).length} 個`);
+  const nOwn = Object.values(man).filter(m => path.dirname(m.dir) === own).length;
+  out(`✓ 技能（${TOOL} → ${root.replace(/\\/g, '/')}）：新裝 ${add}、更新 ${upd}、移除 ${rm}，共 ${Object.keys(man).length} 個${nOwn && own !== root ? `；其中角色技能 ${nOwn} 個在 ${own.replace(/\\/g, '/')}（新對話開始時讀一次）` : ''}`);
   if (skipped.length) out(`! 沒裝：${skipped.join('；')}`);
 }
 if (SKILLS_ONLY) { await syncSkills(); out('完成：技能已同步。'); } else {

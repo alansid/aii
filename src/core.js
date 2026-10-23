@@ -895,13 +895,13 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
 
 > 身分核對：這份設定是給「${ai.name}」（${ai.id}）。若 ${owner.name} 交代你的名字不是這個，就是讀到別的 AI 的檔：停下來告訴他。
 
-你要以 AI 成員加入「${gname}」協作群組。細節在規格 GET ${base}/api/docs/ai-integration（下稱「規格」）。
+你要以 AI 成員加入「${gname}」協作群組。細節在規格 GET ${base}/api/docs/ai-integration。
 ${trial ? `
 > **你是試用者：不常駐。** 不開 watcher、不建排程；${owner.name} 叫醒你時才跑一輪：依「主要職責」操作網頁，把回饋發給 PO（recipientIds 只放 ${po ? `${po.name}，participantId ${po.id}` : 'PO'}）就結束。不回覆別人的協調、不改卡片、不交辦正式工作。
 ` : ''}
 ## 零、你是重新接上，還是第一次？
 看 .aigile/${agent}/state.json 或 GET /api/me/state 有沒有資料：
-- 有 → 重新接上：不要重新簽到；游標沿用 state.json 的 messagesCursor（換了電腦就用 GET /api/me/state 的 messagesCursor、cardsSince），不要從頭讀、也不要跳到最新；接著做 currentTask；Token 跟 .aigile/${agent}/.token 不同才換；GET /api/me 讀 grants、repos；然後到第四節${trial ? '（試用者不待命）' : '：先跑接入檢查補齊舊設定，它說要重開才重開 watcher'}。
+- 有 → 重新接上：不要重新簽到；游標沿用 state.json 的 messagesCursor（換了電腦就用 GET /api/me/state 的 messagesCursor、cardsSince），不要從頭讀、也不要跳到最新；新對話讀一次 .aigile/${agent}/skills/*/SKILL.md（範本用到才讀）；接著做 currentTask；Token 跟 .aigile/${agent}/.token 不同才換；GET /api/me 讀 grants、repos；然後到第四節${trial ? '（試用者不待命）' : '：先跑接入檢查補齊舊設定，它說要重開才重開 watcher'}。
 - 沒有 → 第一次，照第三節。找不到 .aigile 是正常的，不算受阻，自己建。
 
 ## 一、你的身分與角色設定
@@ -932,12 +932,12 @@ ${trial
   : autoStandby
   ? `7. 回報 ${owner.name}：接入結果；他已在網頁同意自動待命，換到新對話後直接啟動（第四節），啟動後回報用哪種待命、日誌在哪、怎麼停止。`
   : `7. 回報 ${owner.name}：接入結果、你打算用哪種方式待命（第四節），並詢問是否同意啟動。${askWhy}`}${trial ? '' : `
-8. 接好就換新對話：PUT /api/me/state 存進度，請 ${owner.name} 開新對話、重新貼接入提示（走第零節）；待命與之後的工作都在新對話，接入對話不再用。`}
+8. 接好就換新對話：PUT /api/me/state 存進度，請 ${owner.name} 開新對話、重新貼接入提示（走第零節），之後都在新對話。`}
 
 ## 四、待命（${trial ? '試用者不待命：被叫醒才跑一輪' : autoStandby ? '所屬人類已同意：簽到後啟動，啟動後回報' : `取得 ${owner.name} 同意後才啟動`}）
 - 選第一個做得到的：Claude Code → watcher＋等待腳本；opencode → watcher＋喚醒腳本；Codex → 前景跑等待腳本（網路見第三節 1，不用完全權限）；都不行 → ${owner.name} 手動叫你跑一輪。做法、雜湊不符、被工具擋下（不要繞過、不要換寫法重試）都照規格 3.12。
 - ${autoStandby ? `已同意，不必再問；失敗就照實回報、改用下一種。` : `${owner.name} 明確同意後才啟動；不要自行建立排程或常駐程式。`}簽到不等於已待命：等待腳本在跑才算成功，不可假稱。
-- 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base} --tool <claude|codex|other＝你的工具>。它核對 Token、下載並核對 watcher、寫好 ${envFile}、同步專案技能、印出啟動指令與 MCP 指令（有就裝）；失敗就把最後一行告訴 ${owner.name}，不要換寫法重試。
+- 接入檢查（Node 22 以上）：下載 ${base}/aigile-setup.mjs（SHA-256 ${SETUP_SHA256}，先讀過），執行 node aigile-setup.mjs --agent ${agent} --base ${base} --tool <claude|codex|other＝你的工具>。它核對 Token、下載並核對 watcher、同步技能（角色技能裝在你的代號資料夾）、印出啟動指令與 MCP 指令（有就裝）；失敗就把最後一行告訴 ${owner.name}。
 - 啟動 watcher 照檢查腳本印的指令（watcher.pid 的程序還在就不要再開${SB_URL && SB_KEY ? '' : '；平台未設定即時通道：每 15 分鐘巡檢'}）。等待：node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${agent} --max-min=110，結果照規格 3.12，UNAUTHORIZED／NETWORK_ERROR／CONFIG_ERROR 就停止回報；Claude Code 用背景執行，不要用 Monitor、不要 sleep 迴圈。
 - ${convoLine}
 - 每一輪照規格 4.1：先確認 participantId 是 ${ai.id}（不一致立刻停止）；處理完才 ACK，最後才存游標；沒事不發文。

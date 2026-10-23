@@ -256,7 +256,7 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     const rows = (await db.all("SELECT id, project, name, version, description, sha256, size, has_scripts, roles FROM skills WHERE status = 'published' AND project IN (SELECT value FROM json_each(?)) ORDER BY name", JSON.stringify(pjs))).filter(r => forRole(r, ai));
     const allowed = new Set((await db.all('SELECT skill_id FROM skill_allows WHERE ai_id = ?', ai.id)).map(x => x.skill_id));
     const inst = new Set((await db.all('SELECT skill_id FROM skill_installs WHERE ai_id = ?', ai.id)).map(x => x.skill_id));
-    return rows.map(r => ({ skillId: r.id, project: r.project, name: r.name, version: r.version, description: r.description, sha256: r.sha256, size: r.size,
+    return rows.map(r => ({ skillId: r.id, project: r.project, name: r.name, version: r.version, description: r.description, roles: rolesOf(r), sha256: r.sha256, size: r.size, // PLAT-239：有角色的裝到 AI 自己的代號資料夾
       hasScripts: !!r.has_scripts, scripts: r.has_scripts || 0, allowed: !r.has_scripts || allowed.has(r.id), install: !r.has_scripts || allowed.has(r.id), installed: inst.has(r.id) }));
   }
   route('GET', '/api/me/skills', async ({ me }) => {
