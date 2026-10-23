@@ -69,6 +69,7 @@ function migrate(db) {
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_proj_no ON cards (project, proj_no)');
   }
   add('messages', { audience: 'TEXT', payload_hash: 'TEXT', file_id: 'TEXT', project: 'TEXT', reply_from: 'TEXT' });
+  add('skill_installs', { place: 'TEXT' }); // PLAT-240
   const soon = Date.now() + 24 * 3600_000;
   db.prepare('UPDATE participants SET token_expires_at = ? WHERE token_expires_at = 0').run(soon);
 }

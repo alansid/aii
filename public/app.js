@@ -5167,6 +5167,7 @@
         ${inProjectView() ? '<button type="button" class="btn ghost" id="ma-all">看全部 AI</button>' : ''}
         <button type="button" class="btn ghost" id="ma-skills">技能庫 ›</button>
         <button class="btn primary" type="button" id="ai-new">＋ 新增 AI</button></div>
+      <div id="ma-sync"></div>
       <div id="ma-find"></div>
       <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: inProjectView() ? `你在「${projName(projectView())}」的 AI；新增和新角色都用這個專案。點一列看接入、技能、設定。` : '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
     let items = [];
@@ -5195,6 +5196,24 @@
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
       if (scope) items = items.filter(a => (a.projects || []).includes(scope) || state.projMeta.crossRoleIds.includes(a.participantId));
       drawList();
+      drawSync();
+    }
+    // PLAT-240：有技能要同步的 AI 才顯示這一條
+    let syncIds = [];
+    async function drawSync() {
+      const el = body.querySelector('#ma-sync');
+      if (!el) return;
+      try {
+        const shown = new Set(items.map(a => a.participantId));
+        syncIds = (await api('/api/skill-sync')).items.filter(a => a.needs && shown.has(a.aiId)).map(a => a.aiId);
+      } catch { syncIds = []; }
+      if (!body.isConnected) return;
+      el.innerHTML = syncIds.length ? `<div class="sy-banner" role="status">🧩 <b>${syncIds.length} 隻 AI 有技能要同步</b><span class="grow"></span><button type="button" class="btn small primary" data-sy-banner>全部同步</button></div>` : '';
+    }
+    body.querySelector('#ma-sync').addEventListener('click', e => { if (e.target.closest('[data-sy-banner]')) openSkillSync({ run: syncIds, onDone: drawSync }); });
+    if (new URLSearchParams(location.search).get('sync') === '1') {
+      history.replaceState(history.state, '', location.pathname);
+      openSkillSync({ onDone: drawSync });
     }
     // 技能分頁：展開才讀（不加清單的讀取）
     async function loadSkills(ai) {
@@ -5534,11 +5553,26 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       t.disabled = true;
       try {
         const r = await api(`/api/projects/${encodeURIComponent(target)}/skills`, { method: 'POST', body: { files, roles: [...roles] } });
-        toast(r.status === 'published' ? `「${r.name}」v${r.version} 已上架，已通知各 AI 的主人` : `「${r.name}」含腳本，等 leader 或管理員核准`);
+        if (r.status === 'published') return skUploaded(body, r);
+        toast(`「${r.name}」含腳本，等 leader 或管理員核准`);
         closeModal(); if (skv.modal) openSkillsView(skv.filter); else skLoad();
       } catch (err) { body.querySelector('#sk-err').textContent = err.message; t.disabled = false; }
     });
     draw();
+  }
+  // PLAT-240 上傳成功：你名下會用到這個技能的 AI 一鍵全部同步
+  async function skUploaded(body, r) {
+    skLoad();
+    body.innerHTML = `<p class="sk-ok">✓「${esc(r.name)}」第 ${r.version} 版已上架，已通知各 AI 的主人（每位主人一則）。</p><div id="sk-up-sync"><p class="muted small">看你的 AI 有沒有用到…</p></div>
+      <div class="row"><button type="button" class="btn" data-sk-fin>完成</button></div>`;
+    const fin = () => { closeModal(); if (skv.modal) openSkillsView(skv.filter); };
+    body.querySelector('[data-sk-fin]').onclick = fin;
+    let ids = [];
+    try { ids = (await api('/api/skill-sync')).items.filter(a => a.skills.some(s => s.skillId === r.skillId) && a.needs).map(a => a.aiId); } catch {}
+    const el = body.querySelector('#sk-up-sync');
+    if (!el) return;
+    el.innerHTML = ids.length ? `<div class="sy-banner">🧩 <b>你有 ${ids.length} 隻 AI 會用到</b><span class="grow"></span><button type="button" class="btn small primary" data-sk-upsync>全部同步</button></div>` : '<p class="muted small">你名下沒有要裝這個技能的 AI。</p>';
+    el.querySelector('[data-sk-upsync]')?.addEventListener('click', () => openSkillSync({ run: ids, skillId: r.skillId }));
   }
   // 技能畫面的事件（成員與權限分頁與我的 AI 彈窗共用）
   document.addEventListener('click', e => {
@@ -5564,16 +5598,16 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     await drawAiSkills(body, ai);
   }
   async function drawAiSkills(body, ai, onCount = null) {
-    const sync = () => api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/sync`, { method: 'POST' });
     const draw = async () => {
-      const { items } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills`);
+      const { items, removed = [] } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills`);
       if (!body.isConnected) return;
       body.innerHTML = `${items.length ? items.map(s => `
         <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b> <span class="muted small">${esc(projName(s.project))} · 第 ${s.version} 版</span>${s.hasScripts ? ` <span class="pill-tag purple">含腳本 ${s.scripts}</span>` : ''}
-          <div class="muted small">${esc(s.description)} · SHA-256 ${esc(s.sha256.slice(0, 4))}…${esc(s.sha256.slice(-3))} · ${s.installed ? '這台已裝' : '這台還沒裝'}</div></div>
+          <div class="muted small">${esc(s.description)} · SHA-256 ${esc(s.sha256.slice(0, 4))}…${esc(s.sha256.slice(-3))}</div>${s.state ? `<div class="small">${skMarkHtml(s)}${s.why ? ` <span class="muted">${esc(s.why)}</span>` : ''}</div>` : ''}</div>
           ${s.hasScripts ? `<div class="row"><button type="button" class="btn small" data-sk-look="${esc(s.skillId)}">看腳本</button>${s.allowed ? `<button type="button" class="btn small" data-sk-revoke="${esc(s.skillId)}">收回允許</button>` : `<button type="button" class="btn small primary" data-sk-allow="${esc(s.skillId)}">允許並同步到這台</button>`}</div>` : '<span class="muted small">純文字，會安裝</span>'}</div>`).join('')
         : '<p class="muted">這個 AI 所屬的專案還沒有給它角色的技能。</p>'}
-        <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能）。只有你按「同步」或 AI 重跑接入檢查時才會安裝。</span></div>`;
+        ${removed.length ? `<p class="small">● 已下架、同步後會移除：${esc(removed.join('、'))}</p>` : ''}
+        <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能），進度顯示在同步清單。只有你按「同步」或 AI 重跑接入檢查時才會安裝。</span></div>`;
       onCount?.(items.filter(s => s.hasScripts && !s.allowed).length);
     };
     if (body.dataset.bound) return draw().catch(e => { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; });
@@ -5586,17 +5620,101 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
         if (t.dataset.skAllow) {
           if (!await confirmDialog({ title: '允許含腳本的技能？', message: '允許後會請 AI 同步，把這一版的腳本放進它的技能資料夾；執行時照它工具本身的權限。新版要重新允許。', confirmText: '允許並同步' })) return;
           await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/${encodeURIComponent(t.dataset.skAllow)}`, { method: 'PUT', body: { allow: true } });
-          await sync(); toast('已允許，已私訊 AI 請它同步'); return draw();
+          await draw(); return openSkillSync({ run: [ai.participantId], onDone: () => draw().catch(() => {}) });
         }
         if (t.dataset.skRevoke) {
           await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/${encodeURIComponent(t.dataset.skRevoke)}`, { method: 'PUT', body: { allow: false } });
           toast('已收回，按「同步」後會從 AI 的電腦移除'); return draw();
         }
-        await sync(); toast('已私訊 AI 請它同步技能');
+        await openSkillSync({ run: [ai.participantId], onDone: () => draw().catch(() => {}) });
       } catch (err) { toast(err.message); }
     });
     try { await draw(); } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   }
+  // ---------- PLAT-240 技能同步清單：全部同步、每隻 AI 一列看進度 ----------
+  const SY_ST = { waiting: ['等叫醒', 'wait'], running: ['同步中…', 'run'], done: ['✓ 已裝好', 'ok'], failed: ['✗ 失敗', 'bad'], offline: ['離線（上線後會自動補）', 'off'], noreply: ['10 分鐘沒回應', 'bad'] };
+  const SK_MARK = { latest: ['✓', '最新', 'ok'], new: ['●', '有新版', 'new'], fix: ['⚠', '要處理', 'fix'] };
+  const skMarkHtml = s => `<span class="sk-mk ${SK_MARK[s.state]?.[2] || ''}">${SK_MARK[s.state]?.[0] || ''} ${SK_MARK[s.state]?.[1] || ''}</span>`;
+  const SY_END = ['done', 'failed', 'idle']; // 離線、10 分鐘沒回應的繼續看（上線後會自動補），清單最多看 15 分鐘
+  // opts.run：要馬上同步的 AI（含腳本的先列出一次允許）；opts.skillId：只列用到這個技能的 AI；opts.onDone：清單關掉或跑完後通知
+  async function openSkillSync({ run = null, skillId = null, onDone = null } = {}) {
+    const body = openModal('技能同步', '<p class="muted small">載入中…</p>', { size: 'narrow', sub: '每隻 AI 一列。按「全部同步」會私訊叫醒每隻 AI，結果自動顯示在這裡；只有失敗才另外私訊你。' });
+    let items = [], step = 'list', pairs = [], runIds = [], timer = 0, until = 0;
+    const load = async () => {
+      items = (await api('/api/skill-sync')).items.filter(a => (skillId ? a.skills.some(s => s.skillId === skillId) : a.skills.length || a.removed.length));
+    };
+    const needs = () => items.filter(a => a.needs && !['waiting', 'running'].includes(a.sync.state));
+    const stText = a => {
+      const st = a.sync.state;
+      if (SY_ST[st] && (st !== 'done' || runIds.includes(a.aiId) || a.needs)) {
+        const v = skillId && st === 'done' ? a.skills.find(s => s.skillId === skillId) : null;
+        return `<span class="sy-st ${SY_ST[st][1]}">${SY_ST[st][0]}${v ? ` v${v.version}` : ''}${st === 'noreply' || st === 'failed' ? ` <button type="button" class="link small" data-sy-again="${esc(a.aiId)}">再叫一次</button>` : ''}</span>`;
+      }
+      const fix = a.skills.some(s => s.state === 'fix');
+      return `<span class="sy-st ${a.needs ? (fix ? 'fix' : 'new') : 'ok'}">${a.needs ? (fix ? '⚠ 要處理' : '● 有新版') : '✓ 最新'}</span>`;
+    };
+    const rowHtml = a => `<div class="sy-row" data-sy="${esc(a.aiId)}">
+        <div class="sy-main"><b>${esc(a.name)}</b>
+          <span class="sy-sk">${a.skills.map(s => `<span title="${esc(s.why)}">${esc(s.name)} v${s.version} ${skMarkHtml(s)}</span>`).join('')}${a.removed.length ? `<span>要移除：${esc(a.removed.join('、'))}</span>` : ''}</span>
+          ${a.sync.state === 'failed' && a.sync.lastLine ? `<span class="sy-why error">${esc(a.sync.lastLine)}</span>` : ''}
+          ${a.skills.filter(s => s.state === 'fix').slice(0, 1).map(s => `<span class="sy-why warn-text">⚠ ${esc(s.why)}</span>`).join('')}
+        </div>${stText(a)}</div>`;
+    const draw = () => {
+      if (!body.isConnected) return;
+      if (step === 'allow') {
+        body.innerHTML = `<p><b>這幾個技能含腳本，要你允許才會裝</b>（預設全勾，取消勾選的這次不裝）：</p>
+          <div class="sy-allow">${pairs.map((p, i) => `<label class="check"><input type="checkbox" data-sy-pair="${i}" checked> ${esc(p.skill.name)} 第 ${p.skill.version} 版（腳本 ${p.skill.scripts} 個）→ ${esc(p.ai.name)} <button type="button" class="link small" data-sk-look="${esc(p.skill.skillId)}">看腳本</button></label>`).join('')}</div>
+          <p class="muted small">允許後腳本會放進 AI 的技能資料夾，執行時照它工具本身的權限。新版要重新允許。</p>
+          <div class="row"><button type="button" class="btn" data-sy-cancel>取消</button><button type="button" class="btn primary" data-sy-go>允許並同步</button></div>`;
+        return;
+      }
+      const n = needs().length;
+      body.innerHTML = `${items.length ? `<div class="sy-top"><span class="muted small">${items.length} 隻 AI${n ? ` · <b>${n} 隻要同步</b>` : ' · 都是最新'}</span><span class="grow"></span>${n ? `<button type="button" class="btn primary" data-sy-all>全部同步（${n} 隻）</button>` : ''}</div>
+        <div class="sy-list">${items.map(rowHtml).join('')}</div>` : '<p class="muted">你的 AI 目前沒有要裝的技能。</p>'}`;
+    };
+    const poll = () => {
+      clearTimeout(timer);
+      if (!body.isConnected) return onDone?.();
+      if (Date.now() > until || items.filter(a => runIds.includes(a.aiId)).every(a => SY_END.includes(a.sync.state))) return onDone?.();
+      // 只讀這次在跑的幾隻（少讀幾列），合併回清單
+      timer = setTimeout(async () => {
+        try { for (const x of (await api('/api/skill-sync?ids=' + encodeURIComponent(runIds.join(',')))).items) { const i = items.findIndex(a => a.aiId === x.aiId); if (i >= 0) items[i] = x; } draw(); } catch {}
+        poll();
+      }, 4000);
+    };
+    const send = async (ids, allow = []) => {
+      const r = await api('/api/skill-sync', { method: 'POST', body: { aiIds: ids, allow } });
+      runIds = [...new Set([...runIds, ...ids])];
+      for (const x of r.items) { const i = items.findIndex(a => a.aiId === x.aiId); if (i >= 0) items[i] = x; else items.push(x); }
+      step = 'list'; until = Date.now() + 15 * 60_000; draw(); poll();
+    };
+    // 開始同步：含腳本還沒允許的先列出來一次允許
+    const start = async ids => {
+      const ais = items.filter(a => ids.includes(a.aiId));
+      pairs = ais.flatMap(ai => ai.skills.filter(s => s.hasScripts && !s.allowed).map(skill => ({ ai, skill })));
+      if (pairs.length) { runIds = ids; step = 'allow'; return draw(); }
+      await send(ids);
+    };
+    body.addEventListener('click', async e => {
+      const t = e.target.closest('[data-sy-all],[data-sy-again],[data-sy-go],[data-sy-cancel],[data-sk-look]');
+      if (!t) return;
+      try {
+        if (t.dataset.skLook) { e.preventDefault(); return skOpenDrawer(t.dataset.skLook); }
+        if (t.hasAttribute('data-sy-all')) return await start(needs().map(a => a.aiId));
+        if (t.dataset.syAgain) return await send([t.dataset.syAgain]);
+        if (t.hasAttribute('data-sy-cancel')) { step = 'list'; runIds = []; return draw(); }
+        if (t.hasAttribute('data-sy-go')) {
+          t.disabled = true;
+          const allow = [...body.querySelectorAll('[data-sy-pair]')].filter(c => c.checked).map(c => ({ aiId: pairs[+c.dataset.syPair].ai.aiId, skillId: pairs[+c.dataset.syPair].skill.skillId }));
+          return await send(runIds, allow);
+        }
+      } catch (err) { toast(err.message); t.disabled = false; }
+    });
+    try { await load(); } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
+    const ids = run ? items.filter(a => run.includes(a.aiId)).map(a => a.aiId) : [];
+    if (ids.length) { try { await start(ids); } catch (e) { toast(e.message); draw(); } } else draw();
+  }
+
   // 成員與權限 › 技能分頁
   function permSkillsHtml() {
     skv.modal = false;

@@ -68,7 +68,7 @@ try {
   assert.equal((await up(chen.token, skill('write-report'))).body.error?.code, 'SAME_CONTENT', '內容一樣不用重傳');
   const dms = await db.all("SELECT from_id, human_id, text FROM dms WHERE text LIKE '🧩%'");
   assert.equal(dms.length, 1, '劉昱志有三個平台 AI，只收一則');
-  assert.ok(dms[0].from_id === 'system' && dms[0].text.includes('write-report') && dms[0].text.includes('按「同步」'), '平台私訊主人：' + dms[0].text);
+  assert.ok(dms[0].from_id === 'system' && dms[0].text.includes('write-report') && dms[0].text.includes('你有 3 隻 AI 會用到') && dms[0].text.includes('/my-ai?sync=1'), '平台私訊主人：' + dms[0].text);
   let mine = (await call(ai.tok, '/api/me/skills')).body.items;
   assert.deepEqual(mine.map(x => [x.name, x.install]), [['write-report', true]]);
   assert.equal((await call(bankAi.tok, '/api/me/skills')).body.items.length, 0, '只發給該專案的 AI（行內技能不外流）');

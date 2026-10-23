@@ -9,6 +9,7 @@
 //   6. watcher 已在跑、但檔案或設定剛更新 → 提醒要重開（不會自己停掉它）
 //   7. （C-346）同步技能：下載專案已上架的技能、核對雜湊、裝到工具的技能資料夾；含腳本的要主人允許才裝；下架的移除（只移除自己裝的）
 //   8. （C-372）Claude Code：直接裝 MCP（claude mcp add aigile-<代號小寫>，這個資料夾；已裝就跳過）；Codex 印設定讓你自己加
+//   9. （PLAT-240）先比對自己跟平台的 SHA-256，不同就下載、核對後用新版重跑；同步開始、結束、失敗都回報平台（主人的同步清單看得到）
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
 // 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|other] [--skills-only]
@@ -22,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const opt = name => { const i = args.findIndex(a => a === `--${name}` || a.startsWith(`--${name}=`)); return i < 0 ? '' : args[i].includes('=') ? args[i].split('=').slice(1).join('=') : args[i + 1] || ''; };
@@ -30,7 +32,9 @@ const DIR = path.join('.aigile', AGENT || '_');
 const BASE = (opt('base') || process.env.AIGILE_BASE || '').replace(/\/+$/, '');
 const out = s => console.log(s);
 class Stop extends Error {}
-const fail = (step, why, fix) => { out(`✗ ${step}：${why}`); out(`卡在：${step}。怎麼辦：${fix}`); throw new Stop(); };
+class Done extends Error {} // 已用新版重跑完
+let LAST = '', REPORT = false, report = async () => {}; // 失敗的那一行；REPORT＝失敗要回報平台（同步技能時）
+const fail = (step, why, fix) => { LAST = `${step}：${why}`; out(`✗ ${LAST}`); out(`卡在：${step}。怎麼辦：${fix}`); throw new Stop(); };
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 // C-344：Codex 預設沙盒（workspace-write）不准連網；只要開網路，不用完全權限（官方設定名稱，2026-10 查證）
 const CODEX_FIX = "Codex 沙盒預設不能連網：請所屬人類在 ~/.codex/config.toml 加 sandbox_mode = \"workspace-write\" 與 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限（danger-full-access）；改完重開 Codex 再跑一次";
@@ -42,6 +46,8 @@ const TOOL = opt('tool') || envTool || (process.env.CLAUDECODE === '1' ? 'claude
 // 技能整包雜湊：跟平台同一個算法（依路徑排序的 [路徑, 內容]）
 const canonical = files => JSON.stringify(files.map(x => [x.path, x.text]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const SELF = fileURLToPath(import.meta.url);
+const SELF_SHA = (() => { try { return sha(fs.readFileSync(SELF)); } catch { return ''; } })();
 
 try {
 if (!AGENT || !BASE) fail('參數', '缺 --agent 或 --base', '照接入設定第四節的指令原樣執行');
@@ -82,10 +88,29 @@ out(`✓ 身分：${me.name}（${me.participantId}）`);
 
 const cfg = await (await get('/api/me/watcher-env')).json();
 if (cfg.agent && cfg.agent !== AGENT) fail('代號', `你的代號是 ${cfg.agent}，不是 ${AGENT}`, `把 Token 移到 .aigile/${cfg.agent}/.token，改用 --agent ${cfg.agent} 再跑一次（舊代號資料夾可能是別的 AI 的，不要動）`);
+// 回報平台（同步清單）；舊平台沒有這支 API 就略過
+report = (p, body) => fetch(BASE + p, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'setup' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) }).catch(() => {});
+REPORT = SKILLS_ONLY;
+
+// PLAT-240：同步工具自己更新：跟平台給的雜湊不同 → 下載、核對 SHA-256 → 覆蓋自己 → 用新版重跑（只重跑一次）
+if (cfg.setup && SELF_SHA !== cfg.setup) {
+  if (process.env.AIGILE_SETUP_UPDATED) fail('同步工具', '更新後還是跟平台給的雜湊不一樣', '把這行告訴所屬人類');
+  const r = await fetch(`${BASE}/aigile-setup.mjs`, { signal: AbortSignal.timeout(20_000) }).catch(() => null);
+  const buf = r?.ok ? Buffer.from(await r.arrayBuffer()) : null;
+  if (!buf) fail('同步工具', `${BASE}/aigile-setup.mjs 下載失敗`, '請所屬人類照規格 3.12 自己下載');
+  if (sha(buf) !== cfg.setup) fail('同步工具', '下載的 aigile-setup.mjs 雜湊跟平台給的不一樣', '不要執行，告訴所屬人類');
+  try { fs.writeFileSync(SELF, buf); } catch (e) { fail('同步工具', `寫不進 ${SELF}（${e.code || e.message}）`, '請所屬人類照規格 3.12 自己下載到這個位置'); }
+  out('✓ 同步工具跟平台版本不同，已下載新版（SHA-256 相符），用新版重跑');
+  const again = spawnSync(process.execPath, [SELF, ...args], { stdio: 'inherit', env: { ...process.env, AIGILE_SETUP_UPDATED: '1' } });
+  process.exitCode = again.status ?? 1;
+  throw new Done();
+}
 
 // ---------- C-346 技能同步 ----------
 async function syncSkills() {
+  REPORT = true;
   if (!['claude', 'codex', 'other'].includes(TOOL)) fail('技能', `--tool 只能是 claude、codex、other（收到 ${TOOL}）`, '照接入設定寫的 --tool 原樣執行');
+  await report('/api/me/skills/sync-status', { state: 'running', tool: TOOL, setupSha: SELF_SHA });
   const r = await fetch(BASE + '/api/me/skills', { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'setup' }, signal: AbortSignal.timeout(20_000) }).catch(() => null);
   if (!r || r.status === 404) return out('（平台沒有技能庫，略過技能）');
   if (!r.ok) fail('技能', `/api/me/skills 回 HTTP ${r.status}`, '把這行告訴所屬人類');
@@ -139,8 +164,10 @@ async function syncSkills() {
     fs.writeFileSync(ep, t);
   }
   // 回報裝了哪些版本（技能庫的「已裝」）；同資料夾別的 AI 已裝同一版也算
-  const have = [...want.values()].filter(it => mark(dirOf(it))?.sha256 === it.sha256).map(it => it.skillId);
-  await fetch(BASE + '/api/me/skills/installed', { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'setup' }, body: JSON.stringify({ skillIds: have }), signal: AbortSignal.timeout(20_000) }).catch(() => {});
+  // PLAT-240：另帶位置類別（own＝自己的代號資料夾、shared＝共用區）、工具、同步工具的 SHA-256
+  const done = [...want.values()].filter(it => mark(dirOf(it))?.sha256 === it.sha256);
+  await report('/api/me/skills/installed', { skillIds: done.map(it => it.skillId), places: Object.fromEntries(done.map(it => [it.skillId, path.dirname(dirOf(it)) === own ? 'own' : 'shared'])), tool: TOOL, setupSha: SELF_SHA });
+  REPORT = false;
   const nOwn = Object.values(man).filter(m => path.dirname(m.dir) === own).length;
   out(`✓ 技能（${TOOL} → ${root.replace(/\\/g, '/')}）：新裝 ${add}、更新 ${upd}、移除 ${rm}，共 ${Object.keys(man).length} 個${nOwn && own !== root ? `；其中角色技能 ${nOwn} 個在 ${own.replace(/\\/g, '/')}（新對話開始時讀一次）` : ''}`);
   if (skipped.length) out(`! 沒裝：${skipped.join('；')}`);
@@ -216,6 +243,10 @@ if (cfg.files['aigile-mcp.mjs']) {
 out('完成：照上面兩行啟動（要先取得所屬人類同意的就先問）。');
 }
 } catch (e) {
-  if (!(e instanceof Stop)) throw e;
-  process.exitCode = 1;
+  if (!(e instanceof Done)) {
+    // 同步技能時失敗：把失敗的那一行回報平台（主人的同步清單顯示，平台私訊主人）
+    if (REPORT) await report('/api/me/skills/sync-status', { state: 'failed', lastLine: e instanceof Stop ? LAST : `腳本出錯：${e.message}`, tool: TOOL, setupSha: SELF_SHA });
+    if (!(e instanceof Stop)) throw e;
+    process.exitCode = 1;
+  }
 }

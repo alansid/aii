@@ -2801,3 +2801,24 @@ html, body { overflow-x: clip; }
 .mobile-top .menu-btn .badge[hidden] { display: none; }
 .mobile-top .top-btn, .mobile-top .av-btn { flex: none; }
 .sheet-emoji { width: 22px; text-align: center; font-size: 17px; line-height: 1; }
+
+/* PLAT-240 技能同步清單：手機 375px 一列一行、狀態字在右邊 */
+.sy-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; margin: 0 0 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: 14px; }
+.sy-banner .grow, .sy-top .grow { flex: 1; }
+.sy-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sy-list { display: flex; flex-direction: column; }
+.sy-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.sy-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sy-sk { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; color: var(--muted); }
+.sy-why { font-size: 13px; overflow-wrap: anywhere; }
+.sy-st { flex: 0 0 auto; max-width: 45%; text-align: right; font-size: 14px; font-weight: 600; }
+.sy-st.ok, .sk-mk.ok { color: var(--ok-text); }
+.sy-st.new, .sk-mk.new, .sy-st.run, .sy-st.wait { color: var(--primary); }
+.sy-st.fix, .sk-mk.fix { color: #b45309; }
+.sy-st.bad { color: var(--danger); }
+.sy-st.off { color: var(--muted); font-weight: 400; }
+.sy-allow { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.sk-mk { font-weight: 600; white-space: nowrap; }
+.sk-ok { color: var(--ok-text); font-weight: 600; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sy-st.fix, :root:not([data-theme="light"]) .sk-mk.fix { color: #fbbf24; } }
+:root[data-theme="dark"] .sy-st.fix, :root[data-theme="dark"] .sk-mk.fix { color: #fbbf24; }

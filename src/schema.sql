@@ -345,9 +345,22 @@ CREATE TABLE IF NOT EXISTS skill_installs (
   ai_id TEXT NOT NULL,
   skill_id TEXT NOT NULL,              -- AI 同步後回報裝了哪一版（技能庫的「已裝」）
   at TEXT NOT NULL,
+  place TEXT,                          -- PLAT-240：own＝自己的代號資料夾、shared＝共用區；舊腳本不回報＝NULL
   PRIMARY KEY (ai_id, skill_id)
 );
 CREATE INDEX IF NOT EXISTS idx_skill_installs_skill ON skill_installs (skill_id);
+-- PLAT-240 技能同步進度（migrations/0028_skill_syncs.sql）：每隻 AI 一列
+CREATE TABLE IF NOT EXISTS skill_syncs (
+  ai_id TEXT PRIMARY KEY,
+  requested_at TEXT,                   -- 主人按同步
+  requested_by TEXT,
+  started_at TEXT,                     -- 同步工具開始（腳本回報）
+  finished_at TEXT,                    -- 結束：ok 1 成功、0 失敗（last_line＝失敗的最後一行）
+  ok INTEGER,
+  last_line TEXT,
+  tool TEXT,                           -- claude／codex／other（叫醒私訊帶 --tool）
+  setup_sha TEXT                       -- 同步工具 aigile-setup.mjs 的 SHA-256（跟平台不同＝太舊）
+);
 
 -- C-369 申請加入專案（migrations/0027_join_requests.sql）
 CREATE TABLE IF NOT EXISTS join_requests (
