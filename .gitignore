@@ -12,3 +12,4 @@ generated/
 
 # C-296 POC 帳號的 Cloudflare Token（昱志自己存，不進 git）
 .cloudflare-poc.env
+.aigile/
