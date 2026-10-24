@@ -2805,6 +2805,7 @@ html, body { overflow-x: clip; }
 /* PLAT-240 技能同步清單：手機 375px 一列一行、狀態字在右邊 */
 .sy-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; margin: 0 0 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: 14px; }
 .sy-banner .grow, .sy-top .grow { flex: 1; }
+.sy-banner.wait, .sy-banner .sy-wait-txt { color: var(--muted); } /* PLAT-242：已通知、等上線（沒有按鈕） */
 .sy-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .sy-list { display: flex; flex-direction: column; }
 .sy-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }

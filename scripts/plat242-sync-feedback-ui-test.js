@@ -3,12 +3,17 @@
 // 1. 按下去按鈕立刻「叫醒中…」停用，送完頂部寫「已通知 N 隻：…」
 // 2. 都通知過（含離線）→ 按鈕「已通知 N 隻（等上線）」停用；離線的不算「要同步」（我的 AI 頁上方那條也不算）
 // 3. Token 過期：該列「Token 已過期，重發後才會同步」＋重發入口；不算進「已通知」
+// UX 補充：離線那列寫通知時間「離線 · 已通知 14:59，上線後自動裝」；上方那條不直接消失，灰色寫「N 隻已通知，等上線」，全部裝好才消失
 // 需要 Chrome 或 Edge；找不到就略過。用法：node scripts/plat242-sync-feedback-ui-test.js
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 import assert from 'node:assert';
+import { fileURLToPath } from 'node:url';
 import { startKit, findBrowser, until } from './browser-kit.js';
 
 if (!findBrowser()) { console.log('plat242-sync-feedback-ui-test：略過（找不到 Chrome／Edge）'); process.exit(0); }
 const kit = await startKit('p242');
+const SETUP_SHA = crypto.createHash('sha256').update(fs.readFileSync(fileURLToPath(new URL('../public/aigile-setup.mjs', import.meta.url)))).digest('hex');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 try {
   const liu = (await kit.call(null, '/api/join', 'POST', { name: '劉昱志', role: 'PO' })).body;
@@ -45,7 +50,7 @@ try {
   assert.match(await row(pg3.id), /^Token 已過期，重發後才會同步/);
   assert.equal(await js(`!!document.querySelector('[data-sy-reissue="${pg3.id}"]')`), true, '有重發入口');
   assert.match(await top(), /1 隻 Token 已過期/);
-  assert.equal(await row(pg2.id), '離線（上線後會自動補）');
+  assert.match(await row(pg2.id), /^離線 · 已通知 \d{2}:\d{2}，上線後自動裝$/, '離線那列寫通知時間：' + await row(pg2.id));
   // AI 開始跑 → 頂部跟著變，按鈕仍是已通知
   await kit.call(pg1.tok, '/api/me/skills/sync-status', 'POST', { state: 'running', tool: 'claude' });
   await until(async () => (await top()).includes('已通知 2 隻：1 隻同步中、1 隻離線（上線後自動補）'), 10000, '同步中');
@@ -55,10 +60,25 @@ try {
   assert.equal(await js("(() => { const r = document.querySelector('[data-sy-wait]').getBoundingClientRect(); return r.right <= innerWidth && r.left >= 0; })()"), true, '按鈕在畫面內');
   assert.equal(await js(`(() => { const r = document.querySelector('[data-sy-reissue="${pg3.id}"]').getBoundingClientRect(); return r.right <= innerWidth && r.width > 0; })()`), true, '重發入口在畫面內');
 
-  // 關掉清單：上方那條不再寫「要同步」，改提醒 Token 過期
+  // 關掉清單：上方那條不再寫「要同步」，改「2 隻已通知，等上線」＋Token 過期（有看清單）
   await js("document.querySelector('#modal-root [data-close]')?.click(); true");
-  await until(() => js("(document.querySelector('#ma-sync')?.textContent || '').includes('1 隻 AI 的 Token 已過期')"), 10000, '上方改提醒 Token 過期');
-  assert.equal(await js("(document.querySelector('#ma-sync')?.textContent || '').includes('要同步')"), false);
+  const bar = () => js("document.querySelector('#ma-sync')?.textContent || ''");
+  await until(async () => (await bar()).includes('2 隻已通知，等上線') && (await bar()).includes('1 隻 AI 的 Token 已過期'), 10000, '上方寫已通知、Token 過期：' + await bar());
+  assert.equal((await bar()).includes('要同步'), false);
+  // 只剩等上線（Token 過期那隻先停用）→ 灰色、沒有按鈕；全部裝好才消失
+  await kit.call(liu.token, `/api/my-ais/${pg3.id}/disable`, 'POST');
+  await js("location.reload(); true");
+  await until(() => js("(document.querySelector('#ma-sync .sy-banner.wait')?.textContent || '').includes('2 隻已通知，等上線')"), 10000, '灰色已通知');
+  assert.equal(await js("!!document.querySelector('#ma-sync button')"), false, '等上線沒有按鈕');
+  const sk = (await kit.call(pg1.tok, '/api/me/skills')).body.items.map(x => x.skillId);
+  for (const a of [pg1, pg2]) await kit.call(a.tok, '/api/me/skills/installed', 'POST', { skillIds: sk, places: Object.fromEntries(sk.map(x => [x, 'own'])), tool: 'claude', setupSha: SETUP_SHA });
+  await js("location.reload(); true");
+  await until(() => js("!!document.querySelector('#ai-new')"), 10000, '我的 AI 頁');
+  await sleep(1500);
+  assert.equal(await bar(), '', '全部裝好才消失：' + await bar());
+  await kit.call(liu.token, `/api/my-ais/${pg3.id}/enable`, 'POST');
+  await js("location.reload(); true");
+  await until(async () => (await bar()).includes('1 隻 AI 的 Token 已過期'), 10000, '重新啟用後又提醒 Token 過期');
 
   // 重發入口：確認後重發，Token 不再過期
   await js("document.querySelector('[data-sy-banner]').click(); true");

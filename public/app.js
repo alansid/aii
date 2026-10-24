@@ -5199,7 +5199,7 @@
       drawSync();
     }
     // PLAT-240：有技能要同步的 AI 才顯示這一條
-    let syncIds = [], syExpired = 0;
+    let syncIds = [], syExpired = 0, syWait = [];
     async function drawSync() {
       const el = body.querySelector('#ma-sync');
       if (!el) return;
@@ -5208,10 +5208,14 @@
         const all = (await api('/api/skill-sync')).items.filter(a => a.needs && shown.has(a.aiId));
         syncIds = all.filter(syNeeds).map(a => a.aiId); // PLAT-242：已通知（離線等上線）、Token 過期的不算「要同步」
         syExpired = all.filter(a => a.tokenExpired).length;
-      } catch { syncIds = []; syExpired = 0; }
+        syWait = all.filter(a => !a.tokenExpired && SY_PENDING.includes(a.sync.state));
+      } catch { syncIds = []; syExpired = 0; syWait = []; }
       if (!body.isConnected) return;
+      // 都通知過：不直接消失（主人會以為裝好了），灰色寫「N 隻已通知，等上線」，全部裝好才消失；Token 過期的要動手，留「看清單」
+      const waitTxt = syWait.length ? `${syWait.length} 隻已通知，${syWait.some(a => a.sync.state === 'offline') ? '等上線' : '同步中'}` : '';
+      const expTxt = syExpired ? `${syExpired} 隻 AI 的 Token 已過期，重發後才會同步技能` : '';
       el.innerHTML = syncIds.length ? `<div class="sy-banner" role="status">🧩 <b>${syncIds.length} 隻 AI 有技能要同步</b><span class="grow"></span><button type="button" class="btn small primary" data-sy-banner>全部同步</button></div>`
-        : syExpired ? `<div class="sy-banner" role="status">🧩 <b>${syExpired} 隻 AI 的 Token 已過期，重發後才會同步技能</b><span class="grow"></span><button type="button" class="btn small" data-sy-banner>看清單</button></div>` : '';
+        : waitTxt || expTxt ? `<div class="sy-banner${expTxt ? '' : ' wait'}" role="status">🧩 <span>${[waitTxt && `<span class="sy-wait-txt">${waitTxt}</span>`, expTxt && `<b>${expTxt}</b>`].filter(Boolean).join(' · ')}</span>${expTxt ? '<span class="grow"></span><button type="button" class="btn small" data-sy-banner>看清單</button>' : ''}</div>` : '';
     }
     body.querySelector('#ma-sync').addEventListener('click', e => { if (e.target.closest('[data-sy-banner]')) openSkillSync({ run: syncIds.length ? syncIds : null, onDone: drawSync }); });
     if (new URLSearchParams(location.search).get('sync') === '1') {
@@ -5659,7 +5663,8 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       if (a.tokenExpired && a.needs) return `<span class="sy-st bad">Token 已過期，重發後才會同步 <button type="button" class="link small" data-sy-reissue="${esc(a.aiId)}">重發 Token</button></span>`;
       if (SY_ST[st] && (st !== 'done' || runIds.includes(a.aiId) || a.needs)) {
         const v = skillId && st === 'done' ? a.skills.find(s => s.skillId === skillId) : null;
-        return `<span class="sy-st ${SY_ST[st][1]}">${SY_ST[st][0]}${v ? ` v${v.version}` : ''}${st === 'noreply' || st === 'failed' ? ` <button type="button" class="link small" data-sy-again="${esc(a.aiId)}">再叫一次</button>` : ''}</span>`;
+        const label = st === 'offline' && a.sync.requestedAt ? `離線 · 已通知 ${maWhen(a.sync.requestedAt).replace(/^今天 /, '')}，上線後自動裝` : SY_ST[st][0]; // PLAT-242：看得出是剛通知還是很久以前
+        return `<span class="sy-st ${SY_ST[st][1]}">${label}${v ? ` v${v.version}` : ''}${st === 'noreply' || st === 'failed' ? ` <button type="button" class="link small" data-sy-again="${esc(a.aiId)}">再叫一次</button>` : ''}</span>`;
       }
       const fix = a.skills.some(s => s.state === 'fix');
       return `<span class="sy-st ${a.needs ? (fix ? 'fix' : 'new') : 'ok'}">${a.needs ? (fix ? '⚠ 要處理' : '● 有新版') : '✓ 最新'}</span>`;
