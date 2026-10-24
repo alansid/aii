@@ -25,6 +25,7 @@ export async function startKit(name) {
   run(process.execPath, [serverJs], { PORT: String(PORT), DATA_DIR: path.join(dir, 'data'), RATE_LIMIT_PER_MIN: '10000' });
   await until(() => fetch(BASE + '/api/health').then(r => r.ok), 15000, '本機伺服器');
   const call = async (t, p, m = 'GET', b) => { const r = await fetch(BASE + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+  const sql = (q, ...v) => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return d.prepare(q).run(...v); } finally { d.close(); } }; // 測試直接改本機暫存庫（例如讓 Token 過期）
   const aiToken = id => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return d.prepare('SELECT token FROM participants WHERE id = ?').get(id).token; } finally { d.close(); } };
 
   let ws = null;
@@ -53,5 +54,5 @@ export async function startKit(name) {
     await sleep(500);
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
-  return { BASE, call, aiToken, browser, stop };
+  return { BASE, call, aiToken, sql, browser, stop };
 }

@@ -308,7 +308,8 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
       });
       const removed = [...new Set(mine.filter(i => !items.some(it => it.project === i.project && it.name === i.name)).map(i => i.name))];
       const standby = !!ai.standby_at && now - ai.standby_at <= STANDBY_MS;
-      out.push({ aiId: ai.id, name: ai.name, roleKey: ai.role_key || '', standby, tool: s?.tool || null, toolOld: old,
+      const tokenExpired = !!ai.token_expires_at && ai.token_expires_at <= now; // PLAT-242：Token 過期的叫不醒，網頁另外標「重發後才會同步」
+      out.push({ aiId: ai.id, name: ai.name, roleKey: ai.role_key || '', standby, tokenExpired, tool: s?.tool || null, toolOld: old,
         needs: items.some(it => it.state !== 'latest') || removed.length > 0, waitingAllow: items.filter(it => !it.install).length, skills: items, removed,
         sync: { state: syncState(s, standby, now), requestedAt: s?.requested_at || null, startedAt: s?.started_at || null, finishedAt: s?.finished_at || null, lastLine: s && !s.ok ? s.last_line || '' : '' } });
     }

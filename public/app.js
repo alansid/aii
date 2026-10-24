@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '0.94.1'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
+  const APP_VERSION = '0.94.2'; // C-281：回報時自動帶；要跟 package.json 一樣（feedback-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -5199,18 +5199,21 @@
       drawSync();
     }
     // PLAT-240：有技能要同步的 AI 才顯示這一條
-    let syncIds = [];
+    let syncIds = [], syExpired = 0;
     async function drawSync() {
       const el = body.querySelector('#ma-sync');
       if (!el) return;
       try {
         const shown = new Set(items.map(a => a.participantId));
-        syncIds = (await api('/api/skill-sync')).items.filter(a => a.needs && shown.has(a.aiId)).map(a => a.aiId);
-      } catch { syncIds = []; }
+        const all = (await api('/api/skill-sync')).items.filter(a => a.needs && shown.has(a.aiId));
+        syncIds = all.filter(syNeeds).map(a => a.aiId); // PLAT-242：已通知（離線等上線）、Token 過期的不算「要同步」
+        syExpired = all.filter(a => a.tokenExpired).length;
+      } catch { syncIds = []; syExpired = 0; }
       if (!body.isConnected) return;
-      el.innerHTML = syncIds.length ? `<div class="sy-banner" role="status">🧩 <b>${syncIds.length} 隻 AI 有技能要同步</b><span class="grow"></span><button type="button" class="btn small primary" data-sy-banner>全部同步</button></div>` : '';
+      el.innerHTML = syncIds.length ? `<div class="sy-banner" role="status">🧩 <b>${syncIds.length} 隻 AI 有技能要同步</b><span class="grow"></span><button type="button" class="btn small primary" data-sy-banner>全部同步</button></div>`
+        : syExpired ? `<div class="sy-banner" role="status">🧩 <b>${syExpired} 隻 AI 的 Token 已過期，重發後才會同步技能</b><span class="grow"></span><button type="button" class="btn small" data-sy-banner>看清單</button></div>` : '';
     }
-    body.querySelector('#ma-sync').addEventListener('click', e => { if (e.target.closest('[data-sy-banner]')) openSkillSync({ run: syncIds, onDone: drawSync }); });
+    body.querySelector('#ma-sync').addEventListener('click', e => { if (e.target.closest('[data-sy-banner]')) openSkillSync({ run: syncIds.length ? syncIds : null, onDone: drawSync }); });
     if (new URLSearchParams(location.search).get('sync') === '1') {
       history.replaceState(history.state, '', location.pathname);
       openSkillSync({ onDone: drawSync });
@@ -5635,6 +5638,10 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
   const SY_ST = { waiting: ['等叫醒', 'wait'], running: ['同步中…', 'run'], done: ['✓ 已裝好', 'ok'], failed: ['✗ 失敗', 'bad'], offline: ['離線（上線後會自動補）', 'off'], noreply: ['10 分鐘沒回應', 'bad'] };
   const SK_MARK = { latest: ['✓', '最新', 'ok'], new: ['●', '有新版', 'new'], fix: ['⚠', '要處理', 'fix'] };
   const skMarkHtml = s => `<span class="sk-mk ${SK_MARK[s.state]?.[2] || ''}">${SK_MARK[s.state]?.[0] || ''} ${SK_MARK[s.state]?.[1] || ''}</span>`;
+  // PLAT-242：叫醒過、還在等的（離線的上線後自動補）不再算「要同步」；Token 過期的叫不醒，另外列
+  const SY_PENDING = ['waiting', 'running', 'offline'];
+  const syNeeds = a => a.needs && !a.tokenExpired && ![...SY_PENDING, 'noreply'].includes(a.sync.state); // 沒回應的在該列「再叫一次」
+  const SY_SUM = [['done', '已裝好'], ['running', '同步中'], ['waiting', '叫醒中'], ['offline', '離線（上線後自動補）'], ['noreply', '沒回應'], ['failed', '失敗']];
   const SY_END = ['done', 'failed', 'idle']; // 離線、10 分鐘沒回應的繼續看（上線後會自動補），清單最多看 15 分鐘
   // opts.run：要馬上同步的 AI（含腳本的先列出一次允許）；opts.skillId：只列用到這個技能的 AI；opts.onDone：清單關掉或跑完後通知
   async function openSkillSync({ run = null, skillId = null, onDone = null } = {}) {
@@ -5643,9 +5650,13 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     const load = async () => {
       items = (await api('/api/skill-sync')).items.filter(a => (skillId ? a.skills.some(s => s.skillId === skillId) : a.skills.length || a.removed.length));
     };
-    const needs = () => items.filter(a => a.needs && !['waiting', 'running'].includes(a.sync.state));
+    let sending = false;
+    const needs = () => items.filter(syNeeds);
+    // 已通知：叫醒過還在等的，加上這次叫過、已有結果的；Token 過期的不算
+    const notified = () => items.filter(a => !a.tokenExpired && (SY_PENDING.includes(a.sync.state) || a.sync.state === 'noreply' || (runIds.includes(a.aiId) && ['done', 'failed'].includes(a.sync.state))));
     const stText = a => {
       const st = a.sync.state;
+      if (a.tokenExpired && a.needs) return `<span class="sy-st bad">Token 已過期，重發後才會同步 <button type="button" class="link small" data-sy-reissue="${esc(a.aiId)}">重發 Token</button></span>`;
       if (SY_ST[st] && (st !== 'done' || runIds.includes(a.aiId) || a.needs)) {
         const v = skillId && st === 'done' ? a.skills.find(s => s.skillId === skillId) : null;
         return `<span class="sy-st ${SY_ST[st][1]}">${SY_ST[st][0]}${v ? ` v${v.version}` : ''}${st === 'noreply' || st === 'failed' ? ` <button type="button" class="link small" data-sy-again="${esc(a.aiId)}">再叫一次</button>` : ''}</span>`;
@@ -5668,8 +5679,14 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
           <div class="row"><button type="button" class="btn" data-sy-cancel>取消</button><button type="button" class="btn primary" data-sy-go>允許並同步</button></div>`;
         return;
       }
-      const n = needs().length;
-      body.innerHTML = `${items.length ? `<div class="sy-top"><span class="muted small">${items.length} 隻 AI${n ? ` · <b>${n} 隻要同步</b>` : ' · 都是最新'}</span><span class="grow"></span>${n ? `<button type="button" class="btn primary" data-sy-all>全部同步（${n} 隻）</button>` : ''}</div>
+      // PLAT-242：頂部寫結果（已通知幾隻、各在哪一步）；按鈕：叫醒中… → 全部同步（N 隻）／已通知 N 隻（等上線）
+      const n = needs().length, nf = notified(), wait = nf.filter(a => SY_PENDING.includes(a.sync.state)), exp = items.filter(a => a.tokenExpired && a.needs).length;
+      const sum = SY_SUM.map(([k, t]) => [nf.filter(a => a.sync.state === k).length, t]).filter(([c]) => c).map(([c, t]) => `${c} 隻${t}`).join('、');
+      const parts = [n ? `<b>${n} 隻要同步</b>` : '', nf.length ? `<span data-sy-sum>已通知 ${nf.length} 隻：${sum}</span>` : '', exp ? `<span class="error">${exp} 隻 Token 已過期</span>` : ''].filter(Boolean);
+      const btn = sending ? '<button type="button" class="btn primary" data-sy-all disabled>叫醒中…</button>'
+        : n ? `<button type="button" class="btn primary" data-sy-all>全部同步（${n} 隻）</button>`
+        : wait.length ? `<button type="button" class="btn" data-sy-wait disabled>已通知 ${wait.length} 隻（${wait.some(a => a.sync.state === 'offline') ? '等上線' : '同步中'}）</button>` : '';
+      body.innerHTML = `${items.length ? `<div class="sy-top"><span class="muted small sy-sum" role="status">${items.length} 隻 AI · ${parts.length ? parts.join(' · ') : '都是最新'}</span><span class="grow"></span>${btn}</div>
         <div class="sy-list">${items.map(rowHtml).join('')}</div>` : '<p class="muted">你的 AI 目前沒有要裝的技能。</p>'}`;
     };
     const poll = () => {
@@ -5683,7 +5700,9 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       }, 4000);
     };
     const send = async (ids, allow = []) => {
-      const r = await api('/api/skill-sync', { method: 'POST', body: { aiIds: ids, allow } });
+      sending = true; if (step === 'list') draw(); // PLAT-242：按下去立刻看得到
+      let r;
+      try { r = await api('/api/skill-sync', { method: 'POST', body: { aiIds: ids, allow } }); } finally { sending = false; }
       runIds = [...new Set([...runIds, ...ids])];
       for (const x of r.items) { const i = items.findIndex(a => a.aiId === x.aiId); if (i >= 0) items[i] = x; else items.push(x); }
       step = 'list'; until = Date.now() + 15 * 60_000; draw(); poll();
@@ -5696,11 +5715,18 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
       await send(ids);
     };
     body.addEventListener('click', async e => {
-      const t = e.target.closest('[data-sy-all],[data-sy-again],[data-sy-go],[data-sy-cancel],[data-sk-look]');
+      const t = e.target.closest('[data-sy-all],[data-sy-again],[data-sy-go],[data-sy-cancel],[data-sk-look],[data-sy-reissue]');
       if (!t) return;
       try {
         if (t.dataset.skLook) { e.preventDefault(); return skOpenDrawer(t.dataset.skLook); }
-        if (t.hasAttribute('data-sy-all')) return await start(needs().map(a => a.aiId));
+        if (t.dataset.syReissue) { // PLAT-242：Token 過期的，重發後把新 Token 換給它，再按同步
+          const a = items.find(x => x.aiId === t.dataset.syReissue);
+          if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發', message: `重發後，<b>${esc(a?.name || '')}</b> 目前的 Token 會立即失效，需要把新 Token 換給它；換好後再按同步。` })) return;
+          const r = await api(`/api/my-ais/${encodeURIComponent(t.dataset.syReissue)}/reissue`, { method: 'POST' });
+          loadParticipants().catch(() => {}); onDone?.();
+          return openTokenOnly(r);
+        }
+        if (t.hasAttribute('data-sy-all')) return sending ? undefined : await start(needs().map(a => a.aiId));
         if (t.dataset.syAgain) return await send([t.dataset.syAgain]);
         if (t.hasAttribute('data-sy-cancel')) { step = 'list'; runIds = []; return draw(); }
         if (t.hasAttribute('data-sy-go')) {
@@ -5708,7 +5734,7 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
           const allow = [...body.querySelectorAll('[data-sy-pair]')].filter(c => c.checked).map(c => ({ aiId: pairs[+c.dataset.syPair].ai.aiId, skillId: pairs[+c.dataset.syPair].skill.skillId }));
           return await send(runIds, allow);
         }
-      } catch (err) { toast(err.message); t.disabled = false; }
+      } catch (err) { toast(err.message); t.disabled = false; draw(); }
     });
     try { await load(); } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
     const ids = run ? items.filter(a => run.includes(a.aiId)).map(a => a.aiId) : [];
