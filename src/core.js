@@ -353,11 +353,14 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       JSON.stringify(rows.filter(n => n.reasons !== '["dm"]').map(n => n.message_id)))).map(m => [m.id, m]));
     // C-270：私訊通知（只有收件的本人看得到自己的通知）
     if (dmIds.length) for (const d of await db.all('SELECT * FROM dms WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(dmIds)))
-      msgs.set(d.id, { id: d.id, author_id: d.from_id, reply_to: null, project: d.project, text: d.text, dm: true });
-    const people = await peopleMap(ctx, [...msgs.values()].map(m => m.author_id));
+      msgs.set(d.id, { id: d.id, author_id: d.from_id, ai_id: d.ai_id, reply_to: null, project: d.project, text: d.text, dm: true });
+    const people = await peopleMap(ctx, [...msgs.values()].map(m => m.author_id).filter(id => id !== 'system')); // PLAT-241：平台通知不是成員，別為它重讀成員表
     return rows.filter(n => msgs.has(n.message_id)).map(n => {
       const m = msgs.get(n.message_id);
-      const sender = people.get(m.author_id);
+      // PLAT-241：平台通知（from 'system'）的私訊沒有成員資料 → 名稱同 dmView；participantId 給那段對話的 AI，「打開私訊」才開得到
+      const p = m.author_id === 'system' ? null : people.get(m.author_id);
+      const sender = p ? { participantId: p.id, name: p.name, role: p.role, shortCode: p.code }
+        : { participantId: m.author_id === 'system' && m.ai_id ? m.ai_id : m.author_id, name: m.author_id === 'system' ? '平台通知' : '?', role: m.author_id === 'system' ? '系統' : null, shortCode: null, ...(m.author_id === 'system' ? { system: true } : {}) };
       const ask = (() => { try { return m.reply_from ? JSON.parse(m.reply_from).includes(n.recipient_id) : null; } catch { return null; } })();
       const reasons = JSON.parse(n.reasons);
       return {
@@ -369,7 +372,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
         ask, // C-259：true 要你回覆、false 知會、null 沒標
         wake: needsWake(ask, reasons, m.text, !!m.dm), // C-341 B：false＝知會，watcher 不為它叫醒
         ...(m.dm ? { dm: true } : {}), // C-270：私訊（用 GET /api/dm 讀，GET /api/messages/:id 讀不到）
-        sender: { participantId: sender.id, name: sender.name, role: sender.role, shortCode: sender.code },
+        sender,
         preview: m.text.length > 100 ? m.text.slice(0, 100) + '…' : m.text,
         createdAt: n.created_at,
         confirmedAt: n.acked_at,
