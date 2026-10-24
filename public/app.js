@@ -5523,49 +5523,71 @@ curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
     });
     box.querySelector('[data-skx]')?.focus();
   }
-  // 上傳彈窗：選專案、選資料夾或 zip → 預覽（名稱、檔案、腳本、檢查）→ 選角色 → 送出
+  // 上傳彈窗（PLAT-243）：1 上傳到 → 2 檔案（卡片＋檢查標籤）→ 3 角色膠囊＋會裝到幾隻；底部固定一列說明與按鈕
   function skOpenUpload(pj) {
     const pjs = (skv.data?.projects || []).filter(p => p.canUpload);
-    let files = null, roles = new Set(), target = pj || pjs[0]?.id || '';
-    const body = openModal('上傳技能', '', { sub: '一個資料夾或 zip，最上層要有 SKILL.md（name、description）；1 MB 內、只收文字。' });
-    const draw = () => {
-      const p = pjs.find(x => x.id === target), pv = files ? skPreview(files) : null;
-      const bad = !pv || !pv.hasSkill || !pv.name || !pv.description || pv.size > 1048576 || pv.keys.length;
-      const direct = pv && (!pv.scripts.length || p?.canManage);
-      body.innerHTML = `<label class="field">上傳到<select id="sk-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}${x.inside ? '（行內）' : ''}</option>`).join('')}</select></label>
-        <div class="row"><label class="btn">選資料夾<input type="file" id="sk-dir" webkitdirectory multiple hidden></label><label class="btn">選 zip<input type="file" id="sk-zip" accept=".zip,application/zip" hidden></label></div>
-        ${pv ? `<div class="sk-chk"><b>${esc(pv.name || '（SKILL.md 沒寫 name）')}</b>（讀自 SKILL.md）<br>
-          ${pv.hasSkill ? 'SKILL.md ✓' : '<span class="error">最上層要有 SKILL.md</span>'} · ${files.length} 個檔 · ${(pv.size / 1024).toFixed(0)} KB${pv.size > 1048576 ? ' <span class="error">超過 1 MB</span>' : ''}<br>
-          ${pv.scripts.length ? `<span class="warn-text">${esc(pv.scripts.map(f => f.path).join('、'))} → 含腳本 ${pv.scripts.length} 個</span><br>` : '純文字（沒有腳本）<br>'}
-          ${pv.keys.length ? `<span class="error">${esc(pv.keys.join('、'))} 裡有像金鑰的內容，請拿掉</span>` : '✓ 沒看到 Token／金鑰 · ✓ 只有文字檔'}</div>
-          <div><b class="small">給哪些角色的 AI（不選＝所有角色）</b><div class="row">${(skv.data?.roles || []).map(r => `<label class="check small"><input type="checkbox" data-skrole="${esc(r)}"${roles.has(r) ? ' checked' : ''}> ${esc(r)}</label>`).join('')}</div></div>
-          <p class="notice">${direct ? (pv.scripts.length ? '你是 leader／管理員：送出就上架；每台電腦還要該 AI 的主人允許才會安裝。' : '純文字：送出就上架。') : '含腳本：要 leader 或管理員核准才會上架；上架後每台電腦還要該 AI 的主人允許才會安裝。'}</p>` : '<p class="muted small">還沒選檔案。</p>'}
-        <p class="error" id="sk-err" role="alert"></p>
-        <div class="row"><button type="button" class="btn" data-skcancel>取消</button><button type="button" class="btn primary" data-sksend ${bad ? 'disabled' : ''}>${pv && !direct ? '送出（等核准）' : '送出（上架）'}</button></div>`;
+    let files = null, roles = new Set(), target = pj || pjs[0]?.id || '', busy = false;
+    const body = openModal('上傳技能', `<label class="field sk-up-step">1. 上傳到<select id="sk-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}${x.inside ? '（行內）' : ''}</option>`).join('')}</select></label>
+      <div class="sk-up-sec"><b class="sk-up-step">2. 檔案</b><div id="sk-up-file"></div><p class="field-hint">資料夾或 zip，最上層要有 SKILL.md；1 MB 內、只收文字檔。</p></div>
+      <div class="sk-up-sec"><b class="sk-up-step">3. 給哪些角色的 AI <span class="muted">（都不選＝所有角色）</span></b>
+        <div class="sk-up-roles" role="group" aria-label="角色">${(skv.data?.roles || []).map(r => `<button type="button" class="sk-up-role" data-skrole="${esc(r)}" aria-pressed="false">${esc(r)}</button>`).join('')}</div>
+        <p class="field-hint" id="sk-up-n" aria-live="polite"></p></div>`,
+      { size: 'sk-up', sub: '上架後，這個專案勾選角色的 AI 會收到。', foot: '<p class="error" id="sk-err" role="alert"></p><div class="sk-up-bar"><span class="sk-up-note" id="sk-up-note"></span><button type="button" class="btn" data-skcancel>取消</button><button type="button" class="btn primary" data-sksend disabled>上架</button></div>' });
+    const modal = body.modal, foot = modal.querySelector('.modal-foot');
+    foot.classList.add('sk-up-foot');
+    const pv = () => files ? skPreview(files) : null;
+    const bad = v => !v || !v.hasSkill || !v.name || !v.description || v.size > 1048576 || v.keys.length;
+    const direct = v => !v?.scripts.length || !!pjs.find(x => x.id === target)?.canManage;
+    const tag = (ok, text) => `<span class="sk-up-tag ${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(text)}</span>`;
+    const drawFile = () => {
+      const el = body.querySelector('#sk-up-file'), v = pv();
+      if (!v) { el.innerHTML = '<div class="sk-up-pick"><label class="btn">選資料夾<input type="file" id="sk-dir" webkitdirectory multiple hidden></label><label class="btn">選 zip<input type="file" id="sk-zip" accept=".zip,application/zip" hidden></label></div>'; return; }
+      const tags = [
+        v.hasSkill ? tag(true, '有 SKILL.md') : tag(false, '最上層要有 SKILL.md'),
+        ...(v.hasSkill && !v.name ? [tag(false, 'SKILL.md 沒寫 name')] : []),
+        ...(v.hasSkill && !v.description ? [tag(false, 'SKILL.md 沒寫 description')] : []),
+        ...(v.size > 1048576 ? [tag(false, '超過 1 MB')] : []),
+        v.scripts.length ? `<span class="sk-up-tag warn" title="${esc(v.scripts.map(f => f.path).join('、'))}">含腳本 ${v.scripts.length} 個：${esc(v.scripts.map(f => f.path).join('、'))}</span>` : tag(true, '純文字，沒有腳本'),
+        v.keys.length ? tag(false, `${v.keys.join('、')} 裡有像金鑰的內容，請拿掉`) : tag(true, '沒看到 Token／金鑰')];
+      el.innerHTML = `<div class="sk-up-card"><div class="sk-up-head"><b class="sk-up-name">${esc(v.name || '（SKILL.md 沒寫 name）')}</b><button type="button" class="link" data-skrepick>重新選</button></div>
+        <div class="sk-up-meta">讀自 SKILL.md · ${files.length} 個檔 · ${Math.max(1, Math.round(v.size / 1024))} KB</div><div class="sk-up-tags">${tags.join('')}</div></div>`;
     };
+    // 會裝到幾隻：這個專案、在用的 AI，角色符合（都不選＝全部）；跟平台發技能的規則一樣
+    const drawCount = () => {
+      const n = [...(state.participants?.values() || [])].filter(p => p.memberType === 'ai' && (p.projects || []).includes(target) && (!roles.size || roles.has(p.roleKey))).length;
+      body.querySelector('#sk-up-n').textContent = `會裝到 ${n} 隻 AI。`;
+    };
+    const drawFoot = () => {
+      const v = pv(), go = foot.querySelector('[data-sksend]');
+      foot.querySelector('#sk-up-note').textContent = !v ? '先選檔案' : bad(v) ? '檢查沒過，改好再重新選' : !v.scripts.length ? '純文字，按下就上架' : direct(v) ? '含腳本，你能直接上架；每台電腦還要 AI 主人允許才裝' : '含腳本，要管理員核准';
+      go.textContent = busy ? (v && !direct(v) ? '送出中…' : '上架中…') : v && !direct(v) ? '送出核准' : '上架';
+      go.disabled = busy || bad(v);
+    };
+    const err = t => { foot.querySelector('#sk-err').textContent = t; };
     body.addEventListener('change', async e => {
       try {
-        if (e.target.id === 'sk-pj') { target = e.target.value; return draw(); }
-        if (e.target.dataset?.skrole) { if (e.target.checked) roles.add(e.target.dataset.skrole); else roles.delete(e.target.dataset.skrole); return; }
+        if (e.target.id === 'sk-pj') { target = e.target.value; drawCount(); return drawFoot(); }
         if (e.target.id === 'sk-dir' && e.target.files.length) files = skStrip(await skReadFolder(e.target.files));
         else if (e.target.id === 'sk-zip' && e.target.files[0]) files = skStrip(await skReadZip(e.target.files[0]));
         else return;
-        draw();
-      } catch (err) { const el = body.querySelector('#sk-err'); if (el) el.textContent = err.message; }
+        err(''); drawFile(); drawFoot();
+      } catch (ex) { err(ex.message); }
     });
-    body.addEventListener('click', async e => {
+    modal.addEventListener('click', async e => {
+      const role = e.target.closest('[data-skrole]');
+      if (role) { const r = role.dataset.skrole, on = !roles.has(r); if (on) roles.add(r); else roles.delete(r); role.setAttribute('aria-pressed', String(on)); return drawCount(); }
+      if (e.target.closest('[data-skrepick]')) { files = null; err(''); drawFile(); drawFoot(); return body.querySelector('#sk-dir')?.closest('label').focus(); }
       if (e.target.closest('[data-skcancel]')) { closeModal(); if (skv.modal) openSkillsView(skv.filter); return; }
-      const t = e.target.closest('[data-sksend]');
-      if (!t) return;
-      t.disabled = true;
+      if (!e.target.closest('[data-sksend]') || busy) return;
+      busy = true; err(''); drawFoot();
       try {
         const r = await api(`/api/projects/${encodeURIComponent(target)}/skills`, { method: 'POST', body: { files, roles: [...roles] } });
-        if (r.status === 'published') return skUploaded(body, r);
+        if (r.status === 'published') { foot.remove(); return skUploaded(body, r); }
         toast(`「${r.name}」含腳本，等 leader 或管理員核准`);
         closeModal(); if (skv.modal) openSkillsView(skv.filter); else skLoad();
-      } catch (err) { body.querySelector('#sk-err').textContent = err.message; t.disabled = false; }
+      } catch (ex) { busy = false; err(ex.message); drawFoot(); }
     });
-    draw();
+    drawFile(); drawCount(); drawFoot();
   }
   // PLAT-240 上傳成功：你名下會用到這個技能的 AI 一鍵全部同步
   async function skUploaded(body, r) {
